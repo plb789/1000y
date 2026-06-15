@@ -191,7 +191,9 @@ func UpdatePassword(uid uint, oldPwd, newPwd string) error {
 	if err != nil {
 		return errors.New("密码加密失败")
 	}
-	mysql.DB.Model(&acc).Update("password", string(newHash))
+	if err := mysql.DB.Model(&acc).Update("password", string(newHash)).Error; err != nil {
+		return errors.New("密码更新失败")
+	}
 
 	return nil
 }
