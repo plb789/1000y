@@ -364,6 +364,10 @@ class Game {
         this.handleSyncMessage(data);
         break;
         
+      case Protocol.CMD_CHAT:
+        this.handleChatMessage(data);
+        break;
+        
       case Protocol.CMD_MOVE:
         this.handleMoveMessage(data);
         break;

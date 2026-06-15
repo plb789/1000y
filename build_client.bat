@@ -12,7 +12,13 @@ set BUILD_DIR=%~dp0Frontend\Build
 REM 进入Electron目录
 cd /d "%FRONTEND_DIR%"
 
-echo [1/2] 检查依赖...
+echo [1/3] 同步最新源码到Electron目录...
+copy /Y "%~dp0Frontend\Game.js" "%FRONTEND_DIR%\Game.js" >nul
+copy /Y "%~dp0Frontend\index.html" "%FRONTEND_DIR%\index.html" >nul
+echo 源码同步完成
+
+echo.
+echo [2/3] 检查依赖...
 if not exist "node_modules" (
     echo 正在安装依赖...
     call npm.cmd install
@@ -22,15 +28,16 @@ if not exist "node_modules" (
         exit /b 1
     )
 ) else (
-    echo 依赖已存在，跳过安装
+    echo 依赖已存在，检查是否需要更新terser...
+    call npm.cmd install terser --save-dev
 )
 
 echo.
-echo [2/2] 编译发布版...
+echo [3/3] 编译发布版...
 echo 正在打包 Electron 应用...
 
-REM 设置环境变量绕过SSL证书验证（解决网络问题）
-set NODE_TLS_REJECT_UNAUTHORIZED=0
+REM 使用淘宝镜像下载 Electron（解决网络问题，避免禁用SSL验证）
+set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
 
 REM 使用electron-packager打包
 call npm.cmd run package
