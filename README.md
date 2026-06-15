@@ -1,2 +1,0 @@
-# plb
-vs-sql
