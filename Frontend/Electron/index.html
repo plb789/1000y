@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>千年江湖 - 客户端</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: 'Microsoft YaHei', sans-serif; 
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      overflow: hidden;
+    }
+    
+    /* 登录界面 */
+    #loginPanel {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 1000;
+    }
+    
+    #loginPanel.hidden { display: none; }
+    
+    .login-box {
+      background: rgba(0, 0, 0, 0.7);
+      border: 2px solid #e94560;
+      border-radius: 15px;
+      padding: 40px;
+      width: 380px;
+      box-shadow: 0 0 30px rgba(233, 69, 96, 0.3);
+    }
+    
+    .login-title {
+      text-align: center;
+      color: #e94560;
+      font-size: 32px;
+      margin-bottom: 30px;
+      text-shadow: 0 0 10px rgba(233, 69, 96, 0.5);
+    }
+    
+    .login-input {
+      width: 100%;
+      padding: 15px;
+      margin: 10px 0;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid #444;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 16px;
+      outline: none;
+      transition: all 0.3s;
+    }
+    
+    .login-input:focus {
+      border-color: #e94560;
+      box-shadow: 0 0 10px rgba(233, 69, 96, 0.3);
+    }
+    
+    .login-btn {
+      width: 100%;
+      padding: 15px;
+      margin: 15px 0;
+      background: linear-gradient(135deg, #e94560, #c23a51);
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 18px;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+    
+    .login-btn:hover {
+      background: linear-gradient(135deg, #ff6b6b, #e94560);
+      transform: translateY(-2px);
+      box-shadow: 0 5px 20px rgba(233, 69, 96, 0.4);
+    }
+    
+    .login-btn:disabled {
+      background: #555;
+      cursor: not-allowed;
+      transform: none;
+    }
+    
+    .login-msg {
+      text-align: center;
+      color: #ff6b6b;
+      margin-top: 10px;
+      min-height: 20px;
+    }
+    
+    /* 游戏主界面 */
+    #gamePanel {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: none;
+    }
+    
+    #gamePanel.active { display: block; }
+    
+    #gameCanvas {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      border: 3px solid #e94560;
+      box-shadow: 0 0 20px rgba(233, 69, 96, 0.3);
+    }
+    
+    /* 顶部状态栏 */
+    #topBar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 50px;
+      background: linear-gradient(180deg, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0));
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0 20px;
+      z-index: 100;
+    }
+    
+    .player-info {
+      display: flex;
+      align-items: center;
+      color: #fff;
+      gap: 20px;
+    }
+    
+    .player-info span {
+      background: rgba(0,0,0,0.5);
+      padding: 5px 15px;
+      border-radius: 5px;
+      border: 1px solid #e94560;
+    }
+    
+    .online-count {
+      color: #4ade80;
+      font-size: 14px;
+    }
+    
+    /* 底部快捷栏 */
+    #bottomBar {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 80px;
+      background: linear-gradient(0deg, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0));
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 10px;
+      padding-bottom: 10px;
+      z-index: 100;
+    }
+    
+    .skill-btn {
+      width: 60px;
+      height: 60px;
+      background: linear-gradient(135deg, #2d3748, #1a202c);
+      border: 2px solid #4a5568;
+      border-radius: 10px;
+      color: #fff;
+      font-size: 12px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      transition: all 0.2s;
+    }
+    
+    .skill-btn:hover {
+      border-color: #e94560;
+      transform: translateY(-5px);
+      box-shadow: 0 5px 15px rgba(233, 69, 96, 0.3);
+    }
+    
+    .skill-btn.cooling {
+      opacity: 0.5;
+    }
+    
+    /* 聊天栏 */
+    #chatBox {
+      position: absolute;
+      bottom: 90px;
+      left: 20px;
+      width: 350px;
+      max-height: 200px;
+      background: rgba(0, 0, 0, 0.7);
+      border: 1px solid #444;
+      border-radius: 10px;
+      overflow: hidden;
+      z-index: 100;
+    }
+    
+    #chatMessages {
+      height: 150px;
+      overflow-y: auto;
+      padding: 10px;
+      color: #fff;
+      font-size: 13px;
+    }
+    
+    #chatMessages .system { color: #4ade80; }
+    #chatMessages .world { color: #fbbf24; }
+    #chatMessages .map { color: #60a5fa; }
+    #chatMessages .private { color: #f472b6; }
+    
+    #chatInput {
+      width: 100%;
+      padding: 10px;
+      background: rgba(255,255,255,0.1);
+      border: none;
+      border-top: 1px solid #444;
+      color: #fff;
+      outline: none;
+    }
+    
+    /* 小地图 */
+    #miniMap {
+      position: absolute;
+      top: 60px;
+      right: 20px;
+      width: 180px;
+      height: 180px;
+      background: rgba(0, 0, 0, 0.8);
+      border: 2px solid #e94560;
+      border-radius: 10px;
+      z-index: 100;
+    }
+    
+    /* 角色信息面板 */
+    #rolePanel {
+      position: absolute;
+      top: 60px;
+      left: 20px;
+      width: 220px;
+      background: rgba(0, 0, 0, 0.8);
+      border: 2px solid #e94560;
+      border-radius: 10px;
+      padding: 15px;
+      color: #fff;
+      z-index: 100;
+      display: none;
+    }
+    
+    #rolePanel.show { display: block; }
+    
+    .role-title {
+      text-align: center;
+      font-size: 18px;
+      color: #e94560;
+      margin-bottom: 15px;
+      border-bottom: 1px solid #444;
+      padding-bottom: 10px;
+    }
+    
+    .attr-row {
+      display: flex;
+      justify-content: space-between;
+      margin: 5px 0;
+      font-size: 13px;
+    }
+    
+    .attr-row .label { color: #999; }
+    .attr-row .value { color: #4ade80; }
+    
+    /* 加载动画 */
+    .loading-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.8);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 2000;
+    }
+    
+    .loading-overlay.hidden { display: none; }
+    
+    .loading-spinner {
+      width: 60px;
+      height: 60px;
+      border: 4px solid #333;
+      border-top-color: #e94560;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    .loading-text {
+      color: #fff;
+      margin-top: 20px;
+      font-size: 16px;
+    }
+  </style>
+</head>
+<body>
+  <!-- 加载中遮罩 -->
+  <div id="loadingOverlay" class="loading-overlay">
+    <div class="loading-spinner"></div>
+    <div class="loading-text">正在连接服务器...</div>
+  </div>
+
+  <!-- 登录界面 -->
+  <div id="loginPanel">
+    <div class="login-box">
+      <h1 class="login-title">千年江湖</h1>
+      <input type="text" id="username" class="login-input" placeholder="账号" autocomplete="off">
+      <input type="password" id="password" class="login-input" placeholder="密码">
+      <button id="loginBtn" class="login-btn">登 录</button>
+      <button id="guestBtn" class="login-btn" style="background: linear-gradient(135deg, #4a5568, #2d3748);">游客试玩</button>
+      <div id="loginMsg" class="login-msg"></div>
+    </div>
+  </div>
+
+  <!-- 游戏主界面 -->
+  <div id="gamePanel">
+    <canvas id="gameCanvas" width="960" height="640"></canvas>
+    
+    <!-- 顶部状态栏 -->
+    <div id="topBar">
+      <div class="player-info">
+        <span id="roleName">未登录</span>
+        <span id="roleLevel">Lv.1</span>
+        <span id="roleGold">💰 0</span>
+        <span id="roleHP">❤️ 100/100</span>
+        <span id="roleMP">💧 100/100</span>
+      </div>
+      <div class="online-count">在线: <span id="onlineCount">0</span></div>
+    </div>
+    
+    <!-- 小地图 -->
+    <canvas id="miniMap"></canvas>
+    
+    <!-- 角色信息面板 -->
+    <div id="rolePanel">
+      <div class="role-title">角色信息</div>
+      <div class="attr-row"><span class="label">生命</span><span class="value" id="attrHP">100/100</span></div>
+      <div class="attr-row"><span class="label">内力</span><span class="value" id="attrMP">100/100</span></div>
+      <div class="attr-row"><span class="label">攻击</span><span class="value" id="attrAttack">10</span></div>
+      <div class="attr-row"><span class="label">防御</span><span class="value" id="attrDefense">5</span></div>
+      <div class="attr-row"><span class="label">速度</span><span class="value" id="attrSpeed">10</span></div>
+      <div class="attr-row"><span class="label">命中</span><span class="value" id="attrHit">50</span></div>
+      <div class="attr-row"><span class="label">闪避</span><span class="value" id="attrDodge">10</span></div>
+      <div class="attr-row"><span class="label">暴击</span><span class="value" id="attrCrit">5%</span></div>
+    </div>
+    
+    <!-- 聊天栏 -->
+    <div id="chatBox">
+      <div id="chatMessages"></div>
+      <input type="text" id="chatInput" placeholder="按Enter发送聊天">
+    </div>
+    
+    <!-- 底部快捷栏 -->
+    <div id="bottomBar">
+      <button class="skill-btn" data-skill="0">普通<br>攻击</button>
+      <button class="skill-btn" data-skill="1">技能1</button>
+      <button class="skill-btn" data-skill="2">技能2</button>
+      <button class="skill-btn" data-skill="3">技能3</button>
+      <button class="skill-btn" data-skill="4">技能4</button>
+    </div>
+  </div>
+
+  <!-- 1. 工具类 -->
+  <script src="Core/Utils/CommonUtil.js"></script>
+  <script src="Core/Utils/AStar.js"></script>
+
+  <!-- 2. 网络通信 -->
+  <script src="Core/Network/GameWS.js"></script>
+
+  <!-- 3. 通信协议 -->
+  <script src="Protocol/ProtocolDefine.js"></script>
+
+  <!-- 4. 资源解析 -->
+  <script src="ResourceLoad/SprParser.js"></script>
+  <script src="ResourceLoad/SpriteAnimator.js"></script>
+  <script src="ResourceLoad/DdsParser.js"></script>
+
+  <!-- 5. 地图模块 -->
+  <script src="GameLogic/Map/MillenniumMapParser.js"></script>
+  <script src="GameLogic/Map/MapRenderer.js"></script>
+  <script src="GameLogic/Map/MapEngine.js"></script>
+
+  <!-- 6. 游戏主逻辑 -->
+  <script src="Game.js"></script>
+</body>
+</html>

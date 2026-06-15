@@ -1,0 +1,8 @@
+# 你要排除的目录（写在这里）
+node_modules/
+Core/
+GameLogic/
+Protocol/
+Res/
+ResourceLoad/
+# 所有你不想提交的大文件夹都加进来

@@ -96,46 +96,49 @@ func (cm *ClientManager) Start() {
 	for {
 		select {
 		case client := <-cm.register:
-			cm.addClient(client)
-			log.Printf("客户端连接: roleID=%d, addr=%s", client.ID, client.Conn.RemoteAddr())
+			// 检查是否已注册（避免重复注册）
+			if !client.Registered {
+				cm.addClient(client)
+				log.Printf("客户端连接: roleID=%d, addr=%s", client.ID, client.Conn.RemoteAddr())
 
-			// 1. 向新玩家发送当前地图的玩家列表
-			existingPlayers := cm.GetMapPlayers(client.MapID)
-			if len(existingPlayers) > 1 { // 有其他玩家
-				playerList := make([]map[string]interface{}, 0)
-				for _, p := range existingPlayers {
-					if p.ID != client.ID {
-						playerList = append(playerList, map[string]interface{}{
-							"role_id": p.ID,
-							"map_id":  p.MapID,
-							"x":       p.X,
-							"y":       p.Y,
-							"name":    p.Name,
+				// 1. 向新玩家发送当前地图的玩家列表
+				existingPlayers := cm.GetMapPlayers(client.MapID)
+				if len(existingPlayers) > 1 { // 有其他玩家
+					playerList := make([]map[string]interface{}, 0)
+					for _, p := range existingPlayers {
+						if p.ID != client.ID {
+							playerList = append(playerList, map[string]interface{}{
+								"role_id": p.ID,
+								"map_id":  p.MapID,
+								"x":       p.X,
+								"y":       p.Y,
+								"name":    p.Name,
+							})
+						}
+					}
+					if len(playerList) > 0 {
+						cm.SendToClient(client.ID, &Message{
+							Type: CmdMapPlayer,
+							Data: mustMarshal(map[string]interface{}{
+								"players": playerList,
+							}),
 						})
 					}
 				}
-				if len(playerList) > 0 {
-					cm.SendToClient(client.ID, &Message{
-						Type: CmdMapPlayer,
-						Data: mustMarshal(map[string]interface{}{
-							"players": playerList,
-						}),
-					})
-				}
-			}
 
-			// 2. 广播新玩家进入（让其他玩家知道）
-			cm.BroadcastToMap(client.MapID, &Message{
-				From: client.ID,
-				Type: CmdEnterMap,
-				Data: mustMarshal(map[string]interface{}{
-					"role_id": client.ID,
-					"map_id":  client.MapID,
-					"x":       client.X,
-					"y":       client.Y,
-					"name":    client.Name,
-				}),
-			})
+				// 2. 广播新玩家进入（让其他玩家知道）
+				cm.BroadcastToMap(client.MapID, &Message{
+					From: client.ID,
+					Type: CmdEnterMap,
+					Data: mustMarshal(map[string]interface{}{
+						"role_id": client.ID,
+						"map_id":  client.MapID,
+						"x":       client.X,
+						"y":       client.Y,
+						"name":    client.Name,
+					}),
+				})
+			}
 
 		case client := <-cm.unregister:
 			cm.removeClient(client)
@@ -476,27 +479,36 @@ func (c *Client) handleEnterMap(body []byte) {
 	c.X = req.X
 	c.Y = req.Y
 
-	// 如果还未注册，现在注册
+	// 如果还未注册，现在注册（直接调用addClient，确保同步）
 	if !c.Registered {
-		GlobalManager.register <- c
+		GlobalManager.addClient(c)
 		log.Printf("客户端注册: roleID=%d, mapID=%d", c.ID, c.MapID)
 	}
 
-	// 先向新玩家发送当前地图的其他玩家列表
+	// 先向新玩家发送当前地图视野范围内的其他玩家列表
 	existingPlayers := GlobalManager.GetMapPlayers(req.MapID)
 	log.Printf("当前地图%d有%d个玩家", req.MapID, len(existingPlayers))
 
 	if len(existingPlayers) > 1 { // 有其他玩家
 		playerList := make([]map[string]interface{}, 0)
+		viewRangeSq := VIEW_RANGE * VIEW_RANGE
+
 		for _, p := range existingPlayers {
 			if p.ID != c.ID {
-				playerList = append(playerList, map[string]interface{}{
-					"role_id": p.ID,
-					"name":    p.Name,
-					"map_id":  p.MapID,
-					"x":       p.X,
-					"y":       p.Y,
-				})
+				// 只添加视野范围内的玩家
+				dx := p.X - c.X
+				dy := p.Y - c.Y
+				distanceSq := dx*dx + dy*dy
+
+				if distanceSq <= viewRangeSq {
+					playerList = append(playerList, map[string]interface{}{
+						"role_id": p.ID,
+						"name":    p.Name,
+						"map_id":  p.MapID,
+						"x":       p.X,
+						"y":       p.Y,
+					})
+				}
 			}
 		}
 		if len(playerList) > 0 {
@@ -509,9 +521,9 @@ func (c *Client) handleEnterMap(body []byte) {
 		}
 	}
 
-	// 广播新玩家进入给当前地图的其他玩家
+	// 使用视野范围并发广播新玩家进入（只发送给视野范围内的玩家）
 	log.Printf("广播玩家进入: mapID=%d, 玩家ID=%d, 玩家名=%s", c.MapID, c.ID, c.Name)
-	GlobalManager.BroadcastToMap(c.MapID, &Message{
+	GlobalManager.BroadcastToViewRangeConcurrent(c.MapID, c.X, c.Y, &Message{
 		From: c.ID,
 		Type: CmdEnterMap,
 		Data: mustMarshal(map[string]interface{}{
@@ -551,16 +563,13 @@ func (c *Client) handleMove(body []byte) {
 
 	log.Printf("玩家移动: roleID=%d, x=%d, y=%d", c.ID, c.X, c.Y)
 
-	// 广播移动给同地图玩家
-	GlobalManager.BroadcastToMap(c.MapID, &Message{
-		From: c.ID,
-		Type: CmdMove,
-		Data: mustMarshal(map[string]interface{}{
-			"role_id": c.ID,
-			"x":       c.X,
-			"y":       c.Y,
-		}),
+	// 使用消息合并和并发广播（同一玩家短时间内多次移动会合并成一条消息）
+	data := mustMarshal(map[string]interface{}{
+		"role_id": c.ID,
+		"x":       c.X,
+		"y":       c.Y,
 	})
+	GlobalManager.MergeAndBroadcastMove(c.MapID, c.ID, c.X, c.Y, data)
 }
 
 func (c *Client) handleChat(body []byte) {
@@ -633,6 +642,10 @@ func heartbeatCheck() {
 
 func main() {
 	log.Println("===== 网关服务启动 =====")
+
+	// 初始化 Redis
+	InitRedis("127.0.0.1:6379", "", 0)
+
 	log.Println("WebSocket: :8080")
 
 	http.HandleFunc("/ws", HandleWebSocket)
