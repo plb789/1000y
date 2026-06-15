@@ -167,7 +167,9 @@ func ResetPassword(username, code, newPwd string) error {
 	if err != nil {
 		return errors.New("密码加密失败")
 	}
-	mysql.DB.Model(&acc).Update("password", string(pwdHash))
+	if err := mysql.DB.Model(&acc).Update("password", string(pwdHash)).Error; err != nil {
+		return errors.New("密码更新失败")
+	}
 
 	return nil
 }
