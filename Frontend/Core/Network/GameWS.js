@@ -1,0 +1,240 @@
+/**
+ * WebSocket 长连接封装
+ * 协议格式: [cmd(2字节)][len(2字节)][消息体][校验码(1字节)]
+ */
+class GameWS {
+  constructor() {
+    this.ws = null;
+    this.url = "ws://127.0.0.1:8080/ws";
+    this.isConnected = false;
+    this.heartTimer = null;
+    this.reconnectTimer = null;
+    this.reconnectMax = 10;
+    this.reconnectCount = 0;
+    this.router = new Map(); // 协议路由表
+    
+    // 事件回调
+    this.callbacks = {
+      onOpen: null,
+      onClose: null,
+      onError: null,
+      onMessage: null
+    };
+  }
+
+  /**
+   * 连接服务器
+   * @param {string} url - WebSocket地址
+   * @param {object} callbacks - 回调函数 {onOpen, onClose, onError, onMessage}
+   */
+  connect(url, callbacks = {}) {
+    if (url) this.url = url;
+    if (callbacks) {
+      this.callbacks.onOpen = callbacks.onOpen || null;
+      this.callbacks.onClose = callbacks.onClose || null;
+      this.callbacks.onError = callbacks.onError || null;
+      this.callbacks.onMessage = callbacks.onMessage || null;
+    }
+    
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
+    
+    try {
+      this.ws = new WebSocket(this.url);
+      this.ws.binaryType = "arraybuffer";
+
+      this.ws.onopen = () => {
+        this.isConnected = true;
+        this.reconnectCount = 0;
+        console.log("WebSocket 连接成功");
+        this._startHeart();
+        if (this.callbacks.onOpen) this.callbacks.onOpen();
+      };
+
+      this.ws.onmessage = (e) => {
+        this._onRecv(e.data);
+      };
+
+      this.ws.onclose = () => {
+        this.isConnected = false;
+        this._stopHeart();
+        this._tryReconnect();
+        if (this.callbacks.onClose) this.callbacks.onClose();
+      };
+
+      this.ws.onerror = (err) => {
+        console.error("WebSocket 异常：", err);
+        if (this.callbacks.onError) this.callbacks.onError(err);
+      };
+    } catch (err) {
+      console.error('WebSocket创建失败:', err);
+    }
+  }
+
+  _startHeart() {
+    this._stopHeart();
+    this.heartTimer = setInterval(() => {
+      // 使用心跳协议
+      this.send(1003, {});
+    }, 30000);
+  }
+
+  _stopHeart() {
+    if (this.heartTimer) {
+      clearInterval(this.heartTimer);
+      this.heartTimer = null;
+    }
+  }
+
+  _tryReconnect() {
+    if (this.reconnectCount >= this.reconnectMax) {
+      console.log('已达到最大重连次数');
+      return;
+    }
+    this.reconnectCount++;
+    console.log(`断线重连 ${this.reconnectCount}/${this.reconnectMax}`);
+    this.reconnectTimer = setTimeout(() => this.connect(), 3000);
+  }
+
+  /**
+   * 注册协议回调
+   * @param {number} cmd - 协议号
+   * @param {function} callback - 回调函数
+   */
+  on(cmd, callback) {
+    this.router.set(cmd, callback);
+  }
+
+  /**
+   * 发送JSON格式消息
+   * @param {number} cmd - 协议号
+   * @param {object} data - 数据对象
+   */
+  send(cmd, data) {
+    if (!this.isConnected) {
+      console.warn('WebSocket未连接');
+      return;
+    }
+    
+    // 确保cmd是有效数字
+    if (typeof cmd !== 'number' || !Number.isFinite(cmd)) {
+      console.error('无效的cmd:', cmd);
+      return;
+    }
+    
+    try {
+      const jsonStr = JSON.stringify(data);
+      const bodyBuf = new TextEncoder().encode(jsonStr);
+      this.sendMsg(cmd, bodyBuf);
+    } catch (err) {
+      console.error('发送消息失败:', err);
+    }
+  }
+
+  /**
+   * 发送二进制消息
+   * @param {number} cmd - 协议号
+   * @param {Uint8Array} bodyBuf - 二进制数据
+   */
+  sendMsg(cmd, bodyBuf) {
+    if (!this.isConnected || !this.ws) return;
+    
+    // 调试日志
+    console.log('sendMsg called:', {cmd: cmd, bodyLen: bodyBuf ? bodyBuf.length : 'null'});
+    
+    // 确保bodyBuf是有效的Uint8Array
+    if (!(bodyBuf instanceof Uint8Array)) {
+      console.error('bodyBuf不是Uint8Array:', typeof bodyBuf);
+      bodyBuf = new Uint8Array(0);
+    }
+    
+    const body = new Uint8Array(bodyBuf);
+    const bodyLen = body.length;
+    const totalLen = 5 + bodyLen;
+    
+    console.log('preparing packet:', {bodyLen: bodyLen, totalLen: totalLen});
+    
+    // 简化协议: [cmd(2字节)][body(N字节)]
+    const pkg = new Uint8Array(2 + bodyLen);
+    const view = new DataView(pkg.buffer);
+
+    // 命令 (小端序)
+    view.setUint16(0, cmd, true);
+    // 数据
+    if (bodyLen > 0) {
+      pkg.set(body, 2);
+    }
+
+    this.ws.send(pkg.buffer);
+  }
+
+  /**
+   * 解析接收数据包
+   * 简化协议: [cmd(2字节)][body(N字节)]
+   */
+  _onRecv(buffer) {
+    try {
+      const data = new Uint8Array(buffer);
+      const totalLen = data.length;
+      if (totalLen < 2) return;
+
+      const view = new DataView(buffer);
+      // 命令 (小端序)
+      const cmd = view.getUint16(0, true);
+      // 数据
+      const bodyLen = totalLen - 2;
+      
+      let body = {};
+      if (bodyLen > 0) {
+        const bodyData = data.slice(2, 2 + bodyLen);
+        const jsonStr = new TextDecoder().decode(bodyData);
+        try {
+          body = JSON.parse(jsonStr);
+        } catch (e) {
+          console.warn('JSON解析失败:', jsonStr);
+          body = { raw: jsonStr };
+        }
+      }
+
+      // 触发路由回调
+      const cb = this.router.get(cmd);
+      if (cb) {
+        cb(body);
+      }
+
+      // 触发全局消息回调
+      if (this.callbacks.onMessage) {
+        this.callbacks.onMessage(cmd, body);
+      }
+    } catch (err) {
+      console.error('消息处理错误:', err);
+    }
+  }
+
+  /**
+   * 关闭连接
+   */
+  close() {
+    this._stopHeart();
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
+    }
+    this.isConnected = false;
+  }
+  
+  /**
+   * 获取连接状态
+   */
+  getConnected() {
+    return this.isConnected;
+  }
+}
+
+// 全局单例
+if (!window.GameWS) {
+  window.GameWS = new GameWS();
+}
