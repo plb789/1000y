@@ -356,6 +356,10 @@ class Game {
         this.handleLeaveMap(data);
         break;
         
+      case Protocol.CMD_ONLINE_COUNT:
+        this.handleOnlineCount(data);
+        break;
+        
       case Protocol.CMD_SYNC:
         this.handleSyncMessage(data);
         break;
@@ -456,8 +460,16 @@ class Game {
     this.players.delete(data.role_id);
     this.addChatMessage('系统', `${data.name || '玩家'}离开了地图`, 'system');
     
-    // 更新在线人数显示
+    // 更新在线人数显示（基于本地列表，会被服务端广播覆盖）
     this.updateOnlineCount();
+  }
+  
+  handleOnlineCount(data) {
+    // 使用服务端广播的全局在线人数，而不是本地计算的
+    if (data.count !== undefined && this.ui.onlineCount) {
+      this.ui.onlineCount.textContent = data.count;
+      console.log('更新在线人数:', data.count);
+    }
   }
   
   updateOnlineCount() {
@@ -703,8 +715,9 @@ const Protocol = {
   CMD_ENTER_MAP: 3001,
   CMD_LEAVE_MAP: 3002,
   CMD_MAP_PLAYER: 3003,
-  CMD_NPC_TALK: 3004,
-  CMD_NPC_TRADE: 3005,
+  CMD_ONLINE_COUNT: 3004,
+  CMD_NPC_TALK: 3005,
+  CMD_NPC_TRADE: 3006,
   
   // 武学相关 4001-4020
   CMD_SKILL_LEARN: 4001,

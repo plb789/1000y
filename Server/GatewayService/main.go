@@ -68,8 +68,9 @@ const (
 	CmdEnterMap     uint16 = 3001 // 进入地图
 	CmdLeaveMap     uint16 = 3002 // 离开地图
 	CmdMapPlayer    uint16 = 3003 // 地图玩家列表
-	CmdNpcTalk      uint16 = 3004 // NPC对话
-	CmdNpcTrade     uint16 = 3005 // NPC交易
+	CmdOnlineCount  uint16 = 3004 // 在线人数广播
+	CmdNpcTalk      uint16 = 3005 // NPC对话
+	CmdNpcTrade     uint16 = 3006 // NPC交易
 	CmdSkillLearn   uint16 = 4001 // 学习武学
 	CmdSkillUpgrade uint16 = 4002 // 升级武学
 	CmdRoleInfo     uint16 = 5001 // 角色信息
@@ -124,6 +125,14 @@ func (cm *ClientManager) Start() {
 							}),
 						})
 					}
+
+					// 发送当前在线人数
+					cm.SendToClient(client.ID, &Message{
+						Type: CmdOnlineCount,
+						Data: mustMarshal(map[string]interface{}{
+							"count": cm.GetOnlineCount(),
+						}),
+					})
 				}
 
 				// 2. 广播新玩家进入（让其他玩家知道）
@@ -223,6 +232,23 @@ func (cm *ClientManager) BroadcastToMap(mapID uint32, msg *Message) {
 			case client.Send <- pkg:
 			default:
 			}
+		}
+	}
+}
+
+// BroadcastToAll 广播到所有玩家
+func (cm *ClientManager) BroadcastToAll(msg *Message) {
+	cm.mutex.RLock()
+	defer cm.mutex.RUnlock()
+
+	pkg := make([]byte, 2+len(msg.Data))
+	binary.LittleEndian.PutUint16(pkg[0:2], msg.Type)
+	copy(pkg[2:], msg.Data)
+
+	for _, client := range cm.clients {
+		select {
+		case client.Send <- pkg:
+		default:
 		}
 	}
 }
@@ -584,7 +610,7 @@ func (c *Client) handleChat(body []byte) {
 
 	msg := mustMarshal(map[string]interface{}{
 		"from_id":   c.ID,
-		"from_name": "玩家",
+		"from_name": c.Name,
 		"channel":   chat.Channel,
 		"content":   chat.Content,
 		"time":      time.Now().Unix(),
@@ -592,11 +618,18 @@ func (c *Client) handleChat(body []byte) {
 
 	switch chat.Channel {
 	case 0: // 世界
+		// 先回显给自己
+		c.sendPacket(CmdChat, msg)
 		GlobalManager.broadcast <- &Message{Type: CmdChat, Data: msg}
 	case 1: // 当前地图
+		// 先回显给自己
+		c.sendPacket(CmdChat, msg)
 		GlobalManager.BroadcastToMap(c.MapID, &Message{From: c.ID, Type: CmdChat, Data: msg})
 	case 3: // 私聊
+		// 发送给目标玩家
 		GlobalManager.broadcast <- &Message{To: chat.ToID, Type: CmdChat, Data: msg}
+		// 回显给自己
+		c.sendPacket(CmdChat, msg)
 	}
 }
 
@@ -646,6 +679,9 @@ func main() {
 	// 初始化 Redis
 	InitRedis("127.0.0.1:6379", "", 0)
 
+	// 启动定期广播在线人数（每10秒）
+	go broadcastOnlineCount()
+
 	log.Println("WebSocket: :8080")
 
 	http.HandleFunc("/ws", HandleWebSocket)
@@ -654,4 +690,24 @@ func main() {
 	})
 
 	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+// broadcastOnlineCount 定期广播在线人数
+func broadcastOnlineCount() {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		<-ticker.C
+		count := GlobalManager.GetOnlineCount()
+		log.Printf("广播在线人数: %d", count)
+
+		// 广播给所有在线玩家
+		GlobalManager.BroadcastToAll(&Message{
+			Type: CmdOnlineCount,
+			Data: mustMarshal(map[string]interface{}{
+				"count": count,
+			}),
+		})
+	}
 }

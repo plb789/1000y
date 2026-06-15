@@ -29,6 +29,9 @@ echo.
 echo [2/2] 编译发布版...
 echo 正在打包 Electron 应用...
 
+REM 设置环境变量绕过SSL证书验证（解决网络问题）
+set NODE_TLS_REJECT_UNAUTHORIZED=0
+
 REM 使用electron-packager打包
 call npm.cmd run package
 if errorlevel 1 (

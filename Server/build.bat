@@ -1,73 +1,61 @@
 @echo off
-chcp 65001 >nul
-echo ========================================
-echo   千年江湖 - 服务端编译脚本
-echo ========================================
+echo =========================================
+echo   Server Build Script
+echo =========================================
 echo.
 
-REM 设置变量
 set SRV_DIR=%~dp0
 set BIN_DIR=%SRV_DIR%bin
 
-REM 创建bin目录
 if not exist "%BIN_DIR%" (
     mkdir "%BIN_DIR%"
-    echo 创建bin目录: %BIN_DIR%
+    echo Created bin directory: %BIN_DIR%
 )
 
-REM 进入Server目录
 cd /d "%SRV_DIR%"
 
-echo [1/4] 编译 DBService...
-cd DBService
-go build -o "%BIN_DIR%\DBService.exe" .
+echo [1/4] Building DBService...
+go build -o "%BIN_DIR%\DBService.exe" DBService/main.go
 if errorlevel 1 (
-    echo [错误] DBService 编译失败!
+    echo Error: DBService build failed!
     pause
     exit /b 1
 )
-echo [成功] DBService.exe
-cd /d "%SRV_DIR%"
+echo Success: DBService.exe
 
-echo [2/4] 编译 LoginService...
-cd LoginService
-go build -o "%BIN_DIR%\LoginService.exe" .
+echo [2/4] Building LoginService...
+go build -o "%BIN_DIR%\LoginService.exe" LoginService/main.go
 if errorlevel 1 (
-    echo [错误] LoginService 编译失败!
+    echo Error: LoginService build failed!
     pause
     exit /b 1
 )
-echo [成功] LoginService.exe
-cd /d "%SRV_DIR%"
+echo Success: LoginService.exe
 
-echo [3/4] 编译 GameService...
-cd GameService
-go build -o "%BIN_DIR%\GameService.exe" .
+echo [3/4] Building GameService...
+go build -o "%BIN_DIR%\GameService.exe" GameService/main.go
 if errorlevel 1 (
-    echo [错误] GameService 编译失败!
+    echo Error: GameService build failed!
     pause
     exit /b 1
 )
-echo [成功] GameService.exe
-cd /d "%SRV_DIR%"
+echo Success: GameService.exe
 
-echo [4/4] 编译 GatewayService...
-cd GatewayService
-go build -o "%BIN_DIR%\GatewayService.exe" .
+echo [4/4] Building GatewayService...
+go build -o "%BIN_DIR%\GatewayService.exe" GatewayService/main.go GatewayService/broadcast.go
 if errorlevel 1 (
-    echo [错误] GatewayService 编译失败!
+    echo Error: GatewayService build failed!
     pause
     exit /b 1
 )
-echo [成功] GatewayService.exe
-cd /d "%SRV_DIR%"
+echo Success: GatewayService.exe
 
 echo.
-echo ========================================
-echo   编译完成！输出目录: %BIN_DIR%
-echo ========================================
+echo =========================================
+echo   Build completed! Output: %BIN_DIR%
+echo =========================================
 echo.
-echo 生成的文件:
+echo Generated files:
 dir /b "%BIN_DIR%\*.exe"
 echo.
 pause
