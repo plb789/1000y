@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -61,7 +62,7 @@ func InitRedis(addr, password string, db int) {
 
 // subscribeToMapChannels 订阅所有地图频道
 func subscribeToMapChannels() {
-	pubsub := redisClient.Subscribe(ctx, "map:*")
+	pubsub := redisClient.PSubscribe(ctx, "map:*")
 	defer pubsub.Close()
 
 	log.Println("开始订阅地图频道...")
@@ -106,7 +107,7 @@ type BroadcastMessage struct {
 
 // PublishToMap 通过 Redis 发布消息到地图频道
 func PublishToMap(msg BroadcastMessage) error {
-	channel := "map:" + string(rune(msg.MapID))
+	channel := fmt.Sprintf("map:%d", msg.MapID)
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return err
