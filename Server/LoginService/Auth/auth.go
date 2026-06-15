@@ -36,20 +36,22 @@ type LoginRequest struct {
 
 // CheckLogin 账号密码校验
 func CheckLogin(username, pwd string) (int, uint, string) {
-	hash := md5.Sum([]byte(pwd))
-	pwdMd5 := fmt.Sprintf("%x", hash)
-
 	var acc model.Account
 	err := mysql.DB.Where("username = ?", username).First(&acc).Error
 	if err != nil {
 		return common.CodeFail, 0, "账号不存在"
 	}
 
+	// 使用salt对密码加盐后再哈希
+	hash := md5.Sum([]byte(pwd + acc.Salt))
+	pwdMd5 := fmt.Sprintf("%x", hash)
+
 	if acc.Password != pwdMd5 {
 		return common.CodeFail, 0, "密码错误"
 	}
 
-	if acc.Status == 1 {
+	// status: 0=封号, 1=正常
+	if acc.Status != 1 {
 		return common.CodeFail, 0, "账号已被封禁"
 	}
 
@@ -72,14 +74,18 @@ func Register(req RegisterRequest) (int, uint, string) {
 		return common.CodeFail, 0, "用户名已存在"
 	}
 
-	// 密码直接MD5加密(简化处理)
-	hash := md5.Sum([]byte(req.Password))
+	// 生成随机盐值
+	salt := generateSalt()
+
+	// 使用salt对密码加盐后再哈希
+	hash := md5.Sum([]byte(req.Password + salt))
 	pwdHash := fmt.Sprintf("%x", hash)
 
-	// 创建账号
+	// 创建账号 (status: 0=封号, 1=正常)
 	account := model.Account{
 		Username: req.Username,
 		Password: pwdHash,
+		Salt:     salt,
 		Status:   1,
 	}
 
@@ -160,8 +166,8 @@ func ResetPassword(username, code, newPwd string) error {
 	// 验证验证码(简化处理,暂不使用)
 	_ = code
 
-	// 更新密码
-	hash := md5.Sum([]byte(newPwd))
+	// 更新密码 - 使用salt加盐后哈希
+	hash := md5.Sum([]byte(newPwd + acc.Salt))
 	pwdHash := fmt.Sprintf("%x", hash)
 	mysql.DB.Model(&acc).Update("password", pwdHash)
 
@@ -175,14 +181,14 @@ func UpdatePassword(uid uint, oldPwd, newPwd string) error {
 		return errors.New("账号不存在")
 	}
 
-	// 验证原密码
-	hash := md5.Sum([]byte(oldPwd))
+	// 验证原密码 - 使用salt加盐后哈希
+	hash := md5.Sum([]byte(oldPwd + acc.Salt))
 	if acc.Password != fmt.Sprintf("%x", hash) {
 		return errors.New("原密码错误")
 	}
 
-	// 更新密码
-	newHash := md5.Sum([]byte(newPwd))
+	// 更新密码 - 使用salt加盐后哈希
+	newHash := md5.Sum([]byte(newPwd + acc.Salt))
 	mysql.DB.Model(&acc).Update("password", fmt.Sprintf("%x", newHash))
 
 	return nil
@@ -208,7 +214,8 @@ func IsBanned(uid uint) bool {
 	if err != nil {
 		return false
 	}
-	return acc.Status == 1
+	// status: 0=封号, 1=正常
+	return acc.Status != 1
 }
 
 // GetUidByToken 通过Token获取UID

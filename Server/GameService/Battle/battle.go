@@ -1,7 +1,6 @@
 package battle
 
 import (
-	"math"
 	"math/rand"
 	"time"
 )
@@ -25,18 +24,18 @@ const (
 
 // AttackResult 攻击结果
 type AttackResult struct {
-	AttackerID   uint64      // 攻击者ID
-	AttackerType uint8       // 攻击者类型: 1=玩家, 2=怪物
-	TargetID     uint64      // 目标ID
-	TargetType   uint8       // 目标类型: 1=玩家, 2=怪物
-	Damage       int         // 伤害值
-	DamageType   DamageType  // 伤害类型
-	IsCrit       bool        // 是否暴击
-	IsMiss       bool        // 是否闪避
-	IsBlocked    bool        // 是否格挡
-	SkillID      uint32      // 技能ID(如果是技能攻击)
-	AttackType   AttackType  // 攻击类型
-	Timestamp    int64       // 时间戳
+	AttackerID   uint64     // 攻击者ID
+	AttackerType uint8      // 攻击者类型: 1=玩家, 2=怪物
+	TargetID     uint64     // 目标ID
+	TargetType   uint8      // 目标类型: 1=玩家, 2=怪物
+	Damage       int        // 伤害值
+	DamageType   DamageType // 伤害类型
+	IsCrit       bool       // 是否暴击
+	IsMiss       bool       // 是否闪避
+	IsBlocked    bool       // 是否格挡
+	SkillID      uint32     // 技能ID(如果是技能攻击)
+	AttackType   AttackType // 攻击类型
+	Timestamp    int64      // 时间戳
 }
 
 // Fighter 战斗者接口
@@ -57,17 +56,17 @@ type Fighter interface {
 
 // BaseFighter 基础战斗者属性
 type BaseFighter struct {
-	ID          uint64
-	Attack      int
-	Defense     int
-	Speed       int
-	Hit         int
-	Dodge       int
-	Crit        int
-	CritDamage  int
-	CurrentHP   int
-	MaxHP       int
-	SkillBonus  map[string]int // 来自武学的加成
+	ID         uint64
+	Attack     int
+	Defense    int
+	Speed      int
+	Hit        int
+	Dodge      int
+	Crit       int
+	CritDamage int
+	CurrentHP  int
+	MaxHP      int
+	SkillBonus map[string]int // 来自武学的加成
 }
 
 // CalculateDamage 计算伤害
@@ -140,21 +139,24 @@ func CalculateDodge(attacker, defender *BaseFighter) bool {
 // SkillDamageFactor 技能伤害系数
 // 不同类型的武学有不同的伤害系数
 var SkillDamageFactor = map[uint8]float64{
-	1: 1.0,  // 内功 - 无伤害
-	2: 1.5,  // 外功 - 高伤害
-	3: 1.0,  // 身法 - 无伤害
-	4: 1.0,  // 护体 - 无伤害
-	5: 1.2,  // 拳法 - 中高伤害
-	6: 1.3,  // 剑法 - 中高伤害
-	7: 1.4,  // 刀法 - 高伤害
-	8: 1.5,  // 枪法 - 高伤害
-	9: 1.6,  // 斧法 - 最高伤害
+	1: 1.0, // 内功 - 无伤害
+	2: 1.5, // 外功 - 高伤害
+	3: 1.0, // 身法 - 无伤害
+	4: 1.0, // 护体 - 无伤害
+	5: 1.2, // 拳法 - 中高伤害
+	6: 1.3, // 剑法 - 中高伤害
+	7: 1.4, // 刀法 - 高伤害
+	8: 1.5, // 枪法 - 高伤害
+	9: 1.6, // 斧法 - 最高伤害
 }
 
 // CalculateSkillDamage 计算技能伤害
 func CalculateSkillDamage(attacker, defender *BaseFighter, skillType uint8, skillLevel uint32) int {
-	// 基础伤害
-	baseDamage := attacker.Attack + defender.Defense/2
+	// 基础伤害 = 攻击 - 防御 * 0.5
+	baseDamage := attacker.Attack - defender.Defense/2
+	if baseDamage < 1 {
+		baseDamage = 1
+	}
 
 	// 技能伤害系数
 	factor := SkillDamageFactor[skillType]
@@ -180,7 +182,7 @@ func CalculateSkillDamage(attacker, defender *BaseFighter, skillType uint8, skil
 }
 
 // CalculateExpGain 计算经验获取
-//击杀怪物时,根据怪物等级和角色等级差计算经验
+// 击杀怪物时,根据怪物等级和角色等级差计算经验
 func CalculateExpGain(monsterLevel, roleLevel uint32, baseExp int) int {
 	// 等级差修正
 	levelDiff := int(monsterLevel) - int(roleLevel)
@@ -209,16 +211,16 @@ func CalculateGoldDrop(minGold, maxGold int) int {
 
 // BattleState 战斗状态
 type BattleState struct {
-	ID          uint64
-	Type        uint8        // 1=玩家vs玩家, 2=玩家vs怪物, 3=怪物vs玩家
-	AttackerID  uint64
-	DefenderID  uint64
-	AttackerHP  int
-	DefenderHP  int
-	StartTime   time.Time
-	EndTime     time.Time
-	Status      uint8        // 0=进行中, 1=结束
-	Winner      uint8        // 0=无, 1=攻击方, 2=防御方
+	ID         uint64
+	Type       uint8 // 1=玩家vs玩家, 2=玩家vs怪物, 3=怪物vs玩家
+	AttackerID uint64
+	DefenderID uint64
+	AttackerHP int
+	DefenderHP int
+	StartTime  time.Time
+	EndTime    time.Time
+	Status     uint8 // 0=进行中, 1=结束
+	Winner     uint8 // 0=无, 1=攻击方, 2=防御方
 }
 
 // NewBattleState 创建战斗状态
