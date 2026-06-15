@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"crypto/md5"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
@@ -11,6 +10,8 @@ import (
 	"game-server/DBService/mysql"
 	"game-server/DBService/redis"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 // 登录响应结构
@@ -42,16 +43,13 @@ func CheckLogin(username, pwd string) (int, uint, string) {
 		return common.CodeFail, 0, "账号不存在"
 	}
 
-	// 使用salt对密码加盐后再哈希
-	hash := md5.Sum([]byte(pwd + acc.Salt))
-	pwdMd5 := fmt.Sprintf("%x", hash)
-
-	if acc.Password != pwdMd5 {
+	// 使用bcrypt验证密码
+	if err := bcrypt.CompareHashAndPassword([]byte(acc.Password), []byte(pwd)); err != nil {
 		return common.CodeFail, 0, "密码错误"
 	}
 
-	// status: 0=封号, 1=正常
-	if acc.Status != 1 {
+	// status: 0=正常, 1=封禁
+	if acc.Status == 1 {
 		return common.CodeFail, 0, "账号已被封禁"
 	}
 
@@ -74,19 +72,17 @@ func Register(req RegisterRequest) (int, uint, string) {
 		return common.CodeFail, 0, "用户名已存在"
 	}
 
-	// 生成随机盐值
-	salt := generateSalt()
+	// 使用bcrypt加密密码
+	pwdHash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return common.CodeFail, 0, "密码加密失败"
+	}
 
-	// 使用salt对密码加盐后再哈希
-	hash := md5.Sum([]byte(req.Password + salt))
-	pwdHash := fmt.Sprintf("%x", hash)
-
-	// 创建账号 (status: 0=封号, 1=正常)
+	// 创建账号 (status: 0=正常, 1=封禁)
 	account := model.Account{
 		Username: req.Username,
-		Password: pwdHash,
-		Salt:     salt,
-		Status:   1,
+		Password: string(pwdHash),
+		Status:   0, // 新账号默认正常
 	}
 
 	if err := mysql.DB.Create(&account).Error; err != nil {
@@ -166,10 +162,12 @@ func ResetPassword(username, code, newPwd string) error {
 	// 验证验证码(简化处理,暂不使用)
 	_ = code
 
-	// 更新密码 - 使用salt加盐后哈希
-	hash := md5.Sum([]byte(newPwd + acc.Salt))
-	pwdHash := fmt.Sprintf("%x", hash)
-	mysql.DB.Model(&acc).Update("password", pwdHash)
+	// 使用bcrypt加密新密码
+	pwdHash, err := bcrypt.GenerateFromPassword([]byte(newPwd), bcrypt.DefaultCost)
+	if err != nil {
+		return errors.New("密码加密失败")
+	}
+	mysql.DB.Model(&acc).Update("password", string(pwdHash))
 
 	return nil
 }
@@ -181,15 +179,17 @@ func UpdatePassword(uid uint, oldPwd, newPwd string) error {
 		return errors.New("账号不存在")
 	}
 
-	// 验证原密码 - 使用salt加盐后哈希
-	hash := md5.Sum([]byte(oldPwd + acc.Salt))
-	if acc.Password != fmt.Sprintf("%x", hash) {
+	// 使用bcrypt验证原密码
+	if err := bcrypt.CompareHashAndPassword([]byte(acc.Password), []byte(oldPwd)); err != nil {
 		return errors.New("原密码错误")
 	}
 
-	// 更新密码 - 使用salt加盐后哈希
-	newHash := md5.Sum([]byte(newPwd + acc.Salt))
-	mysql.DB.Model(&acc).Update("password", fmt.Sprintf("%x", newHash))
+	// 使用bcrypt加密新密码
+	newHash, err := bcrypt.GenerateFromPassword([]byte(newPwd), bcrypt.DefaultCost)
+	if err != nil {
+		return errors.New("密码加密失败")
+	}
+	mysql.DB.Model(&acc).Update("password", string(newHash))
 
 	return nil
 }
@@ -214,8 +214,8 @@ func IsBanned(uid uint) bool {
 	if err != nil {
 		return false
 	}
-	// status: 0=封号, 1=正常
-	return acc.Status != 1
+	// status: 0=正常, 1=封禁
+	return acc.Status == 1
 }
 
 // GetUidByToken 通过Token获取UID

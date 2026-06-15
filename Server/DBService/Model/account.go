@@ -10,8 +10,7 @@ import (
 type Account struct {
 	gorm.Model
 	Username      string     `gorm:"size:32;unique"`
-	Password      string     `gorm:"size:64"`
-	Salt          string     `gorm:"size:32"` // 密码盐值
+	Password      string     `gorm:"size:128"` // bcrypt哈希密码
 	Status        int        `gorm:"default:0"` // 0正常 1封禁
 	LoginIP       string     `gorm:"size:32"`
 	LastLoginTime *time.Time `gorm:"size:32"`
