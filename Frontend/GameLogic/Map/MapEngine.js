@@ -64,7 +64,8 @@ class MapEngine {
       
       // 如果地图已加载，重新调整相机位置以保持玩家在视野中心
       if (this.mapRenderer && this.mapParser) {
-        this.followPlayer();
+        // 使用平滑相机更新，避免 resize 时的抖动
+        this.updateCameraSmooth();
       }
     }
   }
@@ -228,12 +229,12 @@ class MapEngine {
       // 检测传送/事件区域
       this.checkEventArea();
       
-      // 到达目标格子后更新相机
-      this.followPlayer();
+      // 到达目标格子后继续使用平滑相机更新，避免硬跳转导致抖动
+      this.updateCameraSmooth();
     } else {
       this.player.pixelX += (dx / dist) * this.player.speed;
       this.player.pixelY += (dy / dist) * this.player.speed;
-      // 平滑移动时不每帧更新相机，使用插值让相机更平滑
+      // 平滑移动时使用插值让相机更平滑
       this.updateCameraSmooth();
     }
   }
