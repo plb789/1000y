@@ -46,10 +46,11 @@ class MapEngine {
     this.tilesetImg = null;
     this.roleAnim = null;
     
-    // FPS 计算
+    // FPS 计算和帧率锁定
     this.fps = 0;
     this.frameCount = 0;
     this.lastFpsTime = performance.now();
+    this.lastRenderTime = performance.now(); // 用于帧率锁定
     this.onFpsUpdate = null; // FPS 更新回调
 
     this.bindEvent();
@@ -309,13 +310,26 @@ class MapEngine {
   }
 
   loop() {
+    const currentTime = performance.now();
+    
+    // 帧率锁定逻辑
+    const targetFPS = 60; // 目标帧率
+    const targetFrameTime = 1000 / targetFPS; // 目标帧时间（毫秒）
+    
+    // 如果距离上次渲染时间不足，跳过本次渲染
+    if (currentTime - this.lastRenderTime < targetFrameTime) {
+      requestAnimationFrame(() => this.loop());
+      return;
+    }
+    
+    this.lastRenderTime = currentTime;
+    
     this.updatePlayerMove();
     if (this.roleAnim) this.roleAnim.update();
     this.render();
     
     // FPS 计算：每秒更新一次
     this.frameCount++;
-    const currentTime = performance.now();
     const elapsed = currentTime - this.lastFpsTime;
     if (elapsed >= 1000) {
       this.fps = Math.round((this.frameCount * 1000) / elapsed);

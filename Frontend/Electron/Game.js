@@ -441,16 +441,13 @@ class Game {
         // 保存上次位置用于平滑插值
         player.lastX = player.x;
         player.lastY = player.y;
+        const tileSize = this.mapEngine?.tileSize || 48;
+        // 关键：保存旧位置的屏幕坐标作为插值起点
+        player.lastScreenX = player.x * tileSize;
+        player.lastScreenY = player.y * tileSize;
+        // 然后更新到新位置
         player.x = data.x;
         player.y = data.y;
-        // 确保 lastScreenX/Y 存在，否则初始化为当前位置
-        const tileSize = this.mapEngine?.tileSize || 48;
-        if (player.lastScreenX === undefined) {
-          player.lastScreenX = player.lastX * tileSize;
-        }
-        if (player.lastScreenY === undefined) {
-          player.lastScreenY = player.lastY * tileSize;
-        }
       } else {
         console.log('未找到玩家:', data.role_id);
       }
@@ -740,9 +737,38 @@ class Game {
     this.players.forEach(player => {
       const tileSize = this.mapEngine.tileSize || 48;
       
-      // 直接使用瓦片坐标渲染（像素坐标 = 瓦片坐标 * 瓦片大小）
-      const screenX = player.x * tileSize;
-      const screenY = player.y * tileSize;
+      // 平滑移动：使用固定步长移动到目标位置（与自己的移动速度一致）
+      let screenX, screenY;
+      const targetScreenX = player.x * tileSize;
+      const targetScreenY = player.y * tileSize;
+      
+      if (player.lastScreenX !== undefined && player.lastScreenY !== undefined) {
+        // 计算到目标的距离和方向
+        const dx = targetScreenX - player.lastScreenX;
+        const dy = targetScreenY - player.lastScreenY;
+        const dist = Math.hypot(dx, dy);
+        
+        if (dist < 1) {
+          // 已经到达目标位置
+          screenX = targetScreenX;
+          screenY = targetScreenY;
+        } else {
+          // 以与自己相同的速度移动（6像素/帧）
+          const moveSpeed = 6; // 与玩家移动速度一致
+          screenX = player.lastScreenX + (dx / dist) * moveSpeed;
+          screenY = player.lastScreenY + (dy / dist) * moveSpeed;
+        }
+        
+        // 更新上次屏幕位置
+        player.lastScreenX = screenX;
+        player.lastScreenY = screenY;
+      } else {
+        // 初始位置或没有上次位置
+        screenX = targetScreenX;
+        screenY = targetScreenY;
+        player.lastScreenX = screenX;
+        player.lastScreenY = screenY;
+      }
       
       // 简单绘制为绿色圆形
       ctx.fillStyle = '#4ade80';
