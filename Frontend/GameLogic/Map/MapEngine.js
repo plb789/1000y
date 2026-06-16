@@ -200,11 +200,27 @@ class MapEngine {
         }
       }
     });
+
+    // 标签页可见性变化监听
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) {
+        // 标签页恢复可见时，更新时间戳
+        const now = performance.now();
+        this.lastMoveTime = now;
+        this.lastRenderTime = now;
+        this.lastFpsTime = now;
+      }
+    });
   }
 
   updatePlayerMove(deltaTime) {
     const path = this.player.movePath;
     if (path.length === 0) return;
+    
+    // 确保deltaTime有效
+    if (!deltaTime || deltaTime < 0 || deltaTime > 1000) {
+      deltaTime = 16.67; // 默认60fps帧时间
+    }
 
     // 基于时间的移动：计算本次应该移动的距离
     // speed 是 6 像素/16.67ms (60fps)，转换为当前deltaTime对应的距离
@@ -292,7 +308,7 @@ class MapEngine {
     }
   }
 
-  render() {
+  render(deltaTime) {
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     if (!this.mapRenderer) return;
 
@@ -327,7 +343,7 @@ class MapEngine {
     // 渲染完成后调用回调（用于绘制其他玩家）
     // 注意：在 ctx.restore() 之前调用，确保摄像机偏移仍然有效
     if (this.afterRender) {
-      this.afterRender();
+      this.afterRender(deltaTime);
     }
 
     this.ctx.restore();
@@ -343,7 +359,7 @@ class MapEngine {
     // 基于时间的移动（确保无论帧率如何移动速度一致）
     this.updatePlayerMove(deltaTime);
     if (this.roleAnim) this.roleAnim.update();
-    this.render();
+    this.render(deltaTime);
     
     // FPS 计算：每秒更新一次
     this.frameCount++;

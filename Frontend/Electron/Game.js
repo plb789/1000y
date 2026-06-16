@@ -37,9 +37,6 @@ class Game {
     // 技能冷却
     this.skillCooldowns = new Map();
     
-    // 用于其他玩家移动的时间追踪
-    this.lastPlayerRenderTime = performance.now();
-    
     // UI元素
     this.ui = {
       loadingOverlay: document.getElementById('loadingOverlay'),
@@ -132,9 +129,19 @@ class Game {
   
   initMapEngine() {
     this.mapEngine = new MapEngine(this.ui.canvas);
-    // 设置渲染完成后回调，用于绘制其他玩家
-    this.mapEngine.afterRender = () => {
-      this.renderPlayers();
+    // 设置渲染完成后回调，用于更新其他玩家位置并绘制
+    // 注意：updateOtherPlayers需要在renderPlayers之前调用，确保位置已更新
+    this.mapEngine.afterRender = (deltaTime) => {
+      try {
+        // 基于时间更新其他玩家位置
+        if (this.state === 'playing') {
+          this.updateOtherPlayers(deltaTime);
+        }
+        // 绘制其他玩家
+        this.renderPlayers();
+      } catch (e) {
+        console.error('afterRender错误:', e);
+      }
     };
     // 设置玩家移动回调，用于更新小地图
     // 添加节流：只在玩家位置改变时更新小地图
@@ -432,21 +439,33 @@ class Game {
     console.log('收到移动消息:', data);
     
     if (data.role_id === this.player.id) {
-      // 自己的移动 - 地图引擎已经在处理，不需要重复同步
-      // 但需要更新Game.player的位置以保持同步
+      // 自己的移动 - 需要同步到地图引擎（因为服务器广播后本地也需要更新）
       this.player.x = data.x;
       this.player.y = data.y;
+      // 同步位置到地图引擎，确保摄像机跟随正确
+      this.syncPlayerPosition();
     } else {
       // 其他玩家移动
       console.log('其他玩家移动:', data.role_id, '->', data.x, data.y);
       const player = this.players.get(data.role_id);
       if (player) {
         const tileSize = this.mapEngine?.tileSize || 48;
-        // 关键：保存当前显示的屏幕位置作为插值起点（而不是新位置）
-        if (player.lastScreenX === undefined) {
-          player.lastScreenX = player.x * tileSize;
-          player.lastScreenY = player.y * tileSize;
+        
+        // 计算当前位置(显示中的)到新目标的距离
+        const currentScreenX = player.lastScreenX !== undefined ? player.lastScreenX : player.x * tileSize;
+        const currentScreenY = player.lastScreenY !== undefined ? player.lastScreenY : player.y * tileSize;
+        const newTargetX = data.x * tileSize;
+        const newTargetY = data.y * tileSize;
+        const distToTarget = Math.hypot(newTargetX - currentScreenX, newTargetY - currentScreenY);
+        
+        // 如果距离超过阈值（3格），说明位置有较大变化（如传送、服务器校正）
+        // 直接跳转避免长时间追赶
+        if (distToTarget > tileSize * 3) {
+          player.lastScreenX = newTargetX;
+          player.lastScreenY = newTargetY;
         }
+        // 否则继续从当前位置插值到新目标
+        
         // 更新到新位置
         player.x = data.x;
         player.y = data.y;
@@ -475,29 +494,20 @@ class Game {
       if (player.role_id === this.player.id) return; // 跳过自己
       
       const px = player.x || 10;
-        const py = player.y || 10;
-        const tileSize = this.mapEngine?.tileSize || 48;
-        this.players.set(player.role_id, {
-          id: player.role_id,
-          name: player.name || `玩家${player.role_id}`,
-          x: px,
-          y: py,
-          lastX: px, // 用于平滑插值
-          lastY: py, // 用于平滑插值
-          lastScreenX: px * tileSize, // 初始屏幕坐标
-          lastScreenY: py * tileSize, // 初始屏幕坐标
-          hp: player.hp || 100,
-          maxHp: player.maxHp || 100
-        });
+      const py = player.y || 10;
+      const tileSize = this.mapEngine?.tileSize || 48;
+      this.players.set(player.role_id, {
+        id: player.role_id,
+        name: player.name || `玩家${player.role_id}`,
+        x: px,
+        y: py,
+        lastScreenX: px * tileSize, // 初始屏幕坐标
+        lastScreenY: py * tileSize,
+        hp: player.hp || 100,
+        maxHp: player.maxHp || 100
+      });
       console.log(`添加玩家 ${player.name} 到列表，位置 (${player.x}, ${player.y})`);
     });
-    
-    // 确保renderPlayers存在
-    if (typeof this.renderPlayers === 'function') {
-      this.renderPlayers();
-    } else {
-      console.error('renderPlayers不是函数');
-    }
   }
   
   handleEnterMap(data) {
@@ -505,23 +515,19 @@ class Game {
     
     console.log('玩家进入地图:', data);
     
+    const tileSize = this.mapEngine?.tileSize || 48;
     this.players.set(data.role_id, {
       id: data.role_id,
       name: data.name || `玩家${data.role_id}`,
       x: data.x || 10,
       y: data.y || 10,
+      lastScreenX: (data.x || 10) * tileSize, // 初始化屏幕位置
+      lastScreenY: (data.y || 10) * tileSize,
       hp: data.hp || 100,
       maxHp: data.maxHp || 100
     });
     
-    // 不再调用 updateOnlineCount()，在线人数由服务端的 handleOnlineCount 消息控制
-    
     this.addChatMessage('系统', `${data.name || '某玩家'}进入了地图`, 'system');
-    
-    // 立即渲染新玩家
-    if (typeof this.renderPlayers === 'function') {
-      this.renderPlayers();
-    }
   }
   
   handleLeaveMap(data) {
@@ -654,8 +660,8 @@ class Game {
     // 同步位置到地图引擎（摄像机跟随）
     this.syncPlayerPosition();
     
-    // 重绘
-    this.mapEngine.render();
+    // 重绘（不带deltaTime，手动触发一次渲染）
+    this.mapEngine.render(16.67); // 假设16.67ms帧时间
     this.renderMiniMap();
   }
   
@@ -715,17 +721,9 @@ class Game {
   
   startGameLoop() {
     const loop = () => {
-      // 计算与上一帧的时间差
-      const currentTime = performance.now();
-      const deltaTime = currentTime - this.lastPlayerRenderTime;
-      this.lastPlayerRenderTime = currentTime;
-      
       if (this.state === 'playing') {
         // 更新技能冷却UI
         this.updateSkillUI();
-        
-        // 更新其他玩家的平滑移动
-        this.updateOtherPlayers(deltaTime);
       }
       
       requestAnimationFrame(loop);
@@ -736,14 +734,59 @@ class Game {
   
   // 更新其他玩家的平滑移动（基于时间）
   updateOtherPlayers(deltaTime) {
+    // 确保deltaTime有效
+    if (!deltaTime || deltaTime < 0 || deltaTime > 1000) {
+      deltaTime = 16.67; // 默认60fps帧时间
+    }
+    
     const tileSize = this.mapEngine?.tileSize || 48;
     const baseSpeed = 6; // 基准速度：6像素/16.67ms (60fps)
     const moveDistance = (baseSpeed * deltaTime) / (1000 / 60);
     
+    // 获取当前玩家位置（用于视野判断）
+    const myX = this.player.x;
+    const myY = this.player.y;
+    
+    // 计算视野范围（屏幕能显示的格子数 + 额外缓冲区）
+    const canvas = this.mapEngine?.canvas;
+    // 以屏幕大小为基准计算视野，加上1倍屏幕大小的缓冲区
+    // 这样可以看到屏幕外1倍距离的玩家，实现平滑的进出视野
+    const bufferMultiplier = 1.0; // 缓冲区倍数（1.0表示1倍屏幕大小）
+    const viewWidth = canvas ? Math.ceil(canvas.width / tileSize) * (1 + bufferMultiplier) : 40;
+    const viewHeight = canvas ? Math.ceil(canvas.height / tileSize) * (1 + bufferMultiplier) : 30;
+    
+    // 视野边界
+    const minX = myX - viewWidth / 2;
+    const maxX = myX + viewWidth / 2;
+    const minY = myY - viewHeight / 2;
+    const maxY = myY + viewHeight / 2;
+    
     this.players.forEach(player => {
+      // 计算玩家是否在视野内
+      const inView = player.x >= minX && player.x <= maxX && player.y >= minY && player.y <= maxY;
+      
+      if (!inView) {
+        // 视野外玩家：保持目标位置更新，但不计算插值
+        // 下次进入视野时会直接显示在正确位置
+        return;
+      }
+      
+      // 视野内玩家：检查是否需要快速追赶（进入视野时位置已偏差）
       if (player.lastScreenX === undefined) {
         player.lastScreenX = player.x * tileSize;
         player.lastScreenY = player.y * tileSize;
+      } else {
+        // 检查显示位置与实际位置的偏差
+        const targetScreenX = player.x * tileSize;
+        const targetScreenY = player.y * tileSize;
+        const offset = Math.hypot(targetScreenX - player.lastScreenX, targetScreenY - player.lastScreenY);
+        
+        // 如果偏差超过3个格子，快速跳转避免长时间追赶
+        if (offset > tileSize * 3) {
+          player.lastScreenX = targetScreenX;
+          player.lastScreenY = targetScreenY;
+          return;
+        }
       }
       
       const targetScreenX = player.x * tileSize;
@@ -770,12 +813,25 @@ class Game {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     
-    // 注意：摄像机偏移已经在 MapEngine.render() 中应用了
-    // 这里不需要再次应用，直接绘制即可
+    // 获取当前玩家位置和视野范围（用于视野裁剪）
+    const tileSize = this.mapEngine.tileSize || 48;
+    const myX = this.player.x;
+    const myY = this.player.y;
+    // 与updateOtherPlayers保持一致的视野计算
+    const bufferMultiplier = 1.0;
+    const viewWidth = Math.ceil(canvas.width / tileSize) * (1 + bufferMultiplier);
+    const viewHeight = Math.ceil(canvas.height / tileSize) * (1 + bufferMultiplier);
+    const minX = myX - viewWidth / 2;
+    const maxX = myX + viewWidth / 2;
+    const minY = myY - viewHeight / 2;
+    const maxY = myY + viewHeight / 2;
     
-    // 绘制其他玩家
+    // 绘制其他玩家（仅视野范围内）
     this.players.forEach(player => {
-      const tileSize = this.mapEngine.tileSize || 48;
+      // 视野裁剪：跳过视野外的玩家，减少绘制
+      if (player.x < minX || player.x > maxX || player.y < minY || player.y > maxY) {
+        return;
+      }
       
       // 直接使用updateOtherPlayers计算好的屏幕位置
       let screenX, screenY;
