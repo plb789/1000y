@@ -143,6 +143,97 @@ class Game {
         console.error('afterRender错误:', e);
       }
     };
+    
+    // 设置移动前检查回调，用于玩家间碰撞检测
+    this.mapEngine.onBeforeMove = (path) => {
+      // 过滤掉路径上被其他玩家占据的格子
+      if (!path || path.length === 0) return path;
+      
+      const filteredPath = path.filter(point => {
+        // 检查是否有其他玩家在这个格子
+        for (const [id, player] of this.players) {
+          if (player.x === point.x && player.y === point.y) {
+            return false; // 这个点被其他玩家占据，跳过
+          }
+        }
+        return true;
+      });
+      
+      // 如果过滤后路径变短了，需要重新计算终点
+      if (filteredPath.length < path.length) {
+        // 发送新的目标位置到服务器
+        if (filteredPath.length > 0) {
+          const newTarget = filteredPath[filteredPath.length - 1];
+          if (window.GameWS && window.GameWS.send) {
+            window.GameWS.send(2001, {
+              x: newTarget.x,
+              y: newTarget.y
+            });
+          }
+        } else {
+          // 路径被完全堵住，发送当前位置
+          if (window.GameWS && window.GameWS.send) {
+            window.GameWS.send(2001, {
+              x: this.player.x,
+              y: this.player.y
+            });
+          }
+        }
+      }
+      
+      return filteredPath;
+    };
+    
+    // 设置玩家阻挡检查回调
+    this.mapEngine.onPlayerBlocked = (x, y) => {
+      // 检查是否有其他玩家在这个格子
+      for (const [id, player] of this.players) {
+        if (player.x === x && player.y === y) {
+          return true; // 被阻挡
+        }
+      }
+      return false;
+    };
+    
+    // 设置需要重新寻路时的回调
+    this.mapEngine.onRepathNeeded = () => {
+      const targetX = this.mapEngine.player.moveTargetX;
+      const targetY = this.mapEngine.player.moveTargetY;
+      if (targetX === null || targetY === null) return;
+      
+      // 重新计算到目标的路径
+      const newPath = AStar.findPath(
+        this.player.x, this.player.y,
+        targetX, targetY,
+        this.mapEngine.mapParser.collision,
+        this.mapEngine.mapParser.width,
+        this.mapEngine.mapParser.height
+      );
+      
+      // 应用路径前检查（过滤被玩家占据的点）
+      if (newPath.length > 0 && this.mapEngine.onBeforeMove) {
+        const filteredPath = this.mapEngine.onBeforeMove(newPath);
+        if (filteredPath) {
+          this.mapEngine.player.movePath = filteredPath;
+        } else {
+          this.mapEngine.player.movePath = newPath;
+        }
+      } else {
+        this.mapEngine.player.movePath = newPath;
+      }
+      
+      // 发送新的目标位置到服务器
+      if (this.mapEngine.player.movePath.length > 0) {
+        const newTarget = this.mapEngine.player.movePath[this.mapEngine.player.movePath.length - 1];
+        if (window.GameWS && window.GameWS.send) {
+          window.GameWS.send(Protocol.CMD_MOVE, {
+            x: newTarget.x,
+            y: newTarget.y
+          });
+        }
+      }
+    };
+    
     // 设置玩家移动回调，用于更新小地图
     // 添加节流：只在玩家位置改变时更新小地图
     this.mapEngine.onPlayerMove = (x, y) => {
@@ -436,17 +527,13 @@ class Game {
   }
   
   handleMoveMessage(data) {
-    console.log('收到移动消息:', data);
-    
     if (data.role_id === this.player.id) {
-      // 自己的移动 - 需要同步到地图引擎（因为服务器广播后本地也需要更新）
+      // 自己的移动 - 服务器广播回来的当前位置
       this.player.x = data.x;
       this.player.y = data.y;
-      // 同步位置到地图引擎，确保摄像机跟随正确
+      // 同步位置到地图引擎
       this.syncPlayerPosition();
     } else {
-      // 其他玩家移动
-      console.log('其他玩家移动:', data.role_id, '->', data.x, data.y);
       const player = this.players.get(data.role_id);
       if (player) {
         const tileSize = this.mapEngine?.tileSize || 48;
@@ -642,9 +729,16 @@ class Game {
   }
 
   tryMove(newX, newY) {
-    // 检查碰撞
+    // 检查地图碰撞
     if (this.currentMap?.tiles?.[newY]?.[newX] === 1) {
-      return; // 碰撞
+      return; // 地图障碍物碰撞
+    }
+    
+    // 检查玩家间碰撞 - 目标位置是否有其他玩家
+    for (const [id, player] of this.players) {
+      if (player.x === newX && player.y === newY) {
+        return; // 玩家碰撞
+      }
     }
     
     // 发送移动请求

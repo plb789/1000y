@@ -39,7 +39,10 @@ class MapEngine {
       pixelX: 0,
       pixelY: 0,
       speed: 6, // 提高移动速度，使移动更流畅
-      movePath: []
+      movePath: [],
+      moveTargetX: null, // 当前移动目标X
+      moveTargetY: null,  // 当前移动目标Y
+      waitingServerConfirm: false // 等待服务器确认标志
     };
 
     // 资源
@@ -189,6 +192,15 @@ class MapEngine {
         this.mapParser.height
       );
       
+      // 保存目标（用于重新寻路）
+      this.player.moveTargetX = targetTile.x;
+      this.player.moveTargetY = targetTile.y;
+      
+      // 如果有路径，调用移动前检查回调（用于玩家间碰撞检测等）
+      if (this.player.movePath.length > 0 && this.onBeforeMove) {
+        this.player.movePath = this.onBeforeMove(this.player.movePath) || this.player.movePath;
+      }
+      
       // 如果有路径，发送移动消息到服务器
       if (this.player.movePath.length > 0) {
         const target = this.player.movePath[this.player.movePath.length - 1];
@@ -240,6 +252,14 @@ class MapEngine {
       this.player.x = next.x;
       this.player.y = next.y;
       path.shift();
+      
+      // 到达目标点时检查玩家碰撞
+      if (this.onPlayerBlocked && this.onPlayerBlocked(next.x, next.y)) {
+        // 被其他玩家阻挡，触发重新寻路
+        if (this.onRepathNeeded) {
+          this.onRepathNeeded();
+        }
+      }
       
       // 移动到新格子时发送消息到服务器
       if (window.GameWS && window.GameWS.send) {
