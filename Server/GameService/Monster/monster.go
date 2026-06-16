@@ -2,9 +2,8 @@ package monster
 
 import (
 	"errors"
-	"game-server/DBService/mysql"
-	"game-server/GameService/Battle"
-	"game-server/GameService/Map/model"
+	common "game-server/Common"
+	battle "game-server/GameService/Battle"
 	"math/rand"
 	"sync"
 	"time"
@@ -12,50 +11,50 @@ import (
 
 // MonsterInstance 怪物实例
 type MonsterInstance struct {
-	ID        uint64    // 实例ID
-	BaseID    uint32    // 基础ID
-	Name      string    // 名称
-	Level     uint32    // 等级
-	Type      uint8     // 类型: 0=普通, 1=精英, 2=BOSS
-	MapID     uint32    // 地图ID
-	X         int       // X坐标
-	Y         int       // Y坐标
-	CurrentHP int       // 当前HP
-	MaxHP     int       // 最大HP
-	Attack    int       // 攻击力
-	Defense   int       // 防御力
-	Speed     int       // 速度
-	Status    uint8     // 状态: 0=空闲, 1=巡逻, 2=追击, 3=战斗, 4=死亡
-	TargetID  uint64    // 攻击目标
-	RespawnAt int64     // 复活时间戳
+	ID        uint64 // 实例ID
+	BaseID    uint32 // 基础ID
+	Name      string // 名称
+	Level     uint32 // 等级
+	Type      uint8  // 类型: 0=普通, 1=精英, 2=BOSS
+	MapID     uint32 // 地图ID
+	X         int    // X坐标
+	Y         int    // Y坐标
+	CurrentHP int    // 当前HP
+	MaxHP     int    // 最大HP
+	Attack    int    // 攻击力
+	Defense   int    // 防御力
+	Speed     int    // 速度
+	Status    uint8  // 状态: 0=空闲, 1=巡逻, 2=追击, 3=战斗, 4=死亡
+	TargetID  uint64 // 攻击目标
+	RespawnAt int64  // 复活时间戳
 }
 
 // NPCInstance NPC实例
 type NPCInstance struct {
-	ID       uint64
-	BaseID   uint32
-	Name     string
-	Type     uint8     // 类型: 1=普通NPC, 2=商店NPC, 3=任务NPC, 4=仓库NPC, 5=传送NPC
-	MapID    uint32
-	X        int
-	Y        int
-	Facing   uint8     // 朝向
-	Dialog   string    // 对话文本
-	ShopID   *uint32   // 商店ID(商店NPC)
+	ID     uint64
+	BaseID uint32
+	Name   string
+	Type   uint8 // 类型: 1=普通NPC, 2=商店NPC, 3=任务NPC, 4=仓库NPC, 5=传送NPC
+	MapID  uint32
+	X      int
+	Y      int
+	Facing uint8   // 朝向
+	Dialog string  // 对话文本
+	ShopID *uint32 // 商店ID(商店NPC)
 }
 
 // Service 怪物/NPC服务
 type Service struct {
-	monsters   map[uint64]*MonsterInstance // key=实例ID
-	npcs       map[uint64]*NPCInstance     // key=实例ID
-	monsterID  uint64                      // 自增ID
-	npcID      uint64                      // 自增ID
-	mu         sync.RWMutex
-	battleSvc  *Battle.Service
+	monsters  map[uint64]*MonsterInstance // key=实例ID
+	npcs      map[uint64]*NPCInstance     // key=实例ID
+	monsterID uint64                      // 自增ID
+	npcID     uint64                      // 自增ID
+	mu        sync.RWMutex
+	battleSvc *battle.Service
 }
 
 // NewService 创建服务
-func NewService(battleSvc *Battle.Service) *Service {
+func NewService(battleSvc *battle.Service) *Service {
 	return &Service{
 		monsters:  make(map[uint64]*MonsterInstance),
 		npcs:      make(map[uint64]*NPCInstance),
@@ -67,8 +66,8 @@ func NewService(battleSvc *Battle.Service) *Service {
 
 // SpawnMonster 生成怪物
 func (s *Service) SpawnMonster(baseID uint32, mapID uint32, x, y int) (*MonsterInstance, error) {
-	var base model.MonsterBase
-	if err := mysql.DB.Where("id = ? AND map_id = ?", baseID, mapID).First(&base).Error; err != nil {
+	config := common.GetMonsterConfig(baseID)
+	if config == nil || config.MapID != mapID {
 		return nil, errors.New("怪物不存在")
 	}
 
@@ -78,18 +77,18 @@ func (s *Service) SpawnMonster(baseID uint32, mapID uint32, x, y int) (*MonsterI
 	s.monsterID++
 	monster := &MonsterInstance{
 		ID:        s.monsterID,
-		BaseID:    base.ID,
-		Name:      base.Name,
-		Level:     base.Level,
-		Type:      base.Type,
+		BaseID:    config.ID,
+		Name:      config.Name,
+		Level:     config.Level,
+		Type:      config.Type,
 		MapID:     mapID,
 		X:         x,
 		Y:         y,
-		CurrentHP: base.Hp,
-		MaxHP:     base.Hp,
-		Attack:    base.Attack,
-		Defense:   base.Defense,
-		Speed:     base.Speed,
+		CurrentHP: config.Hp,
+		MaxHP:     config.Hp,
+		Attack:    config.Attack,
+		Defense:   config.Defense,
+		Speed:     config.Speed,
 		Status:    0,
 	}
 
@@ -150,20 +149,20 @@ func (s *Service) MonsterDie(instanceID uint64) (exp int, gold int, drops []uint
 	s.mu.Unlock()
 
 	// 获取怪物基础数据
-	var base model.MonsterBase
-	if err := mysql.DB.Where("id = ?", monster.BaseID).First(&base).Error; err != nil {
-		return 0, 0, nil, err
+	config := common.GetMonsterConfig(monster.BaseID)
+	if config == nil {
+		return 0, 0, nil, errors.New("怪物基础数据不存在")
 	}
 
 	// 计算经验
-	exp = base.Exp
+	exp = config.Exp
 
 	// 计算金币
-	gold = Battle.CalculateGoldDrop(base.GoldMin, base.GoldMax)
+	gold = battle.CalculateGoldDrop(config.GoldMin, config.GoldMax)
 
 	// 计算掉落
-	if base.DropGroupID != nil {
-		drops, err = s.RollDrops(*base.DropGroupID)
+	if config.DropGroupID != nil {
+		drops, err = s.RollDrops(*config.DropGroupID)
 		if err != nil {
 			drops = nil
 		}
@@ -179,14 +178,14 @@ func (s *Service) MonsterDie(instanceID uint64) (exp int, gold int, drops []uint
 }
 
 // RollDrops 掉落roll
-func (s *Service) RollDrops(groupID uint32) ([]uint32, error) {
-	var drops []model.DropGroup
-	if err := mysql.DB.Where("monster_id = ?", groupID).Find(&drops).Error; err != nil {
-		return nil, err
+func (s *Service) RollDrops(monsterID uint32) ([]uint32, error) {
+	dropsConfig := common.GetDropsByMonsterID(monsterID)
+	if len(dropsConfig) == 0 {
+		return nil, nil
 	}
 
 	var result []uint32
-	for _, drop := range drops {
+	for _, drop := range dropsConfig {
 		if rand.Float64()*10000 < float64(drop.DropRate) {
 			// 掉落
 			count := drop.DropMin
@@ -218,12 +217,12 @@ func (s *Service) RespawnMonster(instanceID uint64) error {
 	}
 
 	// 获取基础数据重置
-	var base model.MonsterBase
-	if err := mysql.DB.Where("id = ?", monster.BaseID).First(&base).Error; err != nil {
-		return err
+	config := common.GetMonsterConfig(monster.BaseID)
+	if config == nil {
+		return errors.New("怪物基础数据不存在")
 	}
 
-	monster.CurrentHP = base.Hp
+	monster.CurrentHP = config.Hp
 	monster.Status = 0
 	monster.TargetID = 0
 
@@ -262,8 +261,8 @@ func (s *Service) MonsterClearTarget(instanceID uint64) error {
 
 // SpawnNPC 生成NPC
 func (s *Service) SpawnNPC(baseID uint32, mapID uint32, x, y int) (*NPCInstance, error) {
-	var base model.NPCBase
-	if err := mysql.DB.Where("id = ? AND map_id = ?", baseID, mapID).First(&base).Error; err != nil {
+	config := common.GetNPCConfig(baseID)
+	if config == nil || config.MapID != mapID {
 		return nil, errors.New("NPC不存在")
 	}
 
@@ -273,15 +272,15 @@ func (s *Service) SpawnNPC(baseID uint32, mapID uint32, x, y int) (*NPCInstance,
 	s.npcID++
 	npc := &NPCInstance{
 		ID:     s.npcID,
-		BaseID: base.ID,
-		Name:   base.Name,
-		Type:   base.Type,
+		BaseID: config.ID,
+		Name:   config.Name,
+		Type:   config.Type,
 		MapID:  mapID,
 		X:      x,
 		Y:      y,
-		Facing: base.Face,
-		Dialog: base.DialogText,
-		ShopID: base.ShopID,
+		Facing: config.Face,
+		Dialog: config.DialogText,
+		ShopID: config.ShopID,
 	}
 
 	s.npcs[s.npcID] = npc

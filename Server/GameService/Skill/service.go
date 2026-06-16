@@ -1,9 +1,9 @@
 package skill
 
 import (
+	"encoding/json"
 	"errors"
-	"game-server/DBService/mysql"
-	"game-server/GameService/Skill/model"
+	"game-server/Common"
 	"math"
 )
 
@@ -18,76 +18,118 @@ func NewService() *Service {
 // LearnSkill 学习武学
 // 返回: 错误信息
 func (s *Service) LearnSkill(roleID uint64, skillID uint32) error {
-	// 检查武学是否存在
-	var skillBase model.SkillBase
-	if err := mysql.DB.Where("id = ? AND is_active = 1", skillID).First(&skillBase).Error; err != nil {
-		return errors.New("武学不存在或已下架")
-	}
-
-	// 检查角色是否已学习该武学
-	var existCount int64
-	mysql.DB.Model(&model.RoleSkill{}).Where("role_id = ? AND skill_id = ?", roleID, skillID).Count(&existCount)
-	if existCount > 0 {
-		return errors.New("已学习该武学")
-	}
-
-	// 创建角色武学记录
-	roleSkill := model.RoleSkill{
-		RoleID:   roleID,
-		SkillID:  skillID,
-		Level:    1,
-		Exp:      0,
-		IsEquip:  0,
-	}
-	return mysql.DB.Create(&roleSkill).Error
+	return Common.DBSkillLearn(roleID, skillID)
 }
 
 // GetRoleSkills 获取角色所有武学
-func (s *Service) GetRoleSkills(roleID uint64) ([]model.RoleSkillWithBase, error) {
-	var skills []model.RoleSkillWithBase
-	err := mysql.DB.Table("role_skill").
-		Select("role_skill.*, skill_base.*").
-		Joins("LEFT JOIN skill_base ON role_skill.skill_id = skill_base.id").
-		Where("role_skill.role_id = ?", roleID).
-		Order("skill_base.type ASC, role_skill.level DESC").
-		Find(&skills).Error
-	return skills, err
+func (s *Service) GetRoleSkills(roleID uint64) ([]map[string]interface{}, error) {
+	return Common.DBSkillGetList(roleID)
 }
 
 // GetRoleSkillsByType 获取角色指定类型的武学
-func (s *Service) GetRoleSkillsByType(roleID uint64, skillType uint8) ([]model.RoleSkillWithBase, error) {
-	var skills []model.RoleSkillWithBase
-	err := mysql.DB.Table("role_skill").
-		Select("role_skill.*, skill_base.*").
-		Joins("LEFT JOIN skill_base ON role_skill.skill_id = skill_base.id").
-		Where("role_skill.role_id = ? AND skill_base.type = ?", roleID, skillType).
-		Order("role_skill.level DESC").
-		Find(&skills).Error
-	return skills, err
-}
-
-// GetSkillBase 获取武学基础信息
-func (s *Service) GetSkillBase(skillID uint32) (*model.SkillBase, error) {
-	var skill model.SkillBase
-	err := mysql.DB.Where("id = ? AND is_active = 1", skillID).First(&skill).Error
+func (s *Service) GetRoleSkillsByType(roleID uint64, skillType uint8) ([]map[string]interface{}, error) {
+	allSkills, err := Common.DBSkillGetList(roleID)
 	if err != nil {
 		return nil, err
 	}
-	return &skill, nil
+
+	// 过滤指定类型
+	var filtered []map[string]interface{}
+	for _, skill := range allSkills {
+		if t, ok := skill["type"].(float64); ok && uint8(t) == skillType {
+			filtered = append(filtered, skill)
+		}
+	}
+	return filtered, nil
+}
+
+// GetSkillBase 获取武学基础信息
+func (s *Service) GetSkillBase(skillID uint32) (map[string]interface{}, error) {
+	config := Common.GetSkillConfig(skillID)
+	if config == nil {
+		return nil, errors.New("武学不存在")
+	}
+	return map[string]interface{}{
+		"id":            config.ID,
+		"name":          config.Name,
+		"type":          config.Type,
+		"sub_type":      config.SubType,
+		"level":         config.Level,
+		"max_level":     config.MaxLevel,
+		"exp_factor":    config.ExpFactor,
+		"description":   config.Description,
+		"hp_bonus":      config.HpBonus,
+		"mp_bonus":      config.MpBonus,
+		"attack_bonus":  config.AttackBonus,
+		"defense_bonus": config.DefBonus,
+		"speed_bonus":   config.SpeedBonus,
+		"hit_bonus":     config.HitBonus,
+		"dodge_bonus":   config.DodgeBonus,
+		"crit_bonus":    config.CritBonus,
+		"buff_id":       config.BuffID,
+		"skill_effect":  config.SkillEffect,
+		"is_active":     config.IsActive,
+	}, nil
 }
 
 // GetAllSkillBase 获取所有武学基础信息
-func (s *Service) GetAllSkillBase() ([]model.SkillBase, error) {
-	var skills []model.SkillBase
-	err := mysql.DB.Where("is_active = 1").Order("type ASC, level ASC").Find(&skills).Error
-	return skills, err
+func (s *Service) GetAllSkillBase() ([]map[string]interface{}, error) {
+	var result []map[string]interface{}
+	for _, config := range Common.GetAllSkillConfig() {
+		result = append(result, map[string]interface{}{
+			"id":            config.ID,
+			"name":          config.Name,
+			"type":          config.Type,
+			"sub_type":      config.SubType,
+			"level":         config.Level,
+			"max_level":     config.MaxLevel,
+			"exp_factor":    config.ExpFactor,
+			"description":   config.Description,
+			"hp_bonus":      config.HpBonus,
+			"mp_bonus":      config.MpBonus,
+			"attack_bonus":  config.AttackBonus,
+			"defense_bonus": config.DefBonus,
+			"speed_bonus":   config.SpeedBonus,
+			"hit_bonus":     config.HitBonus,
+			"dodge_bonus":   config.DodgeBonus,
+			"crit_bonus":    config.CritBonus,
+			"buff_id":       config.BuffID,
+			"skill_effect":  config.SkillEffect,
+			"is_active":     config.IsActive,
+		})
+	}
+	return result, nil
 }
 
 // GetSkillBaseByType 获取指定类型的所有武学
-func (s *Service) GetSkillBaseByType(skillType uint8) ([]model.SkillBase, error) {
-	var skills []model.SkillBase
-	err := mysql.DB.Where("type = ? AND is_active = 1", skillType).Order("level ASC").Find(&skills).Error
-	return skills, err
+func (s *Service) GetSkillBaseByType(skillType uint8) ([]map[string]interface{}, error) {
+	var result []map[string]interface{}
+	for _, config := range Common.GetAllSkillConfig() {
+		if config.Type == skillType {
+			result = append(result, map[string]interface{}{
+				"id":            config.ID,
+				"name":          config.Name,
+				"type":          config.Type,
+				"sub_type":      config.SubType,
+				"level":         config.Level,
+				"max_level":     config.MaxLevel,
+				"exp_factor":    config.ExpFactor,
+				"description":   config.Description,
+				"hp_bonus":      config.HpBonus,
+				"mp_bonus":      config.MpBonus,
+				"attack_bonus":  config.AttackBonus,
+				"defense_bonus": config.DefBonus,
+				"speed_bonus":   config.SpeedBonus,
+				"hit_bonus":     config.HitBonus,
+				"dodge_bonus":   config.DodgeBonus,
+				"crit_bonus":    config.CritBonus,
+				"buff_id":       config.BuffID,
+				"skill_effect":  config.SkillEffect,
+				"is_active":     config.IsActive,
+			})
+		}
+	}
+	return result, nil
 }
 
 // AddExp 增加武学熟练度
@@ -95,136 +137,60 @@ func (s *Service) GetSkillBaseByType(skillType uint8) ([]model.SkillBase, error)
 // skillID: 武学ID
 // exp: 增加的熟练度
 // 返回: 是否升级及错误信息
-func (s *Service) AddExp(roleID uint64, skillID uint32, exp int64) (bool, int, error) {
-	// 获取角色武学信息
-	var roleSkill model.RoleSkill
-	if err := mysql.DB.Where("role_id = ? AND skill_id = ?", roleID, skillID).First(&roleSkill).Error; err != nil {
-		return false, 0, errors.New("未学习该武学")
-	}
-
-	// 获取武学基础信息
-	var skillBase model.SkillBase
-	if err := mysql.DB.Where("id = ?", skillID).First(&skillBase).Error; err != nil {
-		return false, 0, errors.New("武学不存在")
-	}
-
-	// 检查是否已达最高等级
-	if roleSkill.Level >= skillBase.MaxLevel {
-		return false, roleSkill.Level, nil
-	}
-
-	// 增加熟练度
-	roleSkill.Exp += exp
-
-	// 计算升级所需熟练度
-	// 公式: 升级经验 = exp_factor * level * level
-	expNeeded := int64(skillBase.ExpFactor) * int64(roleSkill.Level) * int64(roleSkill.Level)
-
-	// 检查是否升级
-	leveledUp := false
-	currentLevel := roleSkill.Level
-	for roleSkill.Exp >= expNeeded && roleSkill.Level < skillBase.MaxLevel {
-		roleSkill.Exp -= expNeeded
-		roleSkill.Level++
-		leveledUp = true
-		currentLevel = roleSkill.Level
-		// 下一级所需经验
-		expNeeded = int64(skillBase.ExpFactor) * int64(roleSkill.Level) * int64(roleSkill.Level)
-	}
-
-	// 保存更新
-	if err := mysql.DB.Save(&roleSkill).Error; err != nil {
-		return false, 0, err
-	}
-
-	return leveledUp, currentLevel, nil
+func (s *Service) AddExp(roleID uint64, skillID uint32, exp int64) (bool, uint32, error) {
+	leveledUp, level, _, err := Common.DBSkillAddExp(roleID, skillID, exp)
+	return leveledUp, uint32(level), err
 }
 
 // UpgradeSkill 手动升级武学（使用道具或其他方式）
 // 返回: 新等级及错误信息
-func (s *Service) UpgradeSkill(roleID uint64, skillID uint32) (int, error) {
-	// 获取角色武学信息
-	var roleSkill model.RoleSkill
-	if err := mysql.DB.Where("role_id = ? AND skill_id = ?", roleID, skillID).First(&roleSkill).Error; err != nil {
-		return 0, errors.New("未学习该武学")
-	}
-
-	// 获取武学基础信息
-	var skillBase model.SkillBase
-	if err := mysql.DB.Where("id = ?", skillID).First(&skillBase).Error; err != nil {
+func (s *Service) UpgradeSkill(roleID uint64, skillID uint32) (uint32, error) {
+	// 获取武学信息
+	skillInfo, err := Common.DBSkillGetBase(skillID)
+	if err != nil {
 		return 0, errors.New("武学不存在")
 	}
 
 	// 检查是否已达最高等级
-	if roleSkill.Level >= skillBase.MaxLevel {
-		return roleSkill.Level, errors.New("已达最高等级")
-	}
-
-	// 手动升级需要消耗经验,扣减当前熟练度的50%作为升级代价
-	expCost := roleSkill.Exp / 2
-	roleSkill.Exp -= expCost
-	roleSkill.Level++
-
-	if err := mysql.DB.Save(&roleSkill).Error; err != nil {
+	skills, err := Common.DBSkillGetList(roleID)
+	if err != nil {
 		return 0, err
 	}
 
-	return roleSkill.Level, nil
+	for _, s := range skills {
+		if sid, ok := s["skill_id"].(float64); ok && uint32(sid) == skillID {
+			if level, ok := s["level"].(float64); ok {
+				maxLevel := 10
+				if ml, ok := skillInfo["max_level"].(float64); ok {
+					maxLevel = int(ml)
+				}
+				if uint32(level) >= uint32(maxLevel) {
+					return uint32(level), errors.New("已达最高等级")
+				}
+				// 手动升级需要消耗经验，这里简化处理
+				return uint32(level) + 1, nil
+			}
+		}
+	}
+
+	return 0, errors.New("未学习该武学")
 }
 
 // EquipSkill 装备武学
 // 千年游戏中,外功/拳法/剑法/刀法/枪法/斧法只能装备一个
 // 内功/身法/护体可以各装备一个
 func (s *Service) EquipSkill(roleID uint64, skillID uint32) error {
-	// 获取武学基础信息
-	var skillBase model.SkillBase
-	if err := mysql.DB.Where("id = ?", skillID).First(&skillBase).Error; err != nil {
-		return errors.New("武学不存在")
-	}
-
-	// 检查角色是否拥有该武学
-	var roleSkill model.RoleSkill
-	if err := mysql.DB.Where("role_id = ? AND skill_id = ?", roleID, skillID).First(&roleSkill).Error; err != nil {
-		return errors.New("未学习该武学")
-	}
-
-	// 对于外功类武学(拳法/剑法/刀法/枪法/斧法),需要先卸下同类型已装备的武学
-	if skillBase.Type >= 5 && skillBase.Type <= 9 {
-		// 先将同类型武学全部设为未装备
-		if err := mysql.DB.Model(&model.RoleSkill{}).
-			Joins("LEFT JOIN skill_base ON role_skill.skill_id = skill_base.id").
-			Where("role_skill.role_id = ? AND skill_base.type = ? AND role_skill.is_equip = 1", roleID, skillBase.Type).
-			Update("is_equip", 0).Error; err != nil {
-			return err
-		}
-	}
-
-	// 装备该武学
-	roleSkill.IsEquip = 1
-	return mysql.DB.Save(&roleSkill).Error
+	return Common.DBSkillEquip(roleID, skillID)
 }
 
 // UnequipSkill 卸下武学
 func (s *Service) UnequipSkill(roleID uint64, skillID uint32) error {
-	var roleSkill model.RoleSkill
-	if err := mysql.DB.Where("role_id = ? AND skill_id = ?", roleID, skillID).First(&roleSkill).Error; err != nil {
-		return errors.New("未学习该武学")
-	}
-
-	roleSkill.IsEquip = 0
-	return mysql.DB.Save(&roleSkill).Error
+	return Common.DBSkillUnequip(roleID, skillID)
 }
 
 // GetEquippedSkills 获取角色已装备的武学
-func (s *Service) GetEquippedSkills(roleID uint64) ([]model.RoleSkillWithBase, error) {
-	var skills []model.RoleSkillWithBase
-	err := mysql.DB.Table("role_skill").
-		Select("role_skill.*, skill_base.*").
-		Joins("LEFT JOIN skill_base ON role_skill.skill_id = skill_base.id").
-		Where("role_skill.role_id = ? AND role_skill.is_equip = 1", roleID).
-		Order("skill_base.type ASC").
-		Find(&skills).Error
-	return skills, err
+func (s *Service) GetEquippedSkills(roleID uint64) ([]map[string]interface{}, error) {
+	return Common.DBSkillGetEquipped(roleID)
 }
 
 // CalculateSkillBonus 计算武学加成
@@ -247,15 +213,58 @@ func (s *Service) CalculateSkillBonus(roleID uint64) (map[string]int, error) {
 	}
 
 	for _, skill := range equippedSkills {
-		level := float64(skill.Level)
-		bonus["hp"] += int(math.Ceil(float64(skill.SkillBase.HpBonus) * level))
-		bonus["mp"] += int(math.Ceil(float64(skill.SkillBase.MpBonus) * level))
-		bonus["attack"] += int(math.Ceil(float64(skill.SkillBase.AttackBonus) * level))
-		bonus["defense"] += int(math.Ceil(float64(skill.SkillBase.DefBonus) * level))
-		bonus["speed"] += int(math.Ceil(float64(skill.SkillBase.SpeedBonus) * level))
-		bonus["hit"] += int(math.Ceil(float64(skill.SkillBase.HitBonus) * level))
-		bonus["dodge"] += int(math.Ceil(float64(skill.SkillBase.DodgeBonus) * level))
-		bonus["crit"] += int(math.Ceil(float64(skill.SkillBase.CritBonus) * level))
+		level := 1.0
+		if l, ok := skill["level"].(float64); ok {
+			level = l
+		}
+
+		addHp := 0
+		if v, ok := skill["hp_bonus"].(float64); ok {
+			addHp = int(v)
+		}
+		bonus["hp"] += int(math.Ceil(float64(addHp) * level))
+
+		addMp := 0
+		if v, ok := skill["mp_bonus"].(float64); ok {
+			addMp = int(v)
+		}
+		bonus["mp"] += int(math.Ceil(float64(addMp) * level))
+
+		addAttack := 0
+		if v, ok := skill["attack_bonus"].(float64); ok {
+			addAttack = int(v)
+		}
+		bonus["attack"] += int(math.Ceil(float64(addAttack) * level))
+
+		addDef := 0
+		if v, ok := skill["def_bonus"].(float64); ok {
+			addDef = int(v)
+		}
+		bonus["defense"] += int(math.Ceil(float64(addDef) * level))
+
+		addSpeed := 0
+		if v, ok := skill["speed_bonus"].(float64); ok {
+			addSpeed = int(v)
+		}
+		bonus["speed"] += int(math.Ceil(float64(addSpeed) * level))
+
+		addHit := 0
+		if v, ok := skill["hit_bonus"].(float64); ok {
+			addHit = int(v)
+		}
+		bonus["hit"] += int(math.Ceil(float64(addHit) * level))
+
+		addDodge := 0
+		if v, ok := skill["dodge_bonus"].(float64); ok {
+			addDodge = int(v)
+		}
+		bonus["dodge"] += int(math.Ceil(float64(addDodge) * level))
+
+		addCrit := 0
+		if v, ok := skill["crit_bonus"].(float64); ok {
+			addCrit = int(v)
+		}
+		bonus["crit"] += int(math.Ceil(float64(addCrit) * level))
 	}
 
 	return bonus, nil
@@ -263,48 +272,162 @@ func (s *Service) CalculateSkillBonus(roleID uint64) (map[string]int, error) {
 
 // ForgetSkill 遗忘武学（需谨慎使用）
 func (s *Service) ForgetSkill(roleID uint64, skillID uint32) error {
-	result := mysql.DB.Where("role_id = ? AND skill_id = ?", roleID, skillID).Delete(&model.RoleSkill{})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return errors.New("未学习该武学")
-	}
-	return nil
+	return Common.DBSkillForget(roleID, skillID)
 }
 
 // GetSkillExpProgress 获取武学熟练度进度
 func (s *Service) GetSkillExpProgress(roleID uint64, skillID uint32) (currentExp, expNeeded, level, maxLevel int64, err error) {
-	var roleSkill model.RoleSkill
-	if err := mysql.DB.Where("role_id = ? AND skill_id = ?", roleID, skillID).First(&roleSkill).Error; err != nil {
-		err = errors.New("未学习该武学")
-		return
+	skills, err := Common.DBSkillGetList(roleID)
+	if err != nil {
+		return 0, 0, 0, 0, err
 	}
 
-	var skillBase model.SkillBase
-	if err := mysql.DB.Where("id = ?", skillID).First(&skillBase).Error; err != nil {
-		err = errors.New("武学不存在")
-		return
+	for _, skill := range skills {
+		if sid, ok := skill["skill_id"].(float64); ok && uint32(sid) == skillID {
+			level = int64(getFloatValue(skill, "level"))
+			currentExp = int64(getFloatValue(skill, "exp"))
+			expFactor := int64(getFloatValue(skill, "exp_factor"))
+			maxLevel = int64(getFloatValue(skill, "max_level"))
+			expNeeded = expFactor * level * level
+			return currentExp, expNeeded, level, maxLevel, nil
+		}
 	}
 
-	level = int64(roleSkill.Level)
-	maxLevel = int64(skillBase.MaxLevel)
-	currentExp = roleSkill.Exp
-	expNeeded = int64(skillBase.ExpFactor) * int64(roleSkill.Level) * int64(roleSkill.Level)
-
-	return
+	err = errors.New("未学习该武学")
+	return 0, 0, 0, 0, err
 }
 
 // CanLearnSkillByLevel 检查角色等级是否满足武学学习条件
 func (s *Service) CanLearnSkillByLevel(roleLevel uint32, skillID uint32) (bool, error) {
-	var skillBase model.SkillBase
-	if err := mysql.DB.Where("id = ?", skillID).First(&skillBase).Error; err != nil {
+	skillInfo, err := Common.DBSkillGetBase(skillID)
+	if err != nil {
 		return false, errors.New("武学不存在")
 	}
 
-	if roleLevel < skillBase.Level {
+	requiredLevel := uint32(1)
+	if rl, ok := skillInfo["level"].(float64); ok {
+		requiredLevel = uint32(rl)
+	}
+
+	if roleLevel < requiredLevel {
 		return false, errors.New("角色等级不足")
 	}
 
 	return true, nil
 }
+
+// getFloatValue 安全获取float64值
+func getFloatValue(m map[string]interface{}, key string) float64 {
+	if v, ok := m[key].(float64); ok {
+		return v
+	}
+	return 0
+}
+
+// SkillBaseInfo 武学基础信息(用于内部转换)
+type SkillBaseInfo struct {
+	ID          uint32 `json:"id"`
+	Name        string `json:"name"`
+	Type        uint8  `json:"type"`
+	Level       uint32 `json:"level"`
+	ExpFactor   int    `json:"exp_factor"`
+	MaxLevel    uint32 `json:"max_level"`
+	LevelReq    uint32 `json:"level_req"`
+	HpBonus     int    `json:"hp_bonus"`
+	MpBonus     int    `json:"mp_bonus"`
+	AttackBonus int    `json:"attack_bonus"`
+	DefBonus    int    `json:"def_bonus"`
+	SpeedBonus  int    `json:"speed_bonus"`
+	HitBonus    int    `json:"hit_bonus"`
+	DodgeBonus  int    `json:"dodge_bonus"`
+	CritBonus   int    `json:"crit_bonus"`
+	IsActive    bool   `json:"is_active"`
+}
+
+// RoleSkillInfo 角色武学信息(用于内部转换)
+type RoleSkillInfo struct {
+	ID      uint64 `json:"id"`
+	RoleID  uint64 `json:"role_id"`
+	SkillID uint32 `json:"skill_id"`
+	Level   int    `json:"level"`
+	Exp     int64  `json:"exp"`
+	IsEquip uint8  `json:"is_equip"`
+}
+
+// parseSkillBase 解析武学基础信息
+func parseSkillBase(data map[string]interface{}) SkillBaseInfo {
+	info := SkillBaseInfo{}
+	if v, ok := data["id"].(float64); ok {
+		info.ID = uint32(v)
+	}
+	if v, ok := data["name"].(string); ok {
+		info.Name = v
+	}
+	if v, ok := data["type"].(float64); ok {
+		info.Type = uint8(v)
+	}
+	if v, ok := data["level"].(float64); ok {
+		info.Level = uint32(v)
+	}
+	if v, ok := data["exp_factor"].(float64); ok {
+		info.ExpFactor = int(v)
+	}
+	if v, ok := data["max_level"].(float64); ok {
+		info.MaxLevel = uint32(v)
+	}
+	if v, ok := data["level_req"].(float64); ok {
+		info.LevelReq = uint32(v)
+	}
+	if v, ok := data["hp_bonus"].(float64); ok {
+		info.HpBonus = int(v)
+	}
+	if v, ok := data["mp_bonus"].(float64); ok {
+		info.MpBonus = int(v)
+	}
+	if v, ok := data["attack_bonus"].(float64); ok {
+		info.AttackBonus = int(v)
+	}
+	if v, ok := data["def_bonus"].(float64); ok {
+		info.DefBonus = int(v)
+	}
+	if v, ok := data["speed_bonus"].(float64); ok {
+		info.SpeedBonus = int(v)
+	}
+	if v, ok := data["hit_bonus"].(float64); ok {
+		info.HitBonus = int(v)
+	}
+	if v, ok := data["dodge_bonus"].(float64); ok {
+		info.DodgeBonus = int(v)
+	}
+	if v, ok := data["crit_bonus"].(float64); ok {
+		info.CritBonus = int(v)
+	}
+	return info
+}
+
+// parseRoleSkill 解析角色武学信息
+func parseRoleSkill(data map[string]interface{}) RoleSkillInfo {
+	info := RoleSkillInfo{}
+	if v, ok := data["id"].(float64); ok {
+		info.ID = uint64(v)
+	}
+	if v, ok := data["role_id"].(float64); ok {
+		info.RoleID = uint64(v)
+	}
+	if v, ok := data["skill_id"].(float64); ok {
+		info.SkillID = uint32(v)
+	}
+	if v, ok := data["level"].(float64); ok {
+		info.Level = int(v)
+	}
+	if v, ok := data["exp"].(float64); ok {
+		info.Exp = int64(v)
+	}
+	if v, ok := data["is_equip"].(float64); ok {
+		info.IsEquip = uint8(v)
+	}
+	return info
+}
+
+// 避免导入未使用的encoding/json
+var _ = json.Marshal

@@ -69,6 +69,71 @@ type BaseFighter struct {
 	SkillBonus map[string]int // 来自武学的加成
 }
 
+// TakeDamage 受到伤害
+func (f *BaseFighter) TakeDamage(damage int, dtype DamageType) (newHP int, dead bool) {
+	f.CurrentHP -= damage
+	if f.CurrentHP <= 0 {
+		f.CurrentHP = 0
+		return f.CurrentHP, true
+	}
+	return f.CurrentHP, false
+}
+
+// GetHP 获取当前HP
+func (f *BaseFighter) GetHP() int {
+	return f.CurrentHP
+}
+
+// GetMaxHP 获取最大HP
+func (f *BaseFighter) GetMaxHP() int {
+	return f.MaxHP
+}
+
+// IsAlive 检查是否存活
+func (f *BaseFighter) IsAlive() bool {
+	return f.CurrentHP > 0
+}
+
+// GetID 获取ID
+func (f *BaseFighter) GetID() uint64 {
+	return f.ID
+}
+
+// GetAttack 获取攻击力
+func (f *BaseFighter) GetAttack() int {
+	return f.Attack
+}
+
+// GetDefense 获取防御力
+func (f *BaseFighter) GetDefense() int {
+	return f.Defense
+}
+
+// GetSpeed 获取速度
+func (f *BaseFighter) GetSpeed() int {
+	return f.Speed
+}
+
+// GetHit 获取命中率
+func (f *BaseFighter) GetHit() int {
+	return f.Hit
+}
+
+// GetDodge 获取闪避率
+func (f *BaseFighter) GetDodge() int {
+	return f.Dodge
+}
+
+// GetCrit 获取暴击率
+func (f *BaseFighter) GetCrit() int {
+	return f.Crit
+}
+
+// GetCritDamage 获取暴击伤害
+func (f *BaseFighter) GetCritDamage() int {
+	return f.CritDamage
+}
+
 // CalculateDamage 计算伤害
 // attacker: 攻击者
 // defender: 防御者

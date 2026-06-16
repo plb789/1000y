@@ -1,10 +1,22 @@
+http_port: 8083
+
+# HTTP客户端超时配置
+http_client:
+  timeout: 10  # HTTP请求超时时间(秒)
+
 mysql:
   host: 127.0.0.1
   port: 3306
   user: root
-  password: 123456
+  password: root
   database: millennium
+  max_open_conns: 100    # 最大打开连接数
+  max_idle_conns: 20     # 最大空闲连接数
+  conn_max_lifetime: 3600 # 连接最大存活时间(秒)
+
 redis:
   addr: 127.0.0.1:6379
   password: ""
   db: 0
+  pool_size: 50          # 连接池大小
+  min_idle_conns: 5      # 最小空闲连接数

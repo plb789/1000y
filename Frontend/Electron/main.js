@@ -24,8 +24,13 @@ function startHttpServer() {
   const server = http.createServer((req, res) => {
     let filePath = path.join(__dirname, req.url === '/' ? 'index.html' : req.url);
     
+    // 如果文件不存在，尝试从 Frontend 目录加载
+    if (!fs.existsSync(filePath)) {
+      filePath = path.join(__dirname, '..', req.url);
+    }
+    
     // 安全检查：防止路径遍历
-    if (!filePath.startsWith(__dirname)) {
+    if (!filePath.startsWith(__dirname) && !filePath.startsWith(path.join(__dirname, '..'))) {
       res.writeHead(403);
       res.end('Forbidden');
       return;

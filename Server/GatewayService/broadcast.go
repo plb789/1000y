@@ -9,17 +9,27 @@ import (
 	"sync"
 	"time"
 
+	common "game-server/Common"
+
 	"github.com/go-redis/redis/v8"
 )
 
 var ctx = context.Background()
 var redisClient *redis.Client
 
-// VIEW_RANGE 视野范围（像素）
-const VIEW_RANGE = 500
+// VIEW_RANGE 视野范围（像素）- 从配置文件读取
+var VIEW_RANGE int
 
-// MOVE_MERGE_DELAY 移动消息合并延迟（毫秒）
-const MOVE_MERGE_DELAY = 50
+// MOVE_MERGE_DELAY 移动消息合并延迟（毫秒）- 从配置文件读取
+var MOVE_MERGE_DELAY int
+
+// initBroadcastConfig 初始化广播配置
+func initBroadcastConfig() {
+	_, _, _, viewRange, moveMergeDelay := common.AppConfig.GetGatewayConfig()
+	VIEW_RANGE = viewRange
+	MOVE_MERGE_DELAY = moveMergeDelay
+	log.Printf("广播配置: ViewRange=%d, MoveMergeDelay=%dms", VIEW_RANGE, MOVE_MERGE_DELAY)
+}
 
 // MoveMergeItem 待合并的移动消息
 type MoveMergeItem struct {
@@ -42,11 +52,20 @@ var moveMerger = &MoveMerger{
 }
 
 // InitRedis 初始化 Redis 客户端
-func InitRedis(addr, password string, db int) {
+func InitRedis(addr, password string, db int, poolSize, minIdle int) {
+	if poolSize <= 0 {
+		poolSize = 50
+	}
+	if minIdle <= 0 {
+		minIdle = 5
+	}
+
 	redisClient = redis.NewClient(&redis.Options{
-		Addr:     addr,
-		Password: password,
-		DB:       db,
+		Addr:         addr,
+		Password:     password,
+		DB:           db,
+		PoolSize:     poolSize,
+		MinIdleConns: minIdle,
 	})
 
 	// 测试连接
@@ -54,7 +73,7 @@ func InitRedis(addr, password string, db int) {
 	if err != nil {
 		log.Fatalf("Redis 连接失败: %v", err)
 	}
-	log.Println("Redis 连接成功")
+	log.Printf("Redis 连接成功 (地址: %s, 连接池: PoolSize=%d, MinIdle=%d)", addr, poolSize, minIdle)
 
 	// 启动 Redis 订阅监听
 	go subscribeToMapChannels()
@@ -139,7 +158,7 @@ func (cm *ClientManager) MergeAndBroadcastMove(mapID uint32, fromID uint64, x, y
 	moveMerger.pending[fromID] = item
 
 	// 设置定时器，延迟后发送合并后的消息
-	timer := time.AfterFunc(time.Millisecond*MOVE_MERGE_DELAY, func() {
+	timer := time.AfterFunc(time.Duration(MOVE_MERGE_DELAY)*time.Millisecond, func() {
 		moveMerger.mu.Lock()
 		defer moveMerger.mu.Unlock()
 

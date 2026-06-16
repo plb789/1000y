@@ -94,3 +94,17 @@ var MonsterTypeName = map[uint8]string{
 	1: "精英",
 	2: "BOSS",
 }
+
+// DropGroup 掉落组表
+type DropGroup struct {
+	ID         uint32 `gorm:"primaryKey;column:id" json:"id"`             // 掉落组ID
+	MonsterID  uint32 `gorm:"column:monster_id;index" json:"monster_id"` // 怪物ID
+	ItemID     uint32 `gorm:"column:item_id" json:"item_id"`             // 道具ID
+	DropRate   uint32 `gorm:"column:drop_rate" json:"drop_rate"`         // 掉落概率(万分比)
+	DropMin    uint32 `gorm:"column:drop_min;default:1" json:"drop_min"` // 最小掉落数量
+	DropMax    uint32 `gorm:"column:drop_max;default:1" json:"drop_max"` // 最大掉落数量
+}
+
+func (DropGroup) TableName() string {
+	return "drop_group"
+}

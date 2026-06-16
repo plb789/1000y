@@ -165,6 +165,7 @@ class MapEngine {
       // 移动到新格子时发送消息到服务器
       if (window.GameWS && window.GameWS.send) {
         window.GameWS.send(2001, { // CMD_MOVE
+          role_id: this.player.id,
           x: this.player.x,
           y: this.player.y
         });

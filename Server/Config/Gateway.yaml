@@ -1,2 +1,30 @@
 ws_port: 8080
 ip_white: []
+
+services:
+  db_service: "http://localhost:8083"
+  login_service: "http://localhost:8081"
+  game_service: "http://localhost:8082"
+
+redis:
+  addr: "127.0.0.1:6379"
+  password: ""
+  db: 0
+  pool_size: 50          # 连接池大小
+  min_idle_conns: 5      # 最小空闲连接数
+
+# WebSocket连接配置
+websocket:
+  read_buffer_size: 4096     # 读缓冲区大小(字节)
+  write_buffer_size: 4096    # 写缓冲区大小(字节)
+  max_message_size: 65536    # 最大消息大小(64KB)
+  ping_interval: 30          # 心跳间隔(秒)
+  pong_timeout: 60           # 心跳超时时间(秒)，超时断开连接
+
+# 网关性能参数
+gateway:
+  send_channel_size: 512         # 每玩家发送通道缓冲大小
+  broadcast_channel_size: 5000    # 广播消息队列大小
+  max_connections_per_ip: 10      # 同一IP最大连接数(防攻击)
+  view_range: 500                 # 视野范围(像素)
+  move_merge_delay: 50            # 移动消息合并延迟(毫秒)

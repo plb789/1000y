@@ -1,0 +1,12 @@
+[
+  {"id": 1, "title": "欢迎来到千年江湖", "content": "欢迎各位侠士入驻千年江湖,祝大家江湖愉快!", "type": 3, "priority": 100, "start_time": "2024-01-01T00:00:00Z", "end_time": null},
+  {"id": 2, "title": "服务器维护公告", "content": "服务器将于每周二凌晨2:00-4:00进行例行维护,届时将无法登录,请各位侠士提前做好准备。", "type": 2, "priority": 200, "start_time": "2024-01-01T00:00:00Z", "end_time": null},
+  {"id": 3, "title": "双倍经验活动", "content": "周末双倍经验活动开启!周六周日全天享受双倍经验加成,快来升级吧!", "type": 1, "priority": 50, "start_time": "2024-01-01T00:00:00Z", "end_time": null},
+  {"id": 4, "title": "新服开启", "content": "新服「华山论剑」即将开启,预约即可获得专属称号和礼包奖励!", "type": 1, "priority": 80, "start_time": "2024-01-01T00:00:00Z", "end_time": "2025-12-31T23:59:59Z"},
+  {"id": 5, "title": "门派战即将开启", "content": "本周六将举行门派战,各门派请做好准备,争夺武林至尊的荣誉!", "type": 1, "priority": 60, "start_time": "2024-01-01T00:00:00Z", "end_time": null},
+  {"id": 6, "title": "充值返利活动", "content": "限时充值返利活动!充100送50,充500送300,充1000送800!", "type": 2, "priority": 150, "start_time": "2024-01-01T00:00:00Z", "end_time": null},
+  {"id": 7, "title": "装备回收兑换", "content": "回收多余装备可获得积分,积分可兑换稀有道具和时装!", "type": 1, "priority": 40, "start_time": "2024-01-01T00:00:00Z", "end_time": null},
+  {"id": 8, "title": "每日签到", "content": "每日签到可获得丰厚奖励,连续签到7天更有神秘大礼!", "type": 1, "priority": 30, "start_time": "2024-01-01T00:00:00Z", "end_time": null},
+  {"id": 9, "title": "消费返还", "content": "消费元宝返还绑元,消费越多返利越多,最高返还50%!", "type": 1, "priority": 45, "start_time": "2024-01-01T00:00:00Z", "end_time": null},
+  {"id": 10, "title": "武林大会", "content": "武林大会本周日开启,报名即可参与,冠军将获得绝世神兵!", "type": 2, "priority": 70, "start_time": "2024-01-01T00:00:00Z", "end_time": null}
+]

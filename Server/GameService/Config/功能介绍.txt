@@ -1,0 +1,71 @@
+Config/
+├── maps.json          # 地图(3个)
+├── npcs.json          # NPC
+├── monsters.json       # 怪物
+├── skills.json        # 武学(53个)
+├── items.json         # 道具(10个)
+├── drop_groups.json   # 掉落组
+├── buffs.json         # BUFF(10个)       ← 新增
+├── quests.json        # 任务(8个)        ← 新增
+├── shops.json         # 商店+商品        ← 新增
+├── announcements.json # 公告(4个)        ← 新增
+└── server_config.json # 服务器配置(15项) ← 新增
+
+## 配置加载器更新
+Common/config_loader.go 新增:
+
+```
+// 获取函数
+GetBuffConfig(buffID)        // BUFF配置
+GetQuestConfig(questID)      // 任务配置
+GetQuestsByType(questType)    // 按类型获取任务
+GetShopConfig(shopID)         // 商店配置
+GetShopGoods(shopID)          // 商店商品
+GetActiveAnnouncements()      // 有效公告
+GetServerConfig(key)          // 服务器配置
+GetServerConfigValue(key)     // 配置值
+```
+```
+toolName: Write
+            
+status: success
+          
+            
+filePath: e:\SourceCode1000Y\Server\GameService\Config\maps.json
+          
+changes: undefined
+          
+已扩充到 **15个** 地图配置：
+
+| ID | 地图名 | 等级要求 | PK | 类型 |
+|----|--------|---------|-----|------|
+| 1 | 新手村 | 0 | ❌ | 新手区 |
+| 2 | 江湖野外 | 5 | ✅ | 野外 |
+| 3 | 主城 | 1 | ❌ | 安全区 |
+| 4 | 少林寺 | 10 | ❌ | 门派 |
+| 5 | 武当山 | 10 | ❌ | 门派 |
+| 6 | 华山 | 15 | ✅ | 门派 |
+| 7 | 丐帮总舵 | 12 | ❌ | 门派 |
+| 8 | 明教光明顶 | 20 | ✅ | 门派 |
+| 9 | 桃花岛 | 25 | ❌ | 门派 |
+| 10 | 逍遥谷 | 30 | ❌ | 门派 |
+| 11 | 大理皇城 | 15 | ❌ | 城市 |
+| 12 | 蒙古草原 | 20 | ✅ | 野外 |
+| 13 | 西域沙漠 | 25 | ✅ | 野外 |
+| 14 | 东海群岛 | 30 | ✅ | 野外 |
+| 15 | 阴曹地府 | 40 | ✅ | 特殊 |
+```
+实例1 (处理新手村、主城):
+instance_id: 1
+handled_maps: [1, 3]
+http_port: 8082
+
+实例2 (处理门派地图):
+instance_id: 2
+handled_maps: [4, 5, 6, 7, 8, 9, 10]
+http_port: 8084
+
+实例3 (处理野外/PVP地图):
+instance_id: 3
+handled_maps: [2, 12, 13, 14, 15]
+http_port: 8085

@@ -2,8 +2,8 @@ package battle
 
 import (
 	"errors"
-	"game-server/DBService/mysql"
-	"game-server/GameService/Battle/model"
+	common "game-server/Common"
+	"log"
 	"sync"
 	"time"
 )
@@ -69,7 +69,7 @@ func (s *Service) NormalAttack(req AttackRequest) (*AttackResult, error) {
 	damage, isCrit := CalculateDamage(attacker, defender, 0)
 
 	// 应用伤害
-	newHP, dead := defender.TakeDamage(damage, DamageTypePhysical)
+	newHP, isDead := defender.TakeDamage(damage, DamageTypePhysical)
 
 	// 更新防御者HP
 	if err := s.updateFighterHP(req.TargetID, req.TargetType, newHP); err != nil {
@@ -90,7 +90,7 @@ func (s *Service) NormalAttack(req AttackRequest) (*AttackResult, error) {
 	}
 
 	// 检查是否死亡
-	if dead {
+	if isDead {
 		result.Damage = newHP - defender.GetHP() + damage // 实际扣血
 	}
 
@@ -144,7 +144,7 @@ func (s *Service) SkillAttack(req AttackRequest, skillID uint32, skillType uint8
 	GlobalCoolDownManager.SetCoolDown(req.AttackerID, skillID, 3000)
 
 	// 应用伤害
-	newHP, dead := defender.TakeDamage(damage, DamageTypePhysical)
+	newHP, _ := defender.TakeDamage(damage, DamageTypePhysical)
 
 	// 更新防御者HP
 	if err := s.updateFighterHP(req.TargetID, req.TargetType, newHP); err != nil {
@@ -180,50 +180,55 @@ func (s *Service) getFighter(id uint64, fighterType uint8) (*BaseFighter, error)
 
 // getPlayerFighter 获取玩家战斗属性
 func (s *Service) getPlayerFighter(roleID uint64) (*BaseFighter, error) {
-	var role role.Role
-	if err := mysql.DB.Where("id = ?", roleID).First(&role).Error; err != nil {
+	roleInfo, err := common.DBRoleGet(roleID)
+	if err != nil || roleInfo == nil {
 		return nil, errors.New("角色不存在")
 	}
 
-	// TODO: 应该从已装备武学计算加成
-	// 这里简化处理
-	skillBonus := map[string]int{
-		"crit": 0,
+	// 从已装备武学计算加成
+	skillSvc := skillService.NewService()
+	skillBonus, err := skillSvc.CalculateSkillBonus(roleID)
+	if err != nil {
+		// 如果获取武学加成失败，使用空加成
+		skillBonus = map[string]int{
+			"hp": 0, "mp": 0, "attack": 0, "defense": 0,
+			"speed": 0, "hit": 0, "dodge": 0, "crit": 0,
+		}
 	}
 
 	return &BaseFighter{
-		ID:         role.ID,
-		Attack:     role.Attack,
-		Defense:    role.Defense,
-		Speed:      role.Speed,
-		Hit:        role.Hit,
-		Dodge:      role.Dodge,
-		Crit:       role.Crit,
-		CritDamage: role.CritDamage,
-		CurrentHP:  role.Hp,
-		MaxHP:      role.MaxHp,
+		ID:         roleInfo.ID,
+		Attack:     roleInfo.Attack + skillBonus["attack"],
+		Defense:    roleInfo.Defense + skillBonus["defense"],
+		Speed:      roleInfo.Speed + skillBonus["speed"],
+		Hit:        roleInfo.Hit + skillBonus["hit"],
+		Dodge:      roleInfo.Dodge + skillBonus["dodge"],
+		Crit:       roleInfo.Crit + skillBonus["crit"],
+		CritDamage: roleInfo.CritDamage,
+		CurrentHP:  roleInfo.Hp + skillBonus["hp"],
+		MaxHP:      roleInfo.MaxHp + skillBonus["hp"],
 		SkillBonus: skillBonus,
 	}, nil
 }
 
 // getMonsterFighter 获取怪物战斗属性
 func (s *Service) getMonsterFighter(monsterID uint64) (*BaseFighter, error) {
-	var monster model.MonsterBase
-	if err := mysql.DB.Where("id = ?", monsterID).First(&monster).Error; err != nil {
+	config := common.GetMonsterConfig(uint32(monsterID))
+	if config == nil {
 		return nil, errors.New("怪物不存在")
 	}
 
 	return &BaseFighter{
-		ID:         monster.ID,
-		Attack:     monster.Attack,
-		Defense:    monster.Defense,
-		Speed:      monster.Speed,
-		Hit:        monster.Hit,
-		Dodge:      monster.Dodge,
-		Crit:       monster.Crit,
+		ID:         uint64(config.ID),
+		Attack:     config.Attack,
+		Defense:    config.Defense,
+		Speed:      config.Speed,
+		Hit:        config.Hit,
+		Dodge:      config.Dodge,
+		Crit:       config.Crit,
 		CritDamage: 150, // 怪物默认暴击伤害150%
-		CurrentHP:  monster.Hp,
-		MaxHP:      monster.Hp,
+		CurrentHP:  config.Hp,
+		MaxHP:      config.Hp,
 		SkillBonus: nil,
 	}, nil
 }
@@ -232,21 +237,29 @@ func (s *Service) getMonsterFighter(monsterID uint64) (*BaseFighter, error) {
 func (s *Service) updateFighterHP(id uint64, fighterType uint8, newHP int) error {
 	switch fighterType {
 	case 1: // 玩家
-		return mysql.DB.Model(&role.Role{}).Where("id = ?", id).Update("hp", newHP).Error
+		return common.DBRoleSetHP(id, newHP)
 	case 2: // 怪物
-		return mysql.DB.Model(&model.MonsterBase{}).Where("id = ?", id).Update("hp", newHP).Error
+		// 怪物不持久化到数据库（只在内存中）
+		return nil
 	}
 	return errors.New("无效的战斗者类型")
 }
 
 // getRoleSkillLevel 获取角色技能等级
 func (s *Service) getRoleSkillLevel(roleID uint64, skillID uint32) uint32 {
-	var roleSkill model.RoleSkill
-	err := mysql.DB.Where("role_id = ? AND skill_id = ?", roleID, skillID).First(&roleSkill).Error
+	skills, err := common.DBSkillGetList(roleID)
 	if err != nil {
 		return 1
 	}
-	return roleSkill.Level
+
+	for _, skill := range skills {
+		if sid, ok := skill["skill_id"].(float64); ok && uint32(sid) == skillID {
+			if level, ok := skill["level"].(float64); ok {
+				return uint32(level)
+			}
+		}
+	}
+	return 1
 }
 
 // StartPVP 开始PVP战斗
@@ -337,23 +350,16 @@ func (s *Service) GetBattleOpponent(fighterID uint64) uint64 {
 func (s *Service) RecordKill(killerID uint64, killerType uint8, victimID uint64, victimType uint8) error {
 	// 根据击杀类型记录
 	if killerType == 1 {
-		// 玩家击杀,增加杀人数
-		if err := mysql.DB.Model(&role.Role{}).Where("id = ?", killerID).
-			Update("kill_count", mysql.DB.Raw("kill_count + 1")).Error; err != nil {
-			return err
-		}
-		// 增加PK值
-		if err := mysql.DB.Model(&role.Role{}).Where("id = ?", killerID).
-			Update("pk_value", mysql.DB.Raw("pk_value + 50")).Error; err != nil {
-			return err
+		// 玩家击杀,增加杀人数和PK值
+		if err := common.DBRoleRecordKill(killerID); err != nil {
+			log.Printf("记录击杀失败: %v", err)
 		}
 	}
 
 	// 记录死亡
 	if victimType == 1 {
-		if err := mysql.DB.Model(&role.Role{}).Where("id = ?", victimID).
-			Update("death_count", mysql.DB.Raw("death_count + 1")).Error; err != nil {
-			return err
+		if err := common.DBRoleRecordDeath(victimID); err != nil {
+			log.Printf("记录死亡失败: %v", err)
 		}
 	}
 

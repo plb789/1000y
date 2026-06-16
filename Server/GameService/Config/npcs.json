@@ -1,0 +1,22 @@
+[
+  {"id": 1, "name": "村长", "type": 1, "map_id": 1, "x": 500, "y": 500, "face": 0, "sprite_id": 1001, "dialog_text": "欢迎来到千年江湖！这里是新手村，你可以在这里学习基础武艺，提升自己的实力。", "shop_id": null},
+  {"id": 2, "name": "新手接待员", "type": 3, "map_id": 1, "x": 480, "y": 520, "face": 2, "sprite_id": 1002, "dialog_text": "新来的侠士？完成一些新手任务来熟悉这个世界吧！", "shop_id": null},
+  {"id": 3, "name": "武器商人", "type": 2, "map_id": 1, "x": 550, "y": 480, "face": 1, "sprite_id": 1003, "dialog_text": "本店武器齐全，从新手木剑到倚天屠龙，应有尽有！", "shop_id": 2},
+  {"id": 4, "name": "防具商人", "type": 2, "map_id": 1, "x": 560, "y": 490, "face": 2, "sprite_id": 1004, "dialog_text": "护甲、护腕、护腿...全方位的防护让你江湖无忧！", "shop_id": 3},
+  {"id": 5, "name": "杂货商贩", "type": 2, "map_id": 1, "x": 540, "y": 510, "face": 0, "sprite_id": 1005, "dialog_text": "药品、矿石、杂物...各种道具都有卖！", "shop_id": 1},
+  {"id": 6, "name": "药店老板", "type": 2, "map_id": 1, "x": 530, "y": 500, "face": 3, "sprite_id": 1006, "dialog_text": "金创药、回蓝丹...恢复生命和内力的好帮手！", "shop_id": 1},
+  {"id": 7, "name": "传送使者", "type": 5, "map_id": 1, "x": 600, "y": 450, "face": 0, "sprite_id": 1007, "dialog_text": "想去其他地方？告诉我你的目的地！", "shop_id": null},
+  {"id": 8, "name": "仓库管理员", "type": 4, "map_id": 1, "x": 580, "y": 470, "face": 1, "sprite_id": 1008, "dialog_text": "物品太多放不下？存到我这里吧！", "shop_id": null},
+  {"id": 9, "name": "武馆教头", "type": 1, "map_id": 1, "x": 490, "y": 530, "face": 2, "sprite_id": 1009, "dialog_text": "想学习武艺？来找我吧，我可以教你一些入门功夫。", "shop_id": null},
+  {"id": 10, "name": "任务管理员", "type": 3, "map_id": 2, "x": 800, "y": 600, "face": 0, "sprite_id": 1010, "dialog_text": "江湖中有许多任务等待完成，获得丰厚奖励！", "shop_id": null},
+  {"id": 11, "name": "江湖向导", "type": 1, "map_id": 2, "x": 850, "y": 550, "face": 1, "sprite_id": 1011, "dialog_text": "江湖野外危机四伏，请小心行事！", "shop_id": null},
+  {"id": 12, "name": "赏金猎人", "type": 3, "map_id": 2, "x": 900, "y": 500, "face": 2, "sprite_id": 1012, "dialog_text": "击杀指定怪物可获得高额赏金！", "shop_id": null},
+  {"id": 13, "name": "矿石商人", "type": 2, "map_id": 2, "x": 750, "y": 650, "face": 3, "sprite_id": 1013, "dialog_text": "各种稀有矿石，锻造神器必备！", "shop_id": 1},
+  {"id": 14, "name": "主城卫兵", "type": 1, "map_id": 3, "x": 700, "y": 700, "face": 0, "sprite_id": 1014, "dialog_text": "来者何人？报上名来！", "shop_id": null},
+  {"id": 15, "name": "城主", "type": 1, "map_id": 3, "x": 750, "y": 650, "face": 0, "sprite_id": 1015, "dialog_text": "欢迎来到主城！愿侠士在江湖中闯出一片天地！", "shop_id": null},
+  {"id": 16, "name": "铁匠", "type": 2, "map_id": 3, "x": 800, "y": 600, "face": 1, "sprite_id": 1016, "dialog_text": "锻造、镶嵌、强化...让你的装备更强！", "shop_id": 2},
+  {"id": 17, "name": "裁缝", "type": 2, "map_id": 3, "x": 810, "y": 610, "face": 2, "sprite_id": 1017, "dialog_text": "防具定制，品质上乘！", "shop_id": 3},
+  {"id": 18, "name": "门派长老", "type": 3, "map_id": 3, "x": 850, "y": 700, "face": 0, "sprite_id": 1018, "dialog_text": "我派武功博大精深，你可愿加入？", "shop_id": 4},
+  {"id": 19, "name": "拍卖师", "type": 2, "map_id": 3, "x": 900, "y": 550, "face": 3, "sprite_id": 1019, "dialog_text": "拍卖会即将开始，各位侠士请入座！", "shop_id": 5},
+  {"id": 20, "name": "神秘商人", "type": 2, "map_id": 3, "x": 950, "y": 600, "face": 1, "sprite_id": 1020, "dialog_text": "稀世珍宝，只给有缘人...要不要看看？", "shop_id": 1}
+]

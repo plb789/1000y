@@ -225,6 +225,7 @@ class Game {
         
         // 通知服务器玩家进入地图
         window.GameWS.send(Protocol.CMD_ENTER_MAP, {
+          role_id: this.player.id,
           map_id: mapId,
           x: this.player.x,
           y: this.player.y
@@ -449,8 +450,7 @@ class Game {
       maxHp: data.maxHp || 100
     });
     
-    // 更新在线人数显示
-    this.updateOnlineCount();
+    // 不再调用 updateOnlineCount()，在线人数由服务端的 handleOnlineCount 消息控制
     
     this.addChatMessage('系统', `${data.name || '某玩家'}进入了地图`, 'system');
     
@@ -464,8 +464,7 @@ class Game {
     this.players.delete(data.role_id);
     this.addChatMessage('系统', `${data.name || '玩家'}离开了地图`, 'system');
     
-    // 更新在线人数显示（基于本地列表，会被服务端广播覆盖）
-    this.updateOnlineCount();
+    // 不再调用 updateOnlineCount()，在线人数由服务端的 handleOnlineCount 消息控制
   }
   
   handleOnlineCount(data) {
@@ -698,8 +697,8 @@ class Game {
   }
 }
 
-// 协议定义
-const Protocol = {
+// 协议定义（暴露到全局供其他模块使用）
+const Protocol = window.Protocol = {
   // 登录相关 1001-1010
   CMD_LOGIN: 1001,
   CMD_LOGOUT: 1002,

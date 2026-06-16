@@ -2,8 +2,7 @@ package item
 
 import (
 	"errors"
-	"game-server/DBService/mysql"
-	"game-server/GameService/Item/model"
+	"game-server/Common"
 	"time"
 )
 
@@ -20,119 +19,228 @@ func NewService() *Service {
 }
 
 // GetItemBase 获取道具基础信息
-func (s *Service) GetItemBase(itemID uint32) (*model.ItemBase, error) {
-	var item model.ItemBase
-	if err := mysql.DB.Where("id = ?", itemID).First(&item).Error; err != nil {
-		return nil, err
+func (s *Service) GetItemBase(itemID uint32) (map[string]interface{}, error) {
+	config := Common.GetItemConfig(itemID)
+	if config == nil {
+		return nil, errors.New("道具不存在")
 	}
-	return &item, nil
+	return map[string]interface{}{
+		"id":             config.ID,
+		"name":           config.Name,
+		"type":           config.Type,
+		"sub_type":       config.SubType,
+		"quality":        config.Quality,
+		"level_req":      config.LevelReq,
+		"stack_max":      config.StackMax,
+		"price":          config.Price,
+		"description":    config.Description,
+		"equip_type":     config.EquipType,
+		"hp_bonus":       config.HpBonus,
+		"mp_bonus":       config.MpBonus,
+		"attack_bonus":    config.AttackBonus,
+		"defense_bonus":   config.DefenseBonus,
+		"speed_bonus":    config.SpeedBonus,
+		"hp_restore":     config.HpRestore,
+		"mp_restore":     config.MpRestore,
+		"buff_id":        config.BuffID,
+		"icon":           config.Icon,
+		"model":          config.Model,
+		"is_dropable":    config.IsDropable,
+		"is_sellable":    config.IsSellable,
+		"is_destroyable": config.IsDestroyable,
+		"is_bind":        config.IsBind,
+	}, nil
 }
 
 // GetAllItems 获取所有道具基础信息
-func (s *Service) GetAllItems() ([]model.ItemBase, error) {
-	var items []model.ItemBase
-	err := mysql.DB.Order("type ASC, quality ASC, level_req ASC").Find(&items).Error
-	return items, err
+func (s *Service) GetAllItems() ([]map[string]interface{}, error) {
+	var result []map[string]interface{}
+	for _, config := range Common.GetAllItemConfig() {
+		result = append(result, map[string]interface{}{
+			"id":             config.ID,
+			"name":           config.Name,
+			"type":           config.Type,
+			"sub_type":       config.SubType,
+			"quality":        config.Quality,
+			"level_req":      config.LevelReq,
+			"stack_max":      config.StackMax,
+			"price":          config.Price,
+			"description":    config.Description,
+			"equip_type":     config.EquipType,
+			"hp_bonus":       config.HpBonus,
+			"mp_bonus":       config.MpBonus,
+			"attack_bonus":    config.AttackBonus,
+			"defense_bonus":   config.DefenseBonus,
+			"speed_bonus":    config.SpeedBonus,
+			"hp_restore":     config.HpRestore,
+			"mp_restore":     config.MpRestore,
+			"buff_id":        config.BuffID,
+			"icon":           config.Icon,
+			"model":          config.Model,
+			"is_dropable":    config.IsDropable,
+			"is_sellable":    config.IsSellable,
+			"is_destroyable": config.IsDestroyable,
+			"is_bind":        config.IsBind,
+		})
+	}
+	return result, nil
 }
 
 // GetItemsByType 获取指定类型道具
-func (s *Service) GetItemsByType(itemType uint8) ([]model.ItemBase, error) {
-	var items []model.ItemBase
-	err := mysql.DB.Where("type = ?", itemType).Order("quality ASC, level_req ASC").Find(&items).Error
-	return items, err
+func (s *Service) GetItemsByType(itemType uint8) ([]map[string]interface{}, error) {
+	var result []map[string]interface{}
+	for _, config := range Common.GetAllItemConfig() {
+		if config.Type == itemType {
+			result = append(result, map[string]interface{}{
+				"id":             config.ID,
+				"name":           config.Name,
+				"type":           config.Type,
+				"sub_type":       config.SubType,
+				"quality":        config.Quality,
+				"level_req":      config.LevelReq,
+				"stack_max":      config.StackMax,
+				"price":          config.Price,
+				"description":    config.Description,
+				"equip_type":     config.EquipType,
+				"hp_bonus":       config.HpBonus,
+				"mp_bonus":       config.MpBonus,
+				"attack_bonus":    config.AttackBonus,
+				"defense_bonus":   config.DefenseBonus,
+				"speed_bonus":    config.SpeedBonus,
+				"hp_restore":     config.HpRestore,
+				"mp_restore":     config.MpRestore,
+				"buff_id":        config.BuffID,
+				"icon":           config.Icon,
+				"model":          config.Model,
+				"is_dropable":    config.IsDropable,
+				"is_sellable":    config.IsSellable,
+				"is_destroyable": config.IsDestroyable,
+				"is_bind":        config.IsBind,
+			})
+		}
+	}
+	return result, nil
 }
 
 // AddItem 添加道具到背包
 // 返回: 成功添加的格子索引, 错误信息
 func (s *Service) AddItem(roleID uint64, itemID uint32, count uint32, isBind uint8) (int, error) {
-	// 获取道具基础信息
-	itemBase, err := s.GetItemBase(itemID)
-	if err != nil {
-		return -1, errors.New("道具不存在")
-	}
-
-	// 检查是否可堆叠
-	if itemBase.StackMax > 1 {
-		// 尝试合并到已有物品
-		err = s.mergeItem(roleID, itemID, count, itemBase.StackMax, isBind)
-		if err == nil {
-			return -2, nil // -2表示合并成功
-		}
-	}
-
-	// 查找空格子
-	emptySlot, err := s.findEmptySlot(roleID)
-	if err != nil {
-		return -1, errors.New("背包已满")
-	}
-
-	// 创建新物品
-	bagItem := model.RoleBag{
-		RoleID:    roleID,
-		GridIndex: emptySlot,
-		ItemID:    itemID,
-		Count:     count,
-		IsBind:    isBind,
-		GetTime:   time.Now(),
-	}
-
-	if itemBase.Type == 2 { // 装备
-		durMax := 100
-		bagItem.DurMax = &durMax
-		bagItem.DurCurrent = &durMax
-	}
-
-	if err := mysql.DB.Create(&bagItem).Error; err != nil {
-		return -1, err
-	}
-
-	return emptySlot, nil
+	return Common.DBItemAdd(roleID, itemID, count, isBind)
 }
 
-// mergeItem 合并物品
-func (s *Service) mergeItem(roleID uint64, itemID uint32, count uint32, stackMax uint32, isBind uint8) error {
-	var bagItems []model.RoleBag
-	mysql.DB.Where("role_id = ? AND item_id = ? AND is_bind = ?", roleID, itemID, isBind).
-		Order("count ASC").
-		Find(&bagItems)
+// GetBagItems 获取角色背包所有物品
+func (s *Service) GetBagItems(roleID uint64) ([]map[string]interface{}, error) {
+	return Common.DBItemGetBag(roleID)
+}
 
-	remaining := count
-	for i := range bagItems {
-		if remaining <= 0 {
-			break
-		}
-		canAdd := stackMax - bagItems[i].Count
-		if canAdd <= 0 {
-			continue
-		}
-		addCount := canAdd
-		if addCount > remaining {
-			addCount = remaining
-		}
-		bagItems[i].Count += addCount
-		remaining -= addCount
-		mysql.DB.Save(&bagItems[i])
+// GetBagItemByGrid 获取指定格子的物品
+func (s *Service) GetBagItemByGrid(roleID uint64, gridIndex int) (*map[string]interface{}, error) {
+	bagItems, err := Common.DBItemGetBag(roleID)
+	if err != nil {
+		return nil, err
 	}
 
+	for _, item := range bagItems {
+		if g, ok := item["grid_index"].(float64); ok && int(g) == gridIndex {
+			return &item, nil
+		}
+	}
+	return nil, errors.New("物品不存在")
+}
+
+// MoveItem 移动物品(整理背包)
+func (s *Service) MoveItem(roleID uint64, fromGrid, toGrid int) error {
+	return Common.DBItemMove(roleID, fromGrid, toGrid)
+}
+
+// SplitItem 拆分物品
+func (s *Service) SplitItem(roleID uint64, gridIndex int, count uint32) error {
+	return Common.DBItemSplit(roleID, gridIndex, count)
+}
+
+// UseItem 使用道具
+func (s *Service) UseItem(roleID uint64, gridIndex int) error {
+	return Common.DBItemUse(roleID, gridIndex)
+}
+
+// DiscardItem 丢弃物品
+func (s *Service) DiscardItem(roleID uint64, gridIndex int) error {
+	return Common.DBItemDiscard(roleID, gridIndex)
+}
+
+// SellItem 出售物品
+func (s *Service) SellItem(roleID uint64, gridIndex int) (int, error) {
+	return Common.DBItemSell(roleID, gridIndex)
+}
+
+// EquipItem 穿戴装备
+func (s *Service) EquipItem(roleID uint64, bagItemID uint64) error {
+	return Common.DBItemEquip(roleID, bagItemID)
+}
+
+// UnequipItem 卸下装备
+func (s *Service) UnequipItem(roleID uint64, equipType uint8) error {
+	return Common.DBItemUnequip(roleID, equipType)
+}
+
+// GetEquippedItems 获取已穿戴装备
+func (s *Service) GetEquippedItems(roleID uint64) ([]map[string]interface{}, error) {
+	return Common.DBItemGetEquipped(roleID)
+}
+
+// GetEquipmentByType 获取指定位置的装备
+func (s *Service) GetEquipmentByType(roleID uint64, equipType uint8) (*map[string]interface{}, error) {
+	equips, err := Common.DBItemGetEquipped(roleID)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, equip := range equips {
+		if e, ok := equip["equip_type"].(float64); ok && uint8(e) == equipType {
+			return &equip, nil
+		}
+	}
+	return nil, errors.New("该装备位为空")
+}
+
+// GetEmptySlotCount 获取背包空位数
+func (s *Service) GetEmptySlotCount(roleID uint64) (int, error) {
+	return Common.DBItemGetEmptyCount(roleID)
+}
+
+// ClearBag 清空背包(通过DBService API)
+func (s *Service) ClearBag(roleID uint64) error {
+	bagItems, err := Common.DBItemGetBag(roleID)
+	if err != nil {
+		return err
+	}
+
+	for _, item := range bagItems {
+		if gridIndex, ok := item["grid_index"].(float64); ok {
+			Common.DBItemDiscard(roleID, int(gridIndex))
+		}
+	}
 	return nil
 }
 
 // findEmptySlot 查找空格子
 func (s *Service) findEmptySlot(roleID uint64) (int, error) {
-	// 获取所有已使用的格子
-	var usedSlots []int
-	mysql.DB.Model(&model.RoleBag{}).
-		Where("role_id = ?", roleID).
-		Pluck("grid_index", &usedSlots)
-
-	// 找出空格子
-	slotMap := make(map[int]bool)
-	for _, slot := range usedSlots {
-		slotMap[slot] = true
+	bagItems, err := Common.DBItemGetBag(roleID)
+	if err != nil {
+		return -1, err
 	}
 
+	// 收集已使用的格子
+	usedSlots := make(map[int]bool)
+	for _, item := range bagItems {
+		if gridIndex, ok := item["grid_index"].(float64); ok {
+			usedSlots[int(gridIndex)] = true
+		}
+	}
+
+	// 找出空格子
 	for i := 0; i < BagMaxSlots; i++ {
-		if !slotMap[i] {
+		if !usedSlots[i] {
 			return i, nil
 		}
 	}
@@ -140,332 +248,113 @@ func (s *Service) findEmptySlot(roleID uint64) (int, error) {
 	return -1, errors.New("背包已满")
 }
 
-// GetBagItems 获取角色背包所有物品
-func (s *Service) GetBagItems(roleID uint64) ([]model.BagItemWithBase, error) {
-	var items []model.BagItemWithBase
-	err := mysql.DB.Table("role_bag").
-		Select("role_bag.*, item_base.*").
-		Joins("LEFT JOIN item_base ON role_bag.item_id = item_base.id").
-		Where("role_bag.role_id = ?", roleID).
-		Order("role_bag.grid_index ASC").
-		Find(&items).Error
-	return items, err
+// GetItemBaseInfo 获取道具基础信息(内部转换用)
+type ItemBaseInfo struct {
+	ID           uint32  `json:"id"`
+	Name         string  `json:"name"`
+	Type         uint8   `json:"type"`
+	Quality      uint8   `json:"quality"`
+	LevelReq     uint32  `json:"level_req"`
+	StackMax     uint32  `json:"stack_max"`
+	Price        int     `json:"price"`
+	HpRestore    int     `json:"hp_restore"`
+	MpRestore    int     `json:"mp_restore"`
+	IsDropable   bool    `json:"is_dropable"`
+	IsSellable   bool    `json:"is_sellable"`
+	IsDestroyable bool   `json:"is_destroyable"`
+	EquipType    uint8   `json:"equip_type"`
+	Description  string  `json:"description"`
 }
 
-// GetBagItemByGrid 获取指定格子的物品
-func (s *Service) GetBagItemByGrid(roleID uint64, gridIndex int) (*model.BagItemWithBase, error) {
-	var item model.BagItemWithBase
-	err := mysql.DB.Table("role_bag").
-		Select("role_bag.*, item_base.*").
-		Joins("LEFT JOIN item_base ON role_bag.item_id = item_base.id").
-		Where("role_bag.role_id = ? AND role_bag.grid_index = ?", roleID, gridIndex).
-		First(&item).Error
-	if err != nil {
-		return nil, err
-	}
-	return &item, nil
+// GetBagItemInfo 获取背包物品信息(内部转换用)
+type BagItemInfo struct {
+	ID         uint64    `json:"id"`
+	RoleID     uint64    `json:"role_id"`
+	GridIndex  int       `json:"grid_index"`
+	ItemID     uint32    `json:"item_id"`
+	Count      uint32    `json:"count"`
+	IsBind     uint8     `json:"is_bind"`
+	GetTime    time.Time `json:"get_time"`
+	DurMax     *int      `json:"dur_max,omitempty"`
+	DurCurrent *int      `json:"dur_current,omitempty"`
 }
 
-// MoveItem 移动物品(整理背包)
-func (s *Service) MoveItem(roleID uint64, fromGrid, toGrid int) error {
-	// 检查目标格子是否为空
-	var targetItem model.RoleBag
-	err := mysql.DB.Where("role_id = ? AND grid_index = ?", roleID, toGrid).First(&targetItem).Error
-	if err == nil {
-		return errors.New("目标格子不为空")
+// getFloatValue 安全获取float64值
+func getFloatValue(m map[string]interface{}, key string) float64 {
+	if v, ok := m[key].(float64); ok {
+		return v
 	}
-
-	// 获取源物品
-	var sourceItem model.RoleBag
-	if err := mysql.DB.Where("role_id = ? AND grid_index = ?", roleID, fromGrid).First(&sourceItem).Error; err != nil {
-		return errors.New("源格子没有物品")
-	}
-
-	// 移动
-	sourceItem.GridIndex = toGrid
-	return mysql.DB.Save(&sourceItem).Error
+	return 0
 }
 
-// SplitItem 拆分物品
-func (s *Service) SplitItem(roleID uint64, gridIndex int, count uint32) error {
-	// 获取物品
-	var bagItem model.RoleBag
-	if err := mysql.DB.Where("role_id = ? AND grid_index = ?", roleID, gridIndex).First(&bagItem).Error; err != nil {
-		return errors.New("物品不存在")
+// parseItemBase 解析道具基础信息
+func parseItemBase(data map[string]interface{}) ItemBaseInfo {
+	info := ItemBaseInfo{}
+	if v, ok := data["id"].(float64); ok {
+		info.ID = uint32(v)
 	}
-
-	// 获取道具基础信息
-	itemBase, err := s.GetItemBase(bagItem.ItemID)
-	if err != nil {
-		return errors.New("道具不存在")
+	if v, ok := data["name"].(string); ok {
+		info.Name = v
 	}
-
-	if itemBase.StackMax <= 1 {
-		return errors.New("该物品不可拆分")
+	if v, ok := data["type"].(float64); ok {
+		info.Type = uint8(v)
 	}
-
-	if bagItem.Count < count {
-		return errors.New("物品数量不足")
+	if v, ok := data["quality"].(float64); ok {
+		info.Quality = uint8(v)
 	}
-
-	// 查找空格子
-	emptySlot, err := s.findEmptySlot(roleID)
-	if err != nil {
-		return errors.New("背包已满")
+	if v, ok := data["level_req"].(float64); ok {
+		info.LevelReq = uint32(v)
 	}
-
-	// 减少原物品数量
-	bagItem.Count -= count
-	mysql.DB.Save(&bagItem)
-
-	// 创建新物品
-	newItem := model.RoleBag{
-		RoleID:    roleID,
-		GridIndex: emptySlot,
-		ItemID:    bagItem.ItemID,
-		Count:     count,
-		IsBind:    bagItem.IsBind,
-		GetTime:   time.Now(),
+	if v, ok := data["stack_max"].(float64); ok {
+		info.StackMax = uint32(v)
 	}
-	return mysql.DB.Create(&newItem).Error
+	if v, ok := data["price"].(float64); ok {
+		info.Price = int(v)
+	}
+	if v, ok := data["hp_restore"].(float64); ok {
+		info.HpRestore = int(v)
+	}
+	if v, ok := data["mp_restore"].(float64); ok {
+		info.MpRestore = int(v)
+	}
+	if v, ok := data["is_dropable"].(float64); ok {
+		info.IsDropable = v == 1
+	}
+	if v, ok := data["is_sellable"].(float64); ok {
+		info.IsSellable = v == 1
+	}
+	if v, ok := data["is_destroyable"].(float64); ok {
+		info.IsDestroyable = v == 1
+	}
+	if v, ok := data["equip_type"].(float64); ok {
+		info.EquipType = uint8(v)
+	}
+	if v, ok := data["description"].(string); ok {
+		info.Description = v
+	}
+	return info
 }
 
-// UseItem 使用道具
-func (s *Service) UseItem(roleID uint64, gridIndex int) error {
-	// 获取物品
-	var bagItem model.RoleBag
-	if err := mysql.DB.Where("role_id = ? AND grid_index = ?", roleID, gridIndex).First(&bagItem).Error; err != nil {
-		return errors.New("物品不存在")
+// parseBagItem 解析背包物品信息
+func parseBagItem(data map[string]interface{}) BagItemInfo {
+	info := BagItemInfo{}
+	if v, ok := data["id"].(float64); ok {
+		info.ID = uint64(v)
 	}
-
-	// 获取道具基础信息
-	itemBase, err := s.GetItemBase(bagItem.ItemID)
-	if err != nil {
-		return errors.New("道具不存在")
+	if v, ok := data["role_id"].(float64); ok {
+		info.RoleID = uint64(v)
 	}
-
-	// 检查是否为药品
-	if itemBase.Type != 1 {
-		return errors.New("该物品不可使用")
+	if v, ok := data["grid_index"].(float64); ok {
+		info.GridIndex = int(v)
 	}
-
-	// 使用效果
-	if itemBase.HpRestore > 0 || itemBase.MpRestore > 0 {
-		// 这里应该调用角色服务来修改HP/MP
-		// 由于避免循环引用,实际使用时通过API调用角色服务
+	if v, ok := data["item_id"].(float64); ok {
+		info.ItemID = uint32(v)
 	}
-
-	// 消耗物品
-	if bagItem.Count <= 1 {
-		// 删除物品
-		return mysql.DB.Delete(&bagItem).Error
+	if v, ok := data["count"].(float64); ok {
+		info.Count = uint32(v)
 	}
-
-	// 减少数量
-	bagItem.Count--
-	return mysql.DB.Save(&bagItem).Error
-}
-
-// DiscardItem 丢弃物品
-func (s *Service) DiscardItem(roleID uint64, gridIndex int) error {
-	var bagItem model.RoleBag
-	if err := mysql.DB.Where("role_id = ? AND grid_index = ?", roleID, gridIndex).First(&bagItem).Error; err != nil {
-		return errors.New("物品不存在")
+	if v, ok := data["is_bind"].(float64); ok {
+		info.IsBind = uint8(v)
 	}
-
-	// 获取道具基础信息
-	itemBase, err := s.GetItemBase(bagItem.ItemID)
-	if err != nil {
-		return errors.New("道具不存在")
-	}
-
-	if itemBase.IsDropable != 1 {
-		return errors.New("该物品不可丢弃")
-	}
-
-	return mysql.DB.Delete(&bagItem).Error
-}
-
-// SellItem 出售物品
-func (s *Service) SellItem(roleID uint64, gridIndex int) (int, error) {
-	var bagItem model.RoleBag
-	if err := mysql.DB.Where("role_id = ? AND grid_index = ?", roleID, gridIndex).First(&bagItem).Error; err != nil {
-		return 0, errors.New("物品不存在")
-	}
-
-	// 获取道具基础信息
-	itemBase, err := s.GetItemBase(bagItem.ItemID)
-	if err != nil {
-		return 0, errors.New("道具不存在")
-	}
-
-	if itemBase.IsSellable != 1 {
-		return 0, errors.New("该物品不可出售")
-	}
-
-	// 计算售价
-	sellPrice := itemBase.Price * int(bagItem.Count) / 2
-
-	// 删除物品
-	if err := mysql.DB.Delete(&bagItem).Error; err != nil {
-		return 0, err
-	}
-
-	// 增加金币(这里应该调用角色服务)
-	// roleService.AddGold(roleID, int64(sellPrice))
-
-	return sellPrice, nil
-}
-
-// DestroyItem 销毁物品
-func (s *Service) DestroyItem(roleID uint64, gridIndex int) error {
-	var bagItem model.RoleBag
-	if err := mysql.DB.Where("role_id = ? AND grid_index = ?", roleID, gridIndex).First(&bagItem).Error; err != nil {
-		return errors.New("物品不存在")
-	}
-
-	// 获取道具基础信息
-	itemBase, err := s.GetItemBase(bagItem.ItemID)
-	if err != nil {
-		return errors.New("道具不存在")
-	}
-
-	if itemBase.IsDestroyable != 1 {
-		return errors.New("该物品不可销毁")
-	}
-
-	return mysql.DB.Delete(&bagItem).Error
-}
-
-// EquipItem 穿戴装备
-func (s *Service) EquipItem(roleID uint64, bagItemID uint64) error {
-	// 获取背包物品
-	var bagItem model.RoleBag
-	if err := mysql.DB.Where("id = ? AND role_id = ?", bagItemID, roleID).First(&bagItem).Error; err != nil {
-		return errors.New("物品不存在")
-	}
-
-	// 获取道具基础信息
-	itemBase, err := s.GetItemBase(bagItem.ItemID)
-	if err != nil {
-		return errors.New("道具不存在")
-	}
-
-	if itemBase.Type != 2 {
-		return errors.New("该物品不是装备")
-	}
-
-	// 检查是否已有该类型装备
-	var existingEquip model.RoleEquipment
-	err = mysql.DB.Where("role_id = ? AND equip_type = ?", roleID, itemBase.EquipType).First(&existingEquip).Error
-
-	if err == nil && existingEquip.BagItemID != nil {
-		// 卸下原装备到背包
-		var oldBagItem model.RoleBag
-		mysql.DB.Where("id = ?", *existingEquip.BagItemID).First(&oldBagItem)
-		
-		// 放到原装备位置
-		existingEquip.BagItemID = nil
-		mysql.DB.Save(&existingEquip)
-		
-		// 如果原背包物品还在,放回背包
-		if oldBagItem.ID > 0 {
-			oldBagItem.GridIndex = bagItem.GridIndex
-			mysql.DB.Save(&oldBagItem)
-		}
-	}
-
-	// 创建新装备记录
-	equip := model.RoleEquipment{
-		RoleID:    roleID,
-		EquipType: itemBase.EquipType,
-		BagItemID: &bagItemID,
-		EquipTime: time.Now(),
-	}
-
-	// 删除背包物品
-	mysql.DB.Delete(&bagItem)
-
-	// 如果已有装备记录,更新;否则创建
-	if err == nil {
-		equip.ID = existingEquip.ID
-		return mysql.DB.Save(&equip).Error
-	}
-
-	return mysql.DB.Create(&equip).Error
-}
-
-// UnequipItem 卸下装备
-func (s *Service) UnequipItem(roleID uint64, equipType uint8) error {
-	// 获取装备记录
-	var equip model.RoleEquipment
-	if err := mysql.DB.Where("role_id = ? AND equip_type = ?", roleID, equipType).First(&equip).Error; err != nil {
-		return errors.New("该装备位为空")
-	}
-
-	if equip.BagItemID == nil {
-		return errors.New("该装备位为空")
-	}
-
-	// 查找空格子
-	emptySlot, err := s.findEmptySlot(roleID)
-	if err != nil {
-		return errors.New("背包已满")
-	}
-
-	// 获取背包物品
-	var bagItem model.RoleBag
-	if err := mysql.DB.Where("id = ?", *equip.BagItemID).First(&bagItem).Error; err != nil {
-		return errors.New("装备物品不存在")
-	}
-
-	// 移动到空格子
-	bagItem.GridIndex = emptySlot
-	if err := mysql.DB.Save(&bagItem).Error; err != nil {
-		return err
-	}
-
-	// 清空装备记录
-	equip.BagItemID = nil
-	return mysql.DB.Save(&equip).Error
-}
-
-// GetEquippedItems 获取已穿戴装备
-func (s *Service) GetEquippedItems(roleID uint64) ([]model.EquipmentWithBase, error) {
-	var equips []model.EquipmentWithBase
-	err := mysql.DB.Table("role_equipment").
-		Select("role_equipment.*, item_base.*").
-		Joins("LEFT JOIN item_base ON role_equipment.bag_item_id = role_bag.id AND role_bag.item_id = item_base.id").
-		Joins("LEFT JOIN role_bag ON role_equipment.bag_item_id = role_bag.id").
-		Where("role_equipment.role_id = ? AND role_equipment.bag_item_id IS NOT NULL", roleID).
-		Order("role_equipment.equip_type ASC").
-		Find(&equips).Error
-	return equips, err
-}
-
-// GetEquipmentByType 获取指定位置的装备
-func (s *Service) GetEquipmentByType(roleID uint64, equipType uint8) (*model.EquipmentWithBase, error) {
-	var equip model.EquipmentWithBase
-	err := mysql.DB.Table("role_equipment").
-		Select("role_equipment.*, item_base.*").
-		Joins("LEFT JOIN role_bag ON role_equipment.bag_item_id = role_bag.id").
-		Joins("LEFT JOIN item_base ON role_bag.item_id = item_base.id").
-		Where("role_equipment.role_id = ? AND role_equipment.equip_type = ?", roleID, equipType).
-		First(&equip).Error
-	if err != nil {
-		return nil, err
-	}
-	return &equip, nil
-}
-
-// GetEmptySlotCount 获取背包空位数
-func (s *Service) GetEmptySlotCount(roleID uint64) (int, error) {
-	var count int64
-	mysql.DB.Model(&model.RoleBag{}).Where("role_id = ?", roleID).Count(&count)
-	return BagMaxSlots - int(count), nil
-}
-
-// ClearBag 清空背包
-func (s *Service) ClearBag(roleID uint64) error {
-	return mysql.DB.Where("role_id = ?", roleID).Delete(&model.RoleBag{}).Error
+	return info
 }

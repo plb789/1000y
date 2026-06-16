@@ -15,7 +15,7 @@ if not exist "%BIN_DIR%" (
 cd /d "%SRV_DIR%"
 
 echo [1/4] Building DBService...
-go build -o "%BIN_DIR%\DBService.exe" DBService/main.go
+go build -o "%BIN_DIR%\DBService.exe" ./DBService
 if errorlevel 1 (
     echo Error: DBService build failed!
     pause
@@ -24,7 +24,7 @@ if errorlevel 1 (
 echo Success: DBService.exe
 
 echo [2/4] Building LoginService...
-go build -o "%BIN_DIR%\LoginService.exe" LoginService/main.go
+go build -o "%BIN_DIR%\LoginService.exe" ./LoginService
 if errorlevel 1 (
     echo Error: LoginService build failed!
     pause
@@ -33,7 +33,7 @@ if errorlevel 1 (
 echo Success: LoginService.exe
 
 echo [3/4] Building GameService...
-go build -o "%BIN_DIR%\GameService.exe" GameService/main.go
+go build -o "%BIN_DIR%\GameService.exe" ./GameService
 if errorlevel 1 (
     echo Error: GameService build failed!
     pause
@@ -42,7 +42,7 @@ if errorlevel 1 (
 echo Success: GameService.exe
 
 echo [4/4] Building GatewayService...
-go build -o "%BIN_DIR%\GatewayService.exe" GatewayService/main.go GatewayService/broadcast.go
+go build -o "%BIN_DIR%\GatewayService.exe" ./GatewayService
 if errorlevel 1 (
     echo Error: GatewayService build failed!
     pause

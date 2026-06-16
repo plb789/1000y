@@ -1,9 +1,10 @@
 package role
 
 import (
+	"encoding/json"
 	"errors"
-	"game-server/DBService/mysql"
-	"game-server/GameService/Role/model"
+	"fmt"
+	"game-server/Common"
 	"sync"
 	"time"
 )
@@ -30,91 +31,172 @@ func NewService() *Service {
 }
 
 // CreateRole 创建角色
-func (s *Service) CreateRole(req model.RoleCreateRequest) (*model.Role, error) {
+func (s *Service) CreateRole(req RoleCreateRequest) (*Role, error) {
 	// 检查角色名是否已存在
-	var count int64
-	mysql.DB.Model(&model.Role{}).Where("name = ?", req.Name).Count(&count)
-	if count > 0 {
+	existingRole, err := DBRoleGetByName(req.Name)
+	if err == nil && existingRole != nil && existingRole.ID > 0 {
 		return nil, errors.New("角色名已被占用")
 	}
 
 	// 检查账号是否已有角色(每个账号最多创建3个角色)
-	mysql.DB.Model(&model.Role{}).Where("account_id = ?", req.AccountID).Count(&count)
-	if count >= 3 {
+	roles, err := DBRoleList(req.AccountID)
+	if err != nil {
+		return nil, err
+	}
+	if len(roles) >= 3 {
 		return nil, errors.New("每个账号最多创建3个角色")
 	}
 
-	// 创建角色
-	role := &model.Role{
+	// 通过DBService API创建角色
+	roleID, err := Common.DBRoleCreate(Common.RoleCreateRequest{
 		AccountID:  req.AccountID,
 		Name:       req.Name,
-		Level:      1,
-		Exp:        0,
-		Gold:       100, // 初始金币
-		BindGold:   0,
-		Yuanbao:    0,
 		Gender:     req.Gender,
 		Appearance: req.Appearance,
-		Hp:         100,
-		MaxHp:      100,
-		Mp:         100,
-		MaxMp:      100,
-		Stamina:    100,
-		MaxStamina: 100,
-		Attack:     10,
-		Defense:    5,
-		Speed:      10,
-		Hit:        50,
-		Dodge:      10,
-		Crit:       5,
-		CritDamage: 150,
-		MapID:      1,
-		MapX:       100,
-		MapY:       100,
-		PkMode:     0,
-		PkValue:    0,
-		Status:     0,
-		CreateTime: time.Now(),
-	}
-
-	if err := mysql.DB.Create(role).Error; err != nil {
+	})
+	if err != nil {
 		return nil, err
 	}
 
-	return role, nil
+	// 获取创建的角色信息
+	return s.GetRoleByID(roleID)
 }
 
 // GetRoleByID 根据ID获取角色
-func (s *Service) GetRoleByID(roleID uint64) (*model.Role, error) {
-	var role model.Role
-	if err := mysql.DB.Where("id = ?", roleID).First(&role).Error; err != nil {
+func (s *Service) GetRoleByID(roleID uint64) (*Role, error) {
+	roleInfo, err := Common.DBRoleGet(roleID)
+	if err != nil {
 		return nil, err
 	}
-	return &role, nil
+
+	return &Role{
+		ID:         roleInfo.ID,
+		AccountID:  roleInfo.AccountID,
+		Name:       roleInfo.Name,
+		Level:      roleInfo.Level,
+		Exp:        roleInfo.Exp,
+		Gold:       roleInfo.Gold,
+		BindGold:   roleInfo.BindGold,
+		Yuanbao:    int(roleInfo.Yuanbao),
+		Gender:     roleInfo.Gender,
+		Appearance: 0,
+		Hp:         roleInfo.Hp,
+		MaxHp:      roleInfo.MaxHp,
+		Mp:         roleInfo.Mp,
+		MaxMp:      roleInfo.MaxMp,
+		Stamina:    100,
+		MaxStamina: 100,
+		Attack:     roleInfo.Attack,
+		Defense:    roleInfo.Defense,
+		Speed:      roleInfo.Speed,
+		Hit:        roleInfo.Hit,
+		Dodge:      roleInfo.Dodge,
+		Crit:       roleInfo.Crit,
+		CritDamage: roleInfo.CritDamage,
+		MapID:      int(roleInfo.MapID),
+		MapX:       roleInfo.MapX,
+		MapY:       roleInfo.MapY,
+		Status:     roleInfo.Status,
+	}, nil
 }
 
 // GetRoleByName 根据名称获取角色
-func (s *Service) GetRoleByName(name string) (*model.Role, error) {
-	var role model.Role
-	if err := mysql.DB.Where("name = ?", name).First(&role).Error; err != nil {
+func (s *Service) GetRoleByName(name string) (*Role, error) {
+	roleInfo, err := DBRoleGetByName(name)
+	if err != nil {
 		return nil, err
 	}
+	return s.GetRoleByID(roleInfo.ID)
+}
+
+// DBRoleGetByName 根据名称获取角色(ID用0表示不存在)
+type RoleNameInfo struct {
+	ID   uint64 `json:"id"`
+	Name string `json:"name"`
+}
+
+func DBRoleGetByName(name string) (*RoleNameInfo, error) {
+	resp, err := Common.DBPost("/api/role/get_by_name", map[string]string{"name": name})
+	if err != nil {
+		return nil, err
+	}
+
+	if resp["code"].(float64) != 0 {
+		return nil, fmt.Errorf("获取角色失败: %v", resp["msg"])
+	}
+
+	if resp["data"] == nil {
+		return &RoleNameInfo{ID: 0}, nil
+	}
+
+	data, _ := json.Marshal(resp["data"])
+	var role RoleNameInfo
+	json.Unmarshal(data, &role)
+
 	return &role, nil
 }
 
+// DBRoleList 获取账号下所有角色
+func DBRoleList(accountID uint64) ([]map[string]interface{}, error) {
+	resp, err := Common.DBPost("/api/role/list", map[string]uint64{"account_id": accountID})
+	if err != nil {
+		return nil, err
+	}
+
+	if resp["code"].(float64) != 0 {
+		return nil, fmt.Errorf("获取角色列表失败: %v", resp["msg"])
+	}
+
+	if resp["data"] == nil {
+		return []map[string]interface{}{}, nil
+	}
+
+	data, _ := json.Marshal(resp["data"])
+	var roles []map[string]interface{}
+	json.Unmarshal(data, &roles)
+
+	return roles, nil
+}
+
 // GetRolesByAccount 获取账号下所有角色
-func (s *Service) GetRolesByAccount(accountID uint64) ([]model.RoleBrief, error) {
-	var roles []model.RoleBrief
-	err := mysql.DB.Table("role").
-		Select("id, name, level, gender, appearance, map_id, title").
-		Where("account_id = ?", accountID).
-		Order("create_time DESC").
-		Find(&roles).Error
-	return roles, err
+func (s *Service) GetRolesByAccount(accountID uint64) ([]RoleBrief, error) {
+	roles, err := DBRoleList(accountID)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]RoleBrief, 0, len(roles))
+	for _, r := range roles {
+		role := RoleBrief{}
+		if v, ok := r["id"].(float64); ok {
+			role.ID = uint64(v)
+		}
+		if v, ok := r["name"].(string); ok {
+			role.Name = v
+		}
+		if v, ok := r["level"].(float64); ok {
+			role.Level = uint32(v)
+		}
+		if v, ok := r["gender"].(float64); ok {
+			role.Gender = uint8(v)
+		}
+		if v, ok := r["appearance"].(float64); ok {
+			role.Appearance = uint32(v)
+		}
+		if v, ok := r["map_id"].(float64); ok {
+			role.MapID = int(v)
+		}
+		if v, ok := r["title"].(string); ok {
+			role.Title = v
+		}
+		result = append(result, role)
+	}
+
+	return result, nil
 }
 
 // UpdateRole 更新角色信息
-func (s *Service) UpdateRole(roleID uint64, req model.RoleUpdateRequest) error {
+func (s *Service) UpdateRole(roleID uint64, req RoleUpdateRequest) error {
 	updates := make(map[string]interface{})
 	if req.Title != "" {
 		updates["title"] = req.Title
@@ -133,210 +215,124 @@ func (s *Service) UpdateRole(roleID uint64, req model.RoleUpdateRequest) error {
 		return errors.New("没有需要更新的字段")
 	}
 
-	return mysql.DB.Model(&model.Role{}).Where("id = ?", roleID).Updates(updates).Error
+	// 通过DBService API更新
+	resp, err := Common.DBPost("/api/role/update", map[string]interface{}{
+		"id":      roleID,
+		"updates": updates,
+	})
+	if err != nil {
+		return err
+	}
+
+	if resp["code"].(float64) != 0 {
+		return fmt.Errorf("更新角色失败: %v", resp["msg"])
+	}
+
+	return nil
 }
 
 // UpdateRoleAttributes 批量更新角色属性
-func (s *Service) UpdateRoleAttributes(roleID uint64, req model.RoleAttributeRequest) error {
-	updates := make(map[string]interface{})
-	
+func (s *Service) UpdateRoleAttributes(roleID uint64, req RoleAttributeRequest) error {
+	dbReq := Common.RoleAttributeRequest{}
 	if req.Hp != nil {
-		updates["hp"] = *req.Hp
+		dbReq.Hp = req.Hp
 	}
 	if req.MaxHp != nil {
-		updates["max_hp"] = *req.MaxHp
+		dbReq.MaxHp = req.MaxHp
 	}
 	if req.Mp != nil {
-		updates["mp"] = *req.Mp
+		dbReq.Mp = req.Mp
 	}
 	if req.MaxMp != nil {
-		updates["max_mp"] = *req.MaxMp
+		dbReq.MaxMp = req.MaxMp
 	}
 	if req.Attack != nil {
-		updates["attack"] = *req.Attack
+		dbReq.Attack = req.Attack
 	}
 	if req.Defense != nil {
-		updates["defense"] = *req.Defense
+		dbReq.Defense = req.Defense
 	}
 	if req.Speed != nil {
-		updates["speed"] = *req.Speed
+		dbReq.Speed = req.Speed
 	}
 	if req.Hit != nil {
-		updates["hit"] = *req.Hit
+		dbReq.Hit = req.Hit
 	}
 	if req.Dodge != nil {
-		updates["dodge"] = *req.Dodge
+		dbReq.Dodge = req.Dodge
 	}
 	if req.Crit != nil {
-		updates["crit"] = *req.Crit
+		dbReq.Crit = req.Crit
 	}
 	if req.Gold != nil {
-		updates["gold"] = *req.Gold
+		gold := int64(*req.Gold)
+		dbReq.Gold = &gold
 	}
 	if req.BindGold != nil {
-		updates["bind_gold"] = *req.BindGold
+		bindGold := int64(*req.BindGold)
+		dbReq.BindGold = &bindGold
 	}
 	if req.Yuanbao != nil {
-		updates["yuanbao"] = *req.Yuanbao
+		yuanbao := int64(*req.Yuanbao)
+		dbReq.Yuanbao = &yuanbao
 	}
 
-	if len(updates) == 0 {
-		return errors.New("没有需要更新的属性")
-	}
-
-	return mysql.DB.Model(&model.Role{}).Where("id = ?", roleID).Updates(updates).Error
+	return Common.DBRoleUpdateAttributes(roleID, dbReq)
 }
 
 // DeleteRole 删除角色
 func (s *Service) DeleteRole(roleID uint64, accountID uint64) error {
-	result := mysql.DB.Where("id = ? AND account_id = ?", roleID, accountID).Delete(&model.Role{})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return errors.New("角色不存在或无权删除")
-	}
-	return nil
+	return Common.DBRoleDelete(roleID, accountID)
 }
 
-// AddExp 增加经验值(自动处理升级)
+// AddExp 增加经验值(自动处理升级) - 游戏逻辑在GameService中处理
 func (s *Service) AddExp(roleID uint64, exp int64) (bool, uint32, int64, error) {
-	var role model.Role
-	if err := mysql.DB.Where("id = ?", roleID).First(&role).Error; err != nil {
-		return false, 0, 0, err
-	}
-
-	leveledUp := false
-	currentLevel := role.Level
-
-	role.Exp += exp
-
-	// 计算升级所需经验: level * 100 * level
-	for {
-		expNeeded := int64(currentLevel) * 100 * currentLevel
-		if role.Exp >= expNeeded && currentLevel < 200 { // 最高200级
-			role.Exp -= expNeeded
-			currentLevel++
-			leveledUp = true
-		} else {
-			break
-		}
-	}
-
-	// 更新角色
-	role.Level = currentLevel
-	if err := mysql.DB.Save(&role).Error; err != nil {
-		return false, 0, 0, err
-	}
-
-	return leveledUp, currentLevel, role.Exp, nil
+	return Common.DBRoleAddExp(roleID, exp)
 }
 
 // AddGold 增加金币
 func (s *Service) AddGold(roleID uint64, gold int64) error {
-	return mysql.DB.Model(&model.Role{}).Where("id = ?", roleID).
-		Update("gold", mysql.DB.Raw("gold + ?", gold)).Error
+	return Common.DBRoleAddGold(roleID, gold)
 }
 
 // ConsumeGold 消耗金币
 func (s *Service) ConsumeGold(roleID uint64, gold int64) error {
-	// 先检查金币是否足够
-	var role model.Role
-	if err := mysql.DB.Where("id = ?", roleID).First(&role).Error; err != nil {
-		return err
-	}
-	if role.Gold < gold {
-		return errors.New("金币不足")
-	}
-	return mysql.DB.Model(&model.Role{}).Where("id = ?", roleID).
-		Update("gold", mysql.DB.Raw("gold - ?", gold)).Error
+	return Common.DBRoleConsumeGold(roleID, gold)
 }
 
 // ChangeHP 改变生命值
 func (s *Service) ChangeHP(roleID uint64, change int) (int, error) {
-	var role model.Role
-	if err := mysql.DB.Where("id = ?", roleID).First(&role).Error; err != nil {
-		return 0, err
-	}
-
-	role.Hp += change
-	if role.Hp > role.MaxHp {
-		role.Hp = role.MaxHp
-	}
-	if role.Hp < 0 {
-		role.Hp = 0
-	}
-
-	if err := mysql.DB.Save(&role).Error; err != nil {
-		return 0, err
-	}
-	return role.Hp, nil
+	return Common.DBRoleChangeHP(roleID, change)
 }
 
 // ChangeMP 改变内力值
 func (s *Service) ChangeMP(roleID uint64, change int) (int, error) {
-	var role model.Role
-	if err := mysql.DB.Where("id = ?", roleID).First(&role).Error; err != nil {
-		return 0, err
-	}
-
-	role.Mp += change
-	if role.Mp > role.MaxMp {
-		role.Mp = role.MaxMp
-	}
-	if role.Mp < 0 {
-		role.Mp = 0
-	}
-
-	if err := mysql.DB.Save(&role).Error; err != nil {
-		return 0, err
-	}
-	return role.Mp, nil
+	return Common.DBRoleChangeMP(roleID, change)
 }
 
 // ChangeStamina 改变体力值
 func (s *Service) ChangeStamina(roleID uint64, change int) (int, error) {
-	var role model.Role
-	if err := mysql.DB.Where("id = ?", roleID).First(&role).Error; err != nil {
-		return 0, err
-	}
-
-	role.Stamina += change
-	if role.Stamina > role.MaxStamina {
-		role.Stamina = role.MaxStamina
-	}
-	if role.Stamina < 0 {
-		role.Stamina = 0
-	}
-
-	if err := mysql.DB.Save(&role).Error; err != nil {
-		return 0, err
-	}
-	return role.Stamina, nil
+	return Common.DBRoleChangeStamina(roleID, change)
 }
 
 // ChangeMap 切换地图
 func (s *Service) ChangeMap(roleID uint64, mapID int, x int, y int) error {
-	return mysql.DB.Model(&model.Role{}).Where("id = ?", roleID).
-		Updates(map[string]interface{}{
-			"map_id": mapID,
-			"map_x":  x,
-			"map_y":  y,
-		}).Error
+	return Common.DBRoleChangeMap(roleID, mapID, x, y)
 }
 
 // UpdatePosition 更新位置
 func (s *Service) UpdatePosition(roleID uint64, x int, y int) error {
-	return mysql.DB.Model(&model.Role{}).Where("id = ?", roleID).
-		Updates(map[string]interface{}{
-			"map_x": x,
-			"map_y": y,
-		}).Error
+	// 先获取当前角色信息
+	role, err := s.GetRoleByID(roleID)
+	if err != nil {
+		return err
+	}
+	return Common.DBRoleChangeMap(roleID, role.MapID, x, y)
 }
 
 // SetStatus 设置角色状态
 func (s *Service) SetStatus(roleID uint64, status uint8) error {
-	return mysql.DB.Model(&model.Role{}).Where("id = ?", roleID).Update("status", status).Error
+	return Common.DBRoleSetStatus(roleID, status)
 }
 
 // SetPKMode 设置PK模式
@@ -344,65 +340,52 @@ func (s *Service) SetPKMode(roleID uint64, mode uint8) error {
 	if mode > 3 {
 		return errors.New("无效的PK模式")
 	}
-	return mysql.DB.Model(&model.Role{}).Where("id = ?", roleID).Update("pk_mode", mode).Error
+	return Common.DBRoleSetPKMode(roleID, mode)
 }
 
 // UpdatePkValue 更新善恶值
 func (s *Service) UpdatePkValue(roleID uint64, change int) error {
-	return mysql.DB.Model(&model.Role{}).Where("id = ?", roleID).
-		Update("pk_value", mysql.DB.Raw("pk_value + ?", change)).Error
+	return Common.DBRoleUpdatePKValue(roleID, change)
 }
 
 // RecordKill 记录击杀
 func (s *Service) RecordKill(roleID uint64) error {
-	return mysql.DB.Model(&model.Role{}).Where("id = ?", roleID).
-		Updates(map[string]interface{}{
-			"kill_count": mysql.DB.Raw("kill_count + 1"),
-			"pk_value":   mysql.DB.Raw("pk_value + 50"), // 增加50点PK值
-		}).Error
+	return Common.DBRoleRecordKill(roleID)
 }
 
 // RecordDeath 记录死亡
 func (s *Service) RecordDeath(roleID uint64) error {
-	return mysql.DB.Model(&model.Role{}).Where("id = ?", roleID).
-		Update("death_count", mysql.DB.Raw("death_count + 1")).Error
+	return Common.DBRoleRecordDeath(roleID)
 }
 
 // FullRecovery 完全恢复(满血满蓝)
 func (s *Service) FullRecovery(roleID uint64) error {
-	return mysql.DB.Model(&model.Role{}).Where("id = ?", roleID).
-		Updates(map[string]interface{}{
-			"hp":      mysql.DB.Raw("max_hp"),
-			"mp":      mysql.DB.Raw("max_mp"),
-			"stamina": mysql.DB.Raw("max_stamina"),
-		}).Error
+	return Common.DBRoleFullRecovery(roleID)
 }
 
 // SaveRole 保存角色(手动存档)
 func (s *Service) SaveRole(roleID uint64) error {
-	return mysql.DB.Model(&model.Role{}).Where("id = ?", roleID).
-		Update("last_save_time", time.Now()).Error
+	// 通过DBService记录保存时间
+	resp, err := Common.DBPost("/api/role/save", map[string]uint64{"id": roleID})
+	if err != nil {
+		return err
+	}
+
+	if resp["code"].(float64) != 0 {
+		return fmt.Errorf("保存角色失败: %v", resp["msg"])
+	}
+
+	return nil
 }
 
 // LoginRecord 记录登录
 func (s *Service) LoginRecord(roleID uint64, ip string) error {
-	return mysql.DB.Model(&model.Role{}).Where("id = ?", roleID).
-		Updates(map[string]interface{}{
-			"status":       3, // 在线状态
-			"last_login":   time.Now(),
-			"last_login_ip": ip,
-		}).Error
+	return Common.DBRoleLoginRecord(roleID, ip)
 }
 
 // LogoutRecord 记录登出
 func (s *Service) LogoutRecord(roleID uint64) error {
-	now := time.Now()
-	return mysql.DB.Model(&model.Role{}).Where("id = ?", roleID).
-		Updates(map[string]interface{}{
-			"status":       0,
-			"logout_time":  now,
-			"last_save_time": now,
-		}).Error
+	return Common.DBRoleLogoutRecord(roleID)
 }
 
 // OnlinePlayerMgr 在线玩家管理

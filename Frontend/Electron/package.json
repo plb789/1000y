@@ -5,7 +5,7 @@
   "scripts": {
     "start": "electron .",
     "minify": "terser Game.js -o dist/Game.js --compress --mangle",
-    "package": "node -e \"const fs=require('fs');if(!fs.existsSync('dist'))fs.mkdirSync('dist');['main.js','preload.js','server.js','index.html'].forEach(f=>fs.copyFileSync(f,'dist/'+f));require('child_process').execSync('copy /Y Res dist\\\\Res');\" && npm run minify && electron-packager dist 千年江湖 --win --out=../Build --asar && node -e \"require('child_process').execSync('rd /s /q dist');\" || node -e \"try{require('child_process').execSync('rd /s /q dist')}catch(e){}\""
+    "package": "node -e \"const fs=require('fs');const path=require('path');function copyDir(src,dst){if(!fs.existsSync(dst))fs.mkdirSync(dst,{recursive:true});fs.readdirSync(src).forEach(f=>{const sf=path.join(src,f);const df=path.join(dst,f);if(fs.statSync(sf).isDirectory())copyDir(sf,df);else fs.copyFileSync(sf,df);});}if(!fs.existsSync('dist'))fs.mkdirSync('dist');['Game.js','main.js','preload.js','server.js','index.html','package.json'].forEach(f=>fs.copyFileSync(f,'dist/'+f));copyDir('../Res','dist/Res');copyDir('../Core','dist/Core');copyDir('../GameLogic','dist/GameLogic');copyDir('../Protocol','dist/Protocol');copyDir('../ResourceLoad','dist/ResourceLoad');\" && npm run minify && electron-packager dist 千年江湖 --win --out=../Build --asar && node -e \"fs.rmSync('dist',{recursive:true,force:true});\""
   },
   "devDependencies": {
     "electron": "^28.0.0",

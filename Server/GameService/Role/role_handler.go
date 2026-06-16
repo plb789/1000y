@@ -2,7 +2,6 @@ package role
 
 import (
 	common "game-server/Common"
-	"game-server/GameService/Role/model"
 	"net/http"
 	"strconv"
 
@@ -67,7 +66,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 
 // CreateRole 创建角色
 func (h *Handler) CreateRole(c *gin.Context) {
-	var req model.RoleCreateRequest
+	var req RoleCreateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "请求参数错误: " + err.Error()})
 		return
@@ -144,7 +143,7 @@ func (h *Handler) UpdateRole(c *gin.Context) {
 		return
 	}
 
-	var req model.RoleUpdateRequest
+	var req RoleUpdateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "请求参数错误"})
 		return
@@ -167,7 +166,7 @@ func (h *Handler) UpdateRoleAttributes(c *gin.Context) {
 		return
 	}
 
-	var req model.RoleAttributeRequest
+	var req RoleAttributeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "请求参数错误"})
 		return

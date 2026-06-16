@@ -1,10 +1,9 @@
 package main
 
 import (
+	"fmt"
 	common "game-server/Common"
-	"game-server/DBService/mysql"
-	"game-server/DBService/redis"
-	"game-server/LoginService/auth"
+	auth "game-server/LoginService/Auth"
 	"log"
 	"net/http"
 
@@ -13,17 +12,12 @@ import (
 
 func main() {
 	// 加载全局配置
-	if err := common.LoadConfig("../../Config/Login.yaml"); err != nil {
+	if err := common.LoadConfig("./Config/Login.yaml"); err != nil {
 		log.Fatalf("加载配置失败: %v", err)
 	}
 
-	// 初始化数据库
-	if err := mysql.Init(); err != nil {
-		log.Fatalf("数据库初始化失败: %v", err)
-	}
-
-	// 初始化Redis
-	redis.Init()
+	// 初始化服务客户端
+	common.InitServiceClients()
 
 	r := gin.Default()
 
@@ -52,10 +46,16 @@ func main() {
 
 	log.Println("=================================")
 	log.Println("  千年江湖 - 登录微服务启动")
-	log.Println("  端口: 8081")
+
+	port := common.AppConfig.HTTPPort
+	if port == 0 {
+		port = 8081
+	}
+
+	log.Printf("  端口: %d", port)
 	log.Println("=================================")
 
-	if err := http.ListenAndServe(":8081", r); err != nil {
+	if err := http.ListenAndServe(fmt.Sprintf(":%d", port), r); err != nil {
 		log.Fatalf("服务启动失败: %v", err)
 	}
 }

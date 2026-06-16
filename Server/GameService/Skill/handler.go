@@ -1,7 +1,6 @@
 package skill
 
 import (
-	"game-server/GameService/Skill/model"
 	"net/http"
 	"strconv"
 
@@ -25,24 +24,24 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	skillGroup := r.Group("/api/skill")
 	{
 		// 武学基础信息
-		skillGroup.GET("/base/list", h.GetAllSkillBase)           // 获取所有武学列表
-		skillGroup.GET("/base/type/:type", h.GetSkillBaseByType)   // 获取指定类型武学
-		skillGroup.GET("/base/:id", h.GetSkillBase)               // 获取武学详情
+		skillGroup.GET("/base/list", h.GetAllSkillBase)          // 获取所有武学列表
+		skillGroup.GET("/base/type/:type", h.GetSkillBaseByType) // 获取指定类型武学
+		skillGroup.GET("/base/:id", h.GetSkillBase)              // 获取武学详情
 
 		// 角色武学
-		skillGroup.GET("/role/:roleId/list", h.GetRoleSkills)        // 获取角色所有武学
-		skillGroup.GET("/role/:roleId/type/:type", h.GetRoleSkillsByType) // 获取角色指定类型武学
-		skillGroup.GET("/role/:roleId/equipped", h.GetEquippedSkills)    // 获取已装备武学
-		skillGroup.GET("/role/:roleId/bonus", h.GetSkillBonus)           // 获取武学加成
+		skillGroup.GET("/role/:roleId/list", h.GetRoleSkills)                        // 获取角色所有武学
+		skillGroup.GET("/role/:roleId/type/:type", h.GetRoleSkillsByType)            // 获取角色指定类型武学
+		skillGroup.GET("/role/:roleId/equipped", h.GetEquippedSkills)                // 获取已装备武学
+		skillGroup.GET("/role/:roleId/bonus", h.GetSkillBonus)                       // 获取武学加成
 		skillGroup.GET("/role/:roleId/exp_progress/:skillId", h.GetSkillExpProgress) // 获取熟练度进度
 
 		// 武学操作
-		skillGroup.POST("/role/:roleId/learn", h.LearnSkill)       // 学习武学
+		skillGroup.POST("/role/:roleId/learn", h.LearnSkill)     // 学习武学
 		skillGroup.POST("/role/:roleId/add_exp", h.AddExp)       // 增加熟练度
-		skillGroup.POST("/role/:roleId/upgrade", h.UpgradeSkill)  // 升级武学
-		skillGroup.POST("/role/:roleId/equip", h.EquipSkill)      // 装备武学
-		skillGroup.POST("/role/:roleId/unequip", h.UnequipSkill)  // 卸下武学
-		skillGroup.POST("/role/:roleId/forget", h.ForgetSkill)    // 遗忘武学
+		skillGroup.POST("/role/:roleId/upgrade", h.UpgradeSkill) // 升级武学
+		skillGroup.POST("/role/:roleId/equip", h.EquipSkill)     // 装备武学
+		skillGroup.POST("/role/:roleId/unequip", h.UnequipSkill) // 卸下武学
+		skillGroup.POST("/role/:roleId/forget", h.ForgetSkill)   // 遗忘武学
 	}
 }
 
@@ -201,7 +200,7 @@ func (h *Handler) GetSkillExpProgress(c *gin.Context) {
 
 // LearnSkillRequest 学习武学请求
 type LearnSkillRequest struct {
-	SkillID uint32 `json:"skill_id" binding:"required"`
+	SkillID   uint32 `json:"skill_id" binding:"required"`
 	RoleLevel uint32 `json:"role_level"` // 角色等级用于校验
 }
 
@@ -267,8 +266,8 @@ func (h *Handler) AddExp(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"code":      200,
-		"msg":       "success",
+		"code":       200,
+		"msg":        "success",
 		"leveled_up": leveledUp,
 		"new_level":  newLevel,
 	})
@@ -395,7 +394,7 @@ func (h *Handler) SkillTypeList(c *gin.Context) {
 
 // SkillInfoWithTypeName 武学信息(带类型名称)
 type SkillInfoWithTypeName struct {
-	model.SkillBase
+	SkillBase
 	TypeName    string `json:"type_name"`
 	SubTypeName string `json:"sub_type_name"`
 }
@@ -412,8 +411,8 @@ func (h *Handler) GetAllSkillBaseWithTypeName(c *gin.Context) {
 	for i, skill := range skills {
 		result[i] = SkillInfoWithTypeName{
 			SkillBase:   skill,
-			TypeName:    model.SkillTypeName[skill.Type],
-			SubTypeName: model.SkillSubTypeName[skill.SubType],
+			TypeName:    SkillTypeName[skill.Type],
+			SubTypeName: SkillSubTypeName[skill.SubType],
 		}
 	}
 

@@ -2,7 +2,7 @@ package gamemap
 
 import (
 	"errors"
-	"game-server/DBService/mysql"
+	common "game-server/Common"
 	"sync"
 )
 
@@ -61,9 +61,25 @@ func NewService() *Service {
 
 // GetMapBase 获取地图基础信息
 func (s *Service) GetMapBase(mapID uint32) (*MapBase, error) {
-	var mapBase MapBase
-	if err := mysql.DB.Where("id = ?", mapID).First(&mapBase).Error; err != nil {
-		return nil, err
+	config := common.GetMapConfig(mapID)
+	if config == nil {
+		return nil, errors.New("地图不存在")
+	}
+	mapBase := MapBase{
+		ID:          config.ID,
+		Name:        config.Name,
+		Width:       config.Width,
+		Height:      config.Height,
+		TileWidth:   config.TileWidth,
+		TileHeight:  config.TileHeight,
+		MapFile:     config.MapFile,
+		Music:       config.Music,
+		PkAllowed:   config.PkAllowed,
+		ReviveMapID: config.ReviveMapID,
+		ReviveX:     config.ReviveX,
+		ReviveY:     config.ReviveY,
+		LevelReq:    config.LevelReq,
+		MinimapFile: config.MinimapFile,
 	}
 	return &mapBase, nil
 }
@@ -71,11 +87,17 @@ func (s *Service) GetMapBase(mapID uint32) (*MapBase, error) {
 // GetAllMaps 获取所有地图
 func (s *Service) GetAllMaps() ([]MapBrief, error) {
 	var maps []MapBrief
-	err := mysql.DB.Model(&MapBase{}).
-		Select("id, name, width, height, level_req, pk_allowed").
-		Order("id ASC").
-		Find(&maps).Error
-	return maps, err
+	for _, m := range common.GameConfig.Maps {
+		maps = append(maps, MapBrief{
+			ID:        m.ID,
+			Name:      m.Name,
+			Width:     m.Width,
+			Height:    m.Height,
+			LevelReq:  m.LevelReq,
+			PkAllowed: m.PkAllowed,
+		})
+	}
+	return maps, nil
 }
 
 // LoadMap 加载地图到内存
@@ -166,16 +188,56 @@ func (s *Service) SetCollision(mapID uint32, tileX, tileY int, blocked bool) err
 
 // GetNPCsByMap 获取地图上的NPC列表
 func (s *Service) GetNPCsByMap(mapID uint32) ([]NPCBase, error) {
+	configNPCs := common.GetNPCsByMap(mapID)
 	var npcs []NPCBase
-	err := mysql.DB.Where("map_id = ?", mapID).Find(&npcs).Error
-	return npcs, err
+	for _, n := range configNPCs {
+		npcs = append(npcs, NPCBase{
+			ID:         n.ID,
+			Name:       n.Name,
+			Type:       n.Type,
+			MapID:      n.MapID,
+			X:          n.X,
+			Y:          n.Y,
+			Face:       n.Face,
+			SpriteID:   n.SpriteID,
+			DialogText: n.DialogText,
+			ShopID:     n.ShopID,
+		})
+	}
+	return npcs, nil
 }
 
 // GetMonstersByMap 获取地图上的怪物列表
 func (s *Service) GetMonstersByMap(mapID uint32) ([]MonsterBase, error) {
 	var monsters []MonsterBase
-	err := mysql.DB.Where("map_id = ?", mapID).Find(&monsters).Error
-	return monsters, err
+	for _, m := range common.GameConfig.Monsters {
+		if m.MapID == mapID {
+			monsters = append(monsters, MonsterBase{
+				ID:          m.ID,
+				Name:        m.Name,
+				Level:       m.Level,
+				Type:        m.Type,
+				MapID:       m.MapID,
+				Hp:          m.Hp,
+				Attack:      m.Attack,
+				Defense:     m.Defense,
+				Speed:       m.Speed,
+				Hit:         m.Hit,
+				Dodge:       m.Dodge,
+				Crit:        m.Crit,
+				AIType:      m.AIType,
+				AttackRange: m.AttackRange,
+				ChaseRange:  m.ChaseRange,
+				GoldMin:     m.GoldMin,
+				GoldMax:     m.GoldMax,
+				Exp:         m.Exp,
+				DropGroupID: m.DropGroupID,
+				SpriteID:    m.SpriteID,
+				RespawnTime: m.RespawnTime,
+			})
+		}
+	}
+	return monsters, nil
 }
 
 // EnterMap 角色进入地图

@@ -1,1 +1,17 @@
+# GameService 配置文件
+# 配置数据已迁移到 JSON 文件，不再需要直接连接数据库
+
 map_path: "../../Res/Map/001.map"
+http_port: 8082
+
+# GameService实例配置
+instance_id: 1                    # 实例ID，每个实例必须唯一
+handled_maps: [1, 2, 3]            # 该实例处理的地图ID列表
+register_to_registry: true        # 是否注册到服务发现中心
+
+# 服务地址配置
+services:
+  db_service: "http://localhost:8083"
+  login_service: "http://localhost:8081"
+  game_service: "http://localhost:8082"
+  registry_service: "http://localhost:8083"  # 服务注册中心地址

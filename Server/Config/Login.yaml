@@ -1,1 +1,7 @@
 token_expire: 3600
+http_port: 8081
+
+services:
+  db_service: "http://localhost:8083"
+  login_service: "http://localhost:8081"
+  game_service: "http://localhost:8082"

@@ -3,7 +3,7 @@ package common
 import (
 	"errors"
 	"fmt"
-	"game-server/DBService/redis"
+	"game-server/DBService/Redis"
 	"os"
 	"strings"
 	"time"
@@ -106,19 +106,19 @@ func ValidateTokenSimple(tokenStr string) (*JWTClaims, error) {
 // SetTokenToRedis 将Token存储到Redis
 func SetTokenToRedis(uid uint64, token string, expire time.Duration) error {
 	key := fmt.Sprintf("token:%d", uid)
-	return redis.Set(key, token, expire)
+	return Redis.Set(key, token, expire)
 }
 
 // GetTokenFromRedis 从Redis获取Token
 func GetTokenFromRedis(uid uint64) (string, error) {
 	key := fmt.Sprintf("token:%d", uid)
-	return redis.Get(key)
+	return Redis.Get(key)
 }
 
 // DeleteTokenFromRedis 删除Redis中的Token
 func DeleteTokenFromRedis(uid uint64) error {
 	key := fmt.Sprintf("token:%d", uid)
-	return redis.Del(key)
+	return Redis.Del(key)
 }
 
 // IsTokenValid 检查Token是否有效(Redis中是否存在)
