@@ -246,13 +246,13 @@ class MapEngine {
     const canvasW = this.canvas.width;
     const canvasH = this.canvas.height;
     
-    // 目标相机位置
+    // 目标相机位置（玩家居中）
     const targetOffsetX = this.player.pixelX - canvasW / 2 + this.tileSize / 2;
     const targetOffsetY = this.player.pixelY - canvasH / 2 + this.tileSize / 2;
     
-    // 平滑插值
-    this.camera.offsetX += (targetOffsetX - this.camera.offsetX) * 0.2;
-    this.camera.offsetY += (targetOffsetY - this.camera.offsetY) * 0.2;
+    // 平滑插值（使用更大的系数使跟随更紧密）
+    this.camera.offsetX += (targetOffsetX - this.camera.offsetX) * 0.5;
+    this.camera.offsetY += (targetOffsetY - this.camera.offsetY) * 0.5;
     
     // 限制边界
     this.camera.offsetX = Math.max(0, Math.min(this.camera.offsetX, mapW - canvasW));
