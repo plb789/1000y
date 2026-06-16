@@ -37,6 +37,9 @@ class Game {
     // 技能冷却
     this.skillCooldowns = new Map();
     
+    // 用于其他玩家移动的时间追踪
+    this.lastPlayerRenderTime = performance.now();
+    
     // UI元素
     this.ui = {
       loadingOverlay: document.getElementById('loadingOverlay'),
@@ -438,14 +441,13 @@ class Game {
       console.log('其他玩家移动:', data.role_id, '->', data.x, data.y);
       const player = this.players.get(data.role_id);
       if (player) {
-        // 保存上次位置用于平滑插值
-        player.lastX = player.x;
-        player.lastY = player.y;
         const tileSize = this.mapEngine?.tileSize || 48;
-        // 关键：保存旧位置的屏幕坐标作为插值起点
-        player.lastScreenX = player.x * tileSize;
-        player.lastScreenY = player.y * tileSize;
-        // 然后更新到新位置
+        // 关键：保存当前显示的屏幕位置作为插值起点（而不是新位置）
+        if (player.lastScreenX === undefined) {
+          player.lastScreenX = player.x * tileSize;
+          player.lastScreenY = player.y * tileSize;
+        }
+        // 更新到新位置
         player.x = data.x;
         player.y = data.y;
       } else {
@@ -713,15 +715,53 @@ class Game {
   
   startGameLoop() {
     const loop = () => {
+      // 计算与上一帧的时间差
+      const currentTime = performance.now();
+      const deltaTime = currentTime - this.lastPlayerRenderTime;
+      this.lastPlayerRenderTime = currentTime;
+      
       if (this.state === 'playing') {
         // 更新技能冷却UI
         this.updateSkillUI();
+        
+        // 更新其他玩家的平滑移动
+        this.updateOtherPlayers(deltaTime);
       }
       
       requestAnimationFrame(loop);
     };
     
     loop();
+  }
+  
+  // 更新其他玩家的平滑移动（基于时间）
+  updateOtherPlayers(deltaTime) {
+    const tileSize = this.mapEngine?.tileSize || 48;
+    const baseSpeed = 6; // 基准速度：6像素/16.67ms (60fps)
+    const moveDistance = (baseSpeed * deltaTime) / (1000 / 60);
+    
+    this.players.forEach(player => {
+      if (player.lastScreenX === undefined) {
+        player.lastScreenX = player.x * tileSize;
+        player.lastScreenY = player.y * tileSize;
+      }
+      
+      const targetScreenX = player.x * tileSize;
+      const targetScreenY = player.y * tileSize;
+      const dx = targetScreenX - player.lastScreenX;
+      const dy = targetScreenY - player.lastScreenY;
+      const dist = Math.hypot(dx, dy);
+      
+      if (dist <= moveDistance) {
+        // 到达目标
+        player.lastScreenX = targetScreenX;
+        player.lastScreenY = targetScreenY;
+      } else {
+        // 继续移动
+        player.lastScreenX += (dx / dist) * moveDistance;
+        player.lastScreenY += (dy / dist) * moveDistance;
+      }
+    });
   }
   
   renderPlayers() {
@@ -737,37 +777,14 @@ class Game {
     this.players.forEach(player => {
       const tileSize = this.mapEngine.tileSize || 48;
       
-      // 平滑移动：使用固定步长移动到目标位置（与自己的移动速度一致）
+      // 直接使用updateOtherPlayers计算好的屏幕位置
       let screenX, screenY;
-      const targetScreenX = player.x * tileSize;
-      const targetScreenY = player.y * tileSize;
-      
       if (player.lastScreenX !== undefined && player.lastScreenY !== undefined) {
-        // 计算到目标的距离和方向
-        const dx = targetScreenX - player.lastScreenX;
-        const dy = targetScreenY - player.lastScreenY;
-        const dist = Math.hypot(dx, dy);
-        
-        if (dist < 1) {
-          // 已经到达目标位置
-          screenX = targetScreenX;
-          screenY = targetScreenY;
-        } else {
-          // 以与自己相同的速度移动（6像素/帧）
-          const moveSpeed = 6; // 与玩家移动速度一致
-          screenX = player.lastScreenX + (dx / dist) * moveSpeed;
-          screenY = player.lastScreenY + (dy / dist) * moveSpeed;
-        }
-        
-        // 更新上次屏幕位置
-        player.lastScreenX = screenX;
-        player.lastScreenY = screenY;
+        screenX = player.lastScreenX;
+        screenY = player.lastScreenY;
       } else {
-        // 初始位置或没有上次位置
-        screenX = targetScreenX;
-        screenY = targetScreenY;
-        player.lastScreenX = screenX;
-        player.lastScreenY = screenY;
+        screenX = player.x * tileSize;
+        screenY = player.y * tileSize;
       }
       
       // 简单绘制为绿色圆形

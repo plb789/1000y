@@ -51,6 +51,7 @@ class MapEngine {
     this.frameCount = 0;
     this.lastFpsTime = performance.now();
     this.lastRenderTime = performance.now(); // 用于帧率锁定
+    this.lastMoveTime = performance.now();   // 用于基于时间的移动
     this.onFpsUpdate = null; // FPS 更新回调
 
     this.bindEvent();
@@ -201,9 +202,14 @@ class MapEngine {
     });
   }
 
-  updatePlayerMove() {
+  updatePlayerMove(deltaTime) {
     const path = this.player.movePath;
     if (path.length === 0) return;
+
+    // 基于时间的移动：计算本次应该移动的距离
+    // speed 是 6 像素/16.67ms (60fps)，转换为当前deltaTime对应的距离
+    const speed = this.player.speed; // 像素/16.67ms
+    const moveDistance = (speed * deltaTime) / (1000 / 60);
 
     const next = path[0];
     const targetPos = this.tile2Pixel(next.x, next.y);
@@ -211,7 +217,8 @@ class MapEngine {
     const dy = targetPos.y - this.player.pixelY;
     const dist = Math.hypot(dx, dy);
 
-    if (dist < this.player.speed) {
+    if (dist <= moveDistance) {
+      // 到达目标点
       this.player.pixelX = targetPos.x;
       this.player.pixelY = targetPos.y;
       this.player.x = next.x;
@@ -230,14 +237,30 @@ class MapEngine {
       // 检测传送/事件区域
       this.checkEventArea();
       
-      // 到达目标格子后继续使用平滑相机更新，避免硬跳转导致抖动
-      this.updateCameraSmooth();
+      // 到达目标格子后直接更新相机到目标位置，避免插值延迟
+      this.updateCameraInstant();
     } else {
-      this.player.pixelX += (dx / dist) * this.player.speed;
-      this.player.pixelY += (dy / dist) * this.player.speed;
-      // 平滑移动时使用插值让相机更平滑
+      // 继续向目标移动
+      this.player.pixelX += (dx / dist) * moveDistance;
+      this.player.pixelY += (dy / dist) * moveDistance;
+      // 移动时相机平滑跟随
       this.updateCameraSmooth();
     }
+  }
+  
+  // 立即更新相机到目标位置（无延迟）
+  updateCameraInstant() {
+    const mapW = this.mapParser.width * this.tileSize;
+    const mapH = this.mapParser.height * this.tileSize;
+    const canvasW = this.canvas.width;
+    const canvasH = this.canvas.height;
+    
+    this.camera.offsetX = this.player.pixelX - canvasW / 2 + this.tileSize / 2;
+    this.camera.offsetY = this.player.pixelY - canvasH / 2 + this.tileSize / 2;
+    
+    // 限制边界
+    this.camera.offsetX = Math.max(0, Math.min(this.camera.offsetX, mapW - canvasW));
+    this.camera.offsetY = Math.max(0, Math.min(this.camera.offsetY, mapH - canvasH));
   }
   
   // 平滑更新相机位置，减少卡顿感
@@ -251,9 +274,10 @@ class MapEngine {
     const targetOffsetX = this.player.pixelX - canvasW / 2 + this.tileSize / 2;
     const targetOffsetY = this.player.pixelY - canvasH / 2 + this.tileSize / 2;
     
-    // 平滑插值（使用更大的系数使跟随更紧密）
-    this.camera.offsetX += (targetOffsetX - this.camera.offsetX) * 0.5;
-    this.camera.offsetY += (targetOffsetY - this.camera.offsetY) * 0.5;
+    // 使用接近1的系数使相机几乎实时跟随（从0.8提升到0.95）
+    const smoothingFactor = 0.95;
+    this.camera.offsetX += (targetOffsetX - this.camera.offsetX) * smoothingFactor;
+    this.camera.offsetY += (targetOffsetY - this.camera.offsetY) * smoothingFactor;
     
     // 限制边界
     this.camera.offsetX = Math.max(0, Math.min(this.camera.offsetX, mapW - canvasW));
@@ -312,19 +336,12 @@ class MapEngine {
   loop() {
     const currentTime = performance.now();
     
-    // 帧率锁定逻辑
-    const targetFPS = 60; // 目标帧率
-    const targetFrameTime = 1000 / targetFPS; // 目标帧时间（毫秒）
+    // 计算与上一帧的时间差
+    const deltaTime = currentTime - this.lastMoveTime;
+    this.lastMoveTime = currentTime;
     
-    // 如果距离上次渲染时间不足，跳过本次渲染
-    if (currentTime - this.lastRenderTime < targetFrameTime) {
-      requestAnimationFrame(() => this.loop());
-      return;
-    }
-    
-    this.lastRenderTime = currentTime;
-    
-    this.updatePlayerMove();
+    // 基于时间的移动（确保无论帧率如何移动速度一致）
+    this.updatePlayerMove(deltaTime);
     if (this.roleAnim) this.roleAnim.update();
     this.render();
     
