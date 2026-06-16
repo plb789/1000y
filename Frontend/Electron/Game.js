@@ -107,6 +107,13 @@ class Game {
       });
     });
     
+    // 窗口大小调整
+    window.addEventListener('resize', () => {
+      if (this.state === 'playing') {
+        this.mapEngine.resizeCanvas();
+      }
+    });
+    
     // 鼠标点击移动由MapEngine处理，这里不再绑定
   }
   
@@ -117,10 +124,37 @@ class Game {
       this.renderPlayers();
     };
     // 设置玩家移动回调，用于更新小地图
+    // 添加节流：只在玩家位置改变时更新小地图
     this.mapEngine.onPlayerMove = (x, y) => {
-      this.player.x = x;
-      this.player.y = y;
-      this.renderMiniMap();
+      if (this.player.x !== x || this.player.y !== y) {
+        this.player.x = x;
+        this.player.y = y;
+        // 节流：小地图更新频率限制为每200ms一次
+        if (!this.minimapUpdateTimer) {
+          this.minimapUpdateTimer = setTimeout(() => {
+            this.renderMiniMap();
+            this.minimapUpdateTimer = null;
+          }, 200);
+        }
+      }
+    };
+    // FPS 更新回调
+    this.mapEngine.onFpsUpdate = (fps) => {
+      const fpsElement = document.getElementById('fpsValue');
+      const fpsContainer = fpsElement.parentElement;
+      if (fpsElement) {
+        fpsElement.textContent = fps;
+        
+        // 根据 FPS 值改变颜色
+        fpsContainer.className = 'fps-counter';
+        if (fps < 30) {
+          fpsContainer.classList.add('low');
+        } else if (fps < 50) {
+          fpsContainer.classList.add('medium');
+        } else {
+          fpsContainer.classList.add('high');
+        }
+      }
     };
   }
   
@@ -195,6 +229,9 @@ class Game {
     this.state = 'playing';
     this.ui.loginPanel.classList.add('hidden');
     this.ui.gamePanel.classList.add('active');
+    
+    // 游戏面板显示后，调整画布大小
+    this.mapEngine.resizeCanvas();
     
     // 加载地图
     this.loadMap(this.player.mapId);
@@ -676,20 +713,21 @@ class Game {
     
     // 绘制其他玩家
     this.players.forEach(player => {
-      const screenX = player.x * 32;
-      const screenY = player.y * 32;
+      const tileSize = this.mapEngine.tileSize || 48;
+      const screenX = player.x * tileSize;
+      const screenY = player.y * tileSize;
       
       // 简单绘制为绿色圆形
       ctx.fillStyle = '#4ade80';
       ctx.beginPath();
-      ctx.arc(screenX + 16, screenY + 16, 12, 0, Math.PI * 2);
+      ctx.arc(screenX + tileSize / 2, screenY + tileSize / 2, tileSize / 3, 0, Math.PI * 2);
       ctx.fill();
       
       // 名字
       ctx.fillStyle = '#fff';
       ctx.font = '12px Microsoft YaHei';
       ctx.textAlign = 'center';
-      ctx.fillText(player.name, screenX + 16, screenY - 5);
+      ctx.fillText(player.name, screenX + tileSize / 2, screenY - 5);
     });
     
     // 恢复变换

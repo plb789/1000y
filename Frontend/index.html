@@ -106,17 +106,20 @@
       width: 100%;
       height: 100%;
       display: none;
+      overflow: hidden;
     }
     
     #gamePanel.active { display: block; }
     
     #gameCanvas {
       position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      border: 3px solid #e94560;
-      box-shadow: 0 0 20px rgba(233, 69, 96, 0.3);
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+      border: none;
+      box-shadow: none;
     }
     
     /* 顶部状态栏 */
@@ -151,6 +154,31 @@
     .online-count {
       color: #4ade80;
       font-size: 14px;
+    }
+    
+    .fps-counter {
+      color: #fbbf24;
+      font-size: 14px;
+      font-weight: bold;
+      background: rgba(0,0,0,0.5);
+      padding: 5px 10px;
+      border-radius: 5px;
+      border: 1px solid #fbbf24;
+    }
+    
+    .fps-counter.low {
+      color: #ef4444;
+      border-color: #ef4444;
+    }
+    
+    .fps-counter.medium {
+      color: #fbbf24;
+      border-color: #fbbf24;
+    }
+    
+    .fps-counter.high {
+      color: #4ade80;
+      border-color: #4ade80;
     }
     
     /* 底部快捷栏 */
@@ -339,7 +367,7 @@
 
   <!-- 游戏主界面 -->
   <div id="gamePanel">
-    <canvas id="gameCanvas" width="960" height="640"></canvas>
+    <canvas id="gameCanvas"></canvas>
     
     <!-- 顶部状态栏 -->
     <div id="topBar">
@@ -350,6 +378,7 @@
         <span id="roleHP">❤️ 100/100</span>
         <span id="roleMP">💧 100/100</span>
       </div>
+      <div class="fps-counter">FPS: <span id="fpsValue">60</span></div>
       <div class="online-count">在线: <span id="onlineCount">0</span></div>
     </div>
     

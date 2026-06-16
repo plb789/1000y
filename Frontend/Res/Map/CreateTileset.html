@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>瓦片图集生成器</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Microsoft YaHei', sans-serif; background: #1a1a2e; color: #fff; padding: 20px; }
+    .container { max-width: 800px; margin: 0 auto; }
+    h1 { text-align: center; margin-bottom: 20px; color: #e94560; }
+    .canvas-container { text-align: center; margin: 20px 0; }
+    #tilesetCanvas { border: 2px solid #4a5568; border-radius: 8px; }
+    .controls { display: flex; justify-content: center; gap: 10px; margin: 20px 0; }
+    .btn { padding: 10px 20px; background: linear-gradient(135deg, #e94560, #c53030); border: none; border-radius: 6px; color: #fff; cursor: pointer; font-size: 14px; transition: all 0.2s; }
+    .btn:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(233, 69, 96, 0.4); }
+    .info { background: #2d3748; padding: 15px; border-radius: 8px; margin-top: 20px; }
+    .info h3 { color: #4ade80; margin-bottom: 10px; }
+    .info ul { list-style: none; padding-left: 20px; }
+    .info li { margin: 5px 0; }
+    .tile-preview { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; margin-top: 10px; }
+    .tile-item { width: 40px; height: 40px; border: 1px solid #4a5568; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 10px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🎨 瓦片图集生成器</h1>
+    
+    <div class="canvas-container">
+      <canvas id="tilesetCanvas" width="768" height="96"></canvas>
+    </div>
+    
+    <div class="controls">
+      <button class="btn" id="btnGenerate">生成图集</button>
+      <button class="btn" id="btnDownload">下载图集</button>
+    </div>
+    
+    <div class="info">
+      <h3>📋 使用说明</h3>
+      <ul>
+        <li>点击"生成图集"按钮生成测试用瓦片图集</li>
+        <li>点击"下载图集"按钮保存到本地</li>
+        <li>将下载的 tileset.png 放到 Res/Map 目录下</li>
+        <li>在地图编辑器中点击🖼️按钮加载该图集</li>
+      </ul>
+      <h3>🏷️ 瓦片索引说明</h3>
+      <div class="tile-preview" id="tilePreview"></div>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('tilesetCanvas');
+    const ctx = canvas.getContext('2d');
+    const tileSize = 48;
+    const cols = 16;
+    
+    // 瓦片颜色配置
+    const tileConfigs = [
+      { name: '草地', color: '#3a5f0b', icon: '🌿' },
+      { name: '水域', color: '#1e4d8c', icon: '🌊' },
+      { name: '墙壁', color: '#5c5c5c', icon: '🧱' },
+      { name: '地板', color: '#8b7355', icon: '🟫' },
+      { name: '树木', color: '#228b22', icon: '🌲' },
+      { name: '沙地', color: '#c2b280', icon: '🏜️' },
+      { name: '泥土', color: '#8b4513', icon: '🟤' },
+      { name: '石板路', color: '#696969', icon: '⬜' },
+      { name: '楼梯', color: '#a0522d', icon: '🪜' },
+      { name: '门', color: '#654321', icon: '🚪' },
+      { name: '桥梁', color: '#8b7765', icon: '🌉' },
+      { name: '花丛', color: '#ff69b4', icon: '🌸' },
+      { name: '石头', color: '#4a5568', icon: '🪨' },
+      { name: '深墙', color: '#2d3748', icon: '🧱' },
+      { name: '洞穴', color: '#1a202c', icon: '🕳️' },
+      { name: '终点', color: '#e94560', icon: '🏁' },
+    ];
+    
+    function generateTileset() {
+      // 清空画布
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      // 绘制每个瓦片
+      tileConfigs.forEach((config, index) => {
+        const x = (index % cols) * tileSize;
+        const y = Math.floor(index / cols) * tileSize;
+        
+        // 绘制背景
+        ctx.fillStyle = config.color;
+        ctx.fillRect(x + 1, y + 1, tileSize - 2, tileSize - 2);
+        
+        // 绘制图标
+        ctx.fillStyle = 'rgba(255,255,255,0.8)';
+        ctx.font = '16px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(config.icon, x + tileSize / 2, y + tileSize / 2);
+        
+        // 绘制边框
+        ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x, y, tileSize, tileSize);
+      });
+      
+      updatePreview();
+    }
+    
+    function updatePreview() {
+      const preview = document.getElementById('tilePreview');
+      preview.innerHTML = '';
+      
+      tileConfigs.forEach((config, index) => {
+        const div = document.createElement('div');
+        div.className = 'tile-item';
+        div.style.backgroundColor = config.color;
+        div.title = `${index + 1}: ${config.name}`;
+        div.textContent = index + 1;
+        preview.appendChild(div);
+      });
+    }
+    
+    function downloadTileset() {
+      const link = document.createElement('a');
+      link.download = 'tileset.png';
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    }
+    
+    document.getElementById('btnGenerate').addEventListener('click', generateTileset);
+    document.getElementById('btnDownload').addEventListener('click', downloadTileset);
+    
+    // 初始化生成
+    generateTileset();
+  </script>
+</body>
+</html>

@@ -13,7 +13,32 @@
       overflow: hidden;
     }
     
-    /* 顶部工具栏 */
+    /* 自定义滚动条样式 */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    
+    ::-webkit-scrollbar-track {
+      background: #1a202c;
+      border-radius: 4px;
+    }
+    
+    ::-webkit-scrollbar-thumb {
+      background: #4a5568;
+      border-radius: 4px;
+      transition: background 0.2s;
+    }
+    
+    ::-webkit-scrollbar-thumb:hover {
+      background: #718096;
+    }
+    
+    ::-webkit-scrollbar-corner {
+      background: #1a202c;
+    }
+    
+    /* 工具栏 */
     #toolbar {
       height: 50px;
       background: linear-gradient(180deg, #2d3748 0%, #1a202c 100%);
@@ -84,7 +109,7 @@
     /* 主区域 */
     #main {
       display: flex;
-      height: calc(100vh - 50px);
+      height: calc(100vh - 50px - 28px);
     }
     
     /* 左侧调色板 */
@@ -156,11 +181,14 @@
       background: #0d1117;
       overflow: auto;
       display: flex;
-      align-items: center;
-      justify-content: center;
+      align-items: flex-start;
+      justify-content: flex-start;
       position: relative;
-      /* 确保没有东西遮挡 */
-      pointer-events: none;
+    }
+    
+    #canvas-wrapper {
+      display: inline-block;
+      position: relative;
     }
     
     #mapCanvas {
@@ -178,6 +206,8 @@
       border-left: 2px solid #4a5568;
       display: flex;
       flex-direction: column;
+      overflow-y: auto;
+      flex-shrink: 0;
     }
     
     .panel-section {
@@ -195,6 +225,7 @@
     .panel-row {
       display: flex;
       align-items: center;
+      justify-content: space-between;
       margin: 6px 0;
       gap: 8px;
     }
@@ -202,7 +233,17 @@
     .panel-label {
       font-size: 12px;
       color: #a0aec0;
-      width: 50px;
+      flex-shrink: 0;
+      white-space: nowrap;
+    }
+    
+    .panel-value {
+      font-size: 12px;
+      color: #4ade80;
+      font-weight: bold;
+      flex-shrink: 0;
+      min-width: 30px;
+      text-align: right;
     }
     
     .panel-input {
@@ -267,6 +308,38 @@
     .layer-checkbox {
       width: 16px;
       height: 16px;
+    }
+    
+    /* 分类标签 */
+    .category-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      padding: 8px;
+      border-bottom: 1px solid #4a5568;
+      margin-bottom: 8px;
+    }
+    
+    .category-btn {
+      padding: 4px 8px;
+      background: #2d3748;
+      border: 1px solid #4a5568;
+      border-radius: 4px;
+      color: #a0aec0;
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .category-btn:hover {
+      background: #4a5568;
+      color: #fff;
+    }
+    
+    .category-btn.active {
+      background: #e94560;
+      border-color: #e94560;
+      color: #fff;
     }
     
     /* 缩放控制 */
@@ -358,6 +431,18 @@
       <input type="number" class="toolbar-input" id="mapHeight" value="15" min="5" max="200">
       <button class="toolbar-btn" id="btnResize" title="调整大小">🔄</button>
     </div>
+    
+    <div class="toolbar-group">
+      <span class="toolbar-label">图集</span>
+      <button class="toolbar-btn" id="btnLoadTileset" title="加载PNG/JPG图集">🖼️</button>
+      <button class="toolbar-btn" id="btnImportDDS" title="导入原版DDS贴图">📦</button>
+      <span class="toolbar-label" id="tilesetStatus">未加载</span>
+    </div>
+    
+    <div class="toolbar-group">
+      <span class="toolbar-label">导入</span>
+      <button class="toolbar-btn" id="btnImportMap" title="导入原版.map文件">🗺️</button>
+    </div>
   </div>
   
   <!-- 主区域 -->
@@ -365,6 +450,14 @@
     <!-- 左侧调色板 -->
     <div id="palette">
       <div class="palette-title">瓦片调色板</div>
+      <div class="category-tabs">
+        <button class="category-btn active" data-category="all">全部</button>
+        <button class="category-btn" data-category="ground">地面</button>
+        <button class="category-btn" data-category="water">水域</button>
+        <button class="category-btn" data-category="plants">植物</button>
+        <button class="category-btn" data-category="walls">墙壁</button>
+        <button class="category-btn" data-category="roads">道路</button>
+      </div>
       <div class="palette-grid" id="paletteGrid"></div>
       <div class="tile-info">
         <div class="tile-info-row">
@@ -380,7 +473,9 @@
     
     <!-- 地图画布 -->
     <div id="canvas-container">
-      <canvas id="mapCanvas"></canvas>
+      <div id="canvas-wrapper">
+        <canvas id="mapCanvas"></canvas>
+      </div>
     </div>
     
     <!-- 右侧面板 -->
@@ -404,6 +499,115 @@
           <span class="panel-label">通行</span>
           <input type="checkbox" class="layer-checkbox" id="tilePassableCheck" checked>
         </div>
+        <div class="panel-row">
+          <span class="panel-label">层级</span>
+          <select class="panel-input" id="tileLayer">
+            <option value="0">地面</option>
+            <option value="1">物体</option>
+          </select>
+        </div>
+      </div>
+      
+      <div class="panel-section">
+        <div class="panel-title">瓦片属性编辑器</div>
+        <div class="panel-row">
+          <span class="panel-label">瓦片ID</span>
+          <input type="number" class="panel-input" id="tileId" value="1" min="0" max="255">
+        </div>
+        <div class="panel-row">
+          <span class="panel-label">高层ID</span>
+          <input type="number" class="panel-input" id="tileHigh" value="0" min="0" max="255">
+        </div>
+        <div class="panel-row">
+          <span class="panel-label">通行</span>
+          <input type="checkbox" class="layer-checkbox" id="tileAttrPassable" checked>
+        </div>
+        <div class="panel-row">
+          <span class="panel-label">阻挡</span>
+          <input type="checkbox" class="layer-checkbox" id="tileAttrBlock">
+        </div>
+        <button class="panel-btn" id="btnApplyTileProps">应用到选区</button>
+        <button class="panel-btn secondary" id="btnFillArea">填充区域</button>
+      </div>
+      
+      <div class="panel-section">
+        <div class="panel-title">动画效果</div>
+        <div class="panel-row">
+          <span class="panel-label">动画类型</span>
+          <select class="panel-input" id="animationType">
+            <option value="">无动画</option>
+            <optgroup label="自然效果">
+              <option value="fire">🔥 火焰</option>
+              <option value="water">💧 水流</option>
+              <option value="waterfall">💦 瀑布</option>
+              <option value="grass_wind">🌾 草地风吹</option>
+              <option value="snow">❄️ 雪花飘落</option>
+            </optgroup>
+            <optgroup label="植物效果">
+              <option value="tree">🌲 树木摆动</option>
+              <option value="flower">🌸 花朵摇摆</option>
+              <option value="mushroom">🍄 蘑菇呼吸</option>
+            </optgroup>
+            <optgroup label="光源效果">
+              <option value="torch">🔦 火把</option>
+              <option value="candle">🕯️ 蜡烛燃烧</option>
+              <option value="smoke">💨 烟雾</option>
+              <option value="steam">♨️ 蒸汽</option>
+            </optgroup>
+            <optgroup label="魔法效果">
+              <option value="magic_circle">✨ 魔法阵</option>
+              <option value="lightning">⚡ 闪电</option>
+              <option value="gem">💎 宝石闪烁</option>
+            </optgroup>
+            <optgroup label="生物效果">
+              <option value="insect">🐛 虫子爬行</option>
+            </optgroup>
+            <optgroup label="装饰效果">
+              <option value="flag">🚩 旗帜飘动</option>
+            </optgroup>
+          </select>
+        </div>
+        <div class="panel-row">
+          <span class="panel-label">动画速度</span>
+          <input type="range" class="panel-input" id="animationSpeed" min="0.5" max="2" step="0.1" value="1">
+          <span class="panel-value" id="animationSpeedValue">1.0x</span>
+        </div>
+        <div class="panel-row">
+          <span class="panel-label">触发器</span>
+          <select class="panel-input" id="triggerType">
+            <option value="none">无触发器</option>
+            <option value="proximity">靠近触发</option>
+            <option value="time">定时触发</option>
+            <option value="event">事件触发</option>
+          </select>
+        </div>
+        <div class="panel-row">
+          <span class="panel-label">音效同步</span>
+          <input type="checkbox" class="layer-checkbox" id="enableSoundSync">
+        </div>
+        <button class="panel-btn" id="btnAddAnimation">添加动画到选区</button>
+        <button class="panel-btn secondary" id="btnRemoveAnimation">移除动画</button>
+        <button class="panel-btn secondary" id="btnPreviewAnimation">预览动画</button>
+        <button class="panel-btn secondary" id="btnExportAnimations">导出动画数据</button>
+        <div class="panel-row">
+          <span class="panel-label">动画数量:</span>
+          <span class="panel-value" id="animationCount">0</span>
+        </div>
+      </div>
+      
+      <div class="panel-section">
+        <div class="panel-title">高级编辑</div>
+        <div class="panel-row">
+          <span class="panel-label">选择区域:</span>
+          <span class="panel-value" id="selectionSize">0 x 0</span>
+        </div>
+        <button class="panel-btn secondary" id="btnCopy">📋 复制</button>
+        <button class="panel-btn secondary" id="btnPaste">📄 粘贴</button>
+        <button class="panel-btn secondary" id="btnCut">✂️ 剪切</button>
+        <button class="panel-btn secondary" id="btnRotate90">🔄 旋转90°</button>
+        <button class="panel-btn secondary" id="btnFlipH">↔️ 水平翻转</button>
+        <button class="panel-btn secondary" id="btnFlipV">↕️ 垂直翻转</button>
+        <button class="panel-btn secondary" id="btnClearArea">🗑️ 清除区域</button>
       </div>
       
       <div class="panel-section">
@@ -419,6 +623,23 @@
         <div class="panel-title">导出</div>
         <button class="panel-btn" id="btnExportBinary">导出二进制</button>
         <button class="panel-btn secondary" id="btnExportJson">导出JSON</button>
+        <button class="panel-btn" id="btnExportMillennium">导出原版格式</button>
+        <button class="panel-btn secondary" id="btnBatchExport">批量导出</button>
+      </div>
+      
+      <div class="panel-section">
+        <div class="panel-title">测试功能</div>
+        <button class="panel-btn" onclick="alert('✓ 按钮绑定正常！')">测试按钮</button>
+        <button class="panel-btn secondary" onclick="console.log('面板:', document.getElementById('right-panel'))">检查面板</button>
+      </div>
+      
+      <div class="panel-section">
+        <div class="panel-title">批量导入</div>
+        <button class="panel-btn" id="btnBatchImport">导入多个地图</button>
+        <div class="panel-row">
+          <span class="panel-label">已导入:</span>
+          <span class="panel-value" id="importedCount">0</span>
+        </div>
       </div>
     </div>
   </div>
@@ -431,7 +652,16 @@
     <div class="status-item">修改: <span class="status-value" id="statusModified">否</span></div>
   </div>
 
-  <script>
+  <script src="../../ResourceLoad/ResourceManager.js"></script>
+    <script src="../../ResourceLoad/MillenniumImporter.js"></script>
+    <script src="../../GameLogic/Map/TileDefinitions.js"></script>
+    <script src="../../GameLogic/Map/MapAnimationSystem.js"></script>
+    <script src="../../GameLogic/Map/AnimationTriggerSystem.js"></script>
+    <script src="../../GameLogic/Map/AnimationAudioSystem.js"></script>
+    <script src="../../GameLogic/Map/AnimationEventSystem.js"></script>
+    <script src="../../GameLogic/Map/WebGLAnimationRenderer.js"></script>
+    
+    <script>
     // ============================================
     // 千年江湖 - 地图编辑器
     // ============================================
@@ -442,7 +672,7 @@
         this.mapWidth = 20;
         this.mapHeight = 15;
         this.tiles = []; // [y][x] = { low, high, attr }
-        this.tileSize = 32; // 像素大小
+        this.tileSize = 48; // 像素大小（与服务端配置一致）
         
         // 编辑状态
         this.currentTool = 'pen';
@@ -455,22 +685,77 @@
         this.historyIndex = -1;
         this.maxHistory = 50;
         
-        // 预设瓦片类型
-        this.tileTypes = [
-          { name: '草地', low: 1, high: 0, attr: 0, color: '#3a5f0b', passable: true },
-          { name: '水域', low: 2, high: 0, attr: 1, color: '#1e4d8c', passable: false },
-          { name: '墙壁', low: 3, high: 0, attr: 1, color: '#5c5c5c', passable: false },
-          { name: '地板', low: 4, high: 0, attr: 0, color: '#8b7355', passable: true },
-          { name: '树木', low: 5, high: 0, attr: 1, color: '#228b22', passable: false },
-          { name: '沙地', low: 6, high: 0, attr: 0, color: '#c2b280', passable: true },
-          { name: '泥土', low: 7, high: 0, attr: 0, color: '#8b4513', passable: true },
-          { name: '石板路', low: 8, high: 0, attr: 0, color: '#696969', passable: true },
-          { name: '楼梯', low: 9, high: 0, attr: 0, color: '#a0522d', passable: true },
-          { name: '门', low: 10, high: 0, attr: 1, color: '#654321', passable: false },
-          { name: '桥梁', low: 11, high: 0, attr: 0, color: '#8b7765', passable: true },
-          { name: '花丛', low: 12, high: 0, attr: 0, color: '#ff69b4', passable: true },
-        ];
+        // 瓦片图集
+        this.tileset = null;
+        this.tilesetCols = 16;
         
+        // 资源管理器
+        this.resourceManager = window.ResourceManager;
+        this.importer = new MillenniumImporter();
+        
+        // 动画系统
+        this.animationSystem = window.MapAnimationSystem;
+        this.mapAnimations = new Map(); // 存储地图上的动画位置信息
+        this.isPreviewingAnimation = false;
+        
+        // 触发器系统
+        this.triggerSystem = window.AnimationTriggerSystem;
+        
+        // 音效系统
+        this.audioSystem = window.AnimationAudioSystem;
+        
+        // 事件系统
+        this.eventSystem = window.AnimationEventSystem;
+        
+        // WebGL渲染器
+        this.webglRenderer = null;
+        this.useWebGL = false;
+        
+        // 当前选中的分类
+        this.currentCategory = 'all';
+        
+        // 预设瓦片类型（从TileDefinitions加载）
+        this.initTileTypes();
+        
+        this.init();
+      }
+      
+      // 初始化瓦片类型
+      initTileTypes() {
+        if (window.TileDefinitions) {
+          this.tileTypes = TileDefinitions.getAll().filter(t => t.id > 0);
+        } else {
+          // 备用瓦片类型
+          this.tileTypes = [
+            { name: '草地', low: 1, high: 0, attr: 0, color: '#3a5f0b', passable: true },
+            { name: '水域', low: 2, high: 0, attr: 1, color: '#1e4d8c', passable: false },
+            { name: '墙壁', low: 3, high: 0, attr: 1, color: '#5c5c5c', passable: false },
+            { name: '地板', low: 4, high: 0, attr: 0, color: '#8b7355', passable: true },
+            { name: '树木', low: 5, high: 0, attr: 1, color: '#228b22', passable: false },
+            { name: '沙地', low: 6, high: 0, attr: 0, color: '#c2b280', passable: true },
+            { name: '泥土', low: 7, high: 0, attr: 0, color: '#8b4513', passable: true },
+            { name: '石板路', low: 8, high: 0, attr: 0, color: '#696969', passable: true },
+            { name: '楼梯', low: 9, high: 0, attr: 0, color: '#a0522d', passable: true },
+            { name: '门', low: 10, high: 0, attr: 1, color: '#654321', passable: false },
+            { name: '桥梁', low: 11, high: 0, attr: 0, color: '#8b7765', passable: true },
+            { name: '花丛', low: 12, high: 0, attr: 0, color: '#ff69b4', passable: true },
+            { name: '石头', low: 13, high: 0, attr: 1, color: '#4a5568', passable: false },
+            { name: '深墙', low: 14, high: 0, attr: 1, color: '#2d3748', passable: false },
+            { name: '洞穴', low: 15, high: 0, attr: 0, color: '#1a202c', passable: true },
+            { name: '终点', low: 16, high: 0, attr: 0, color: '#e94560', passable: true }
+          ];
+        }
+        
+        // 构建瓦片类型索引表，优化查找性能
+        this.tileTypeIndex = new Map();
+        this.tileTypes.forEach(tile => {
+          const key = tile.id !== undefined ? tile.id : tile.low;
+          this.tileTypeIndex.set(key, tile);
+        });
+      }
+      
+      // 初始化画布和状态
+      initCanvasAndState() {
         // 画布
         this.canvas = document.getElementById('mapCanvas');
         this.ctx = this.canvas.getContext('2d');
@@ -480,10 +765,22 @@
         this.lastX = -1;
         this.lastY = -1;
         
-        this.init();
+        // 选择区域
+        this.selection = {
+          startX: -1, startY: -1,
+          endX: -1, endY: -1,
+          active: false
+        };
+        
+        // 剪贴板
+        this.clipboard = null;
+        
+        // 已导入的地图列表
+        this.importedMaps = [];
       }
       
       init() {
+        this.initCanvasAndState();
         this.initMap();
         this.initCanvas();
         this.initPalette();
@@ -516,22 +813,48 @@
         const grid = document.getElementById('paletteGrid');
         grid.innerHTML = '';
         
-        this.tileTypes.forEach((tile, index) => {
+        // 根据分类筛选瓦片
+        let tilesToShow = this.tileTypes;
+        if (this.currentCategory !== 'all' && window.TileDefinitions) {
+          tilesToShow = TileDefinitions.getByCategory(this.currentCategory);
+        }
+        
+        tilesToShow.forEach((tile, index) => {
           const div = document.createElement('div');
           div.className = 'palette-tile';
           if (index === 0) div.classList.add('selected');
-          div.style.backgroundColor = tile.color;
-          div.title = tile.name + (tile.attr === 1 ? ' [阻挡]' : ' [可通行]');
+          div.title = tile.name + (tile.attr === 1 || !tile.passable ? ' [阻挡]' : ' [可通行]');
           div.dataset.index = index;
+          div.dataset.tileId = tile.id || tile.low;
+          
+          // 如果有瓦片图集，使用图集渲染调色板
+          if (this.tileset) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 40;
+            canvas.height = 40;
+            const ctx = canvas.getContext('2d');
+            const ts = this.tileSize;
+            const tileIndex = tile.id || tile.low;
+            const sx = ((tileIndex - 1) % this.tilesetCols) * ts;
+            const sy = Math.floor((tileIndex - 1) / this.tilesetCols) * ts;
+            ctx.drawImage(this.tileset, sx, sy, ts, ts, 0, 0, 40, 40);
+            div.appendChild(canvas);
+          } else {
+            div.style.backgroundColor = tile.color;
+            if (tile.icon) {
+              div.textContent = tile.icon;
+              div.style.fontSize = '20px';
+            }
+          }
           
           div.addEventListener('click', () => {
             document.querySelectorAll('.palette-tile').forEach(t => t.classList.remove('selected'));
             div.classList.add('selected');
             // 深拷贝瓦片数据
             this.currentTile = { 
-              low: tile.low, 
-              high: tile.high, 
-              attr: tile.attr 
+              low: tile.id || tile.low, 
+              high: tile.high || 0, 
+              attr: tile.attr || (tile.passable === false ? 1 : 0) 
             };
             this.updateTileInfo();
             console.log('选中瓦片:', tile.name, this.currentTile);
@@ -541,6 +864,20 @@
         });
         
         this.updateTileInfo();
+      }
+      
+      // 设置瓦片分类
+      setCategory(category) {
+        this.currentCategory = category;
+        this.initPalette();
+        
+        // 更新分类按钮状态
+        document.querySelectorAll('.category-btn').forEach(btn => {
+          btn.classList.remove('active');
+          if (btn.dataset.category === category) {
+            btn.classList.add('active');
+          }
+        });
       }
       
       // 初始化工具栏
@@ -574,9 +911,189 @@
         // 导出
         document.getElementById('btnExportBinary').addEventListener('click', () => this.exportBinary());
         document.getElementById('btnExportJson').addEventListener('click', () => this.exportJson());
+        document.getElementById('btnExportMillennium').addEventListener('click', () => this.exportMillenniumFormat());
+        document.getElementById('btnBatchExport').addEventListener('click', () => this.batchExport());
+        
+        // 批量导入
+        document.getElementById('btnBatchImport').addEventListener('click', () => this.batchImportMaps());
         
         // 地图尺寸
         document.getElementById('btnResize').addEventListener('click', () => this.resizeMap());
+        
+        // 瓦片图集
+        document.getElementById('btnLoadTileset').addEventListener('click', () => this.loadTileset());
+        document.getElementById('btnImportDDS').addEventListener('click', () => this.importMillenniumTileset());
+        
+        // 导入原版地图
+        document.getElementById('btnImportMap').addEventListener('click', () => this.importMillenniumMap());
+        
+        // 分类筛选
+        document.querySelectorAll('.category-btn').forEach(btn => {
+          btn.addEventListener('click', (e) => {
+            this.setCategory(e.target.dataset.category);
+          });
+        });
+        
+        // 瓦片属性编辑
+        document.getElementById('btnApplyTileProps').addEventListener('click', () => this.applyTileProps());
+        document.getElementById('btnFillArea').addEventListener('click', () => this.fillArea());
+        
+        // 高级编辑
+        document.getElementById('btnCopy').addEventListener('click', () => this.copySelection());
+        document.getElementById('btnPaste').addEventListener('click', () => this.pasteSelection());
+        document.getElementById('btnCut').addEventListener('click', () => this.cutSelection());
+        document.getElementById('btnRotate90').addEventListener('click', () => this.rotateSelection(90));
+        document.getElementById('btnFlipH').addEventListener('click', () => this.flipSelection('horizontal'));
+        document.getElementById('btnFlipV').addEventListener('click', () => this.flipSelection('vertical'));
+        document.getElementById('btnClearArea').addEventListener('click', () => this.clearSelection());
+        
+        // 通行属性复选框
+        document.getElementById('tileAttrPassable').addEventListener('change', (e) => {
+          if (e.target.checked) {
+            document.getElementById('tileAttrBlock').checked = false;
+          }
+        });
+        document.getElementById('tileAttrBlock').addEventListener('change', (e) => {
+          if (e.target.checked) {
+            document.getElementById('tileAttrPassable').checked = false;
+          }
+        });
+        
+        // 动画相关事件
+        document.getElementById('animationSpeed').addEventListener('input', (e) => {
+          document.getElementById('animationSpeedValue').textContent = e.target.value + 'x';
+        });
+        document.getElementById('btnAddAnimation').addEventListener('click', () => this.addAnimationToSelection());
+        document.getElementById('btnRemoveAnimation').addEventListener('click', () => this.removeAnimationFromSelection());
+        document.getElementById('btnPreviewAnimation').addEventListener('click', () => this.toggleAnimationPreview());
+        document.getElementById('btnExportAnimations').addEventListener('click', () => this.exportAnimationData());
+        
+        // WebGL切换
+        if (window.WebGLAnimationRenderer && window.WebGLAnimationRenderer.isSupported()) {
+          const webglBtn = document.createElement('button');
+          webglBtn.className = 'panel-btn secondary';
+          webglBtn.textContent = '🚀 启用WebGL';
+          webglBtn.id = 'btnToggleWebGL';
+          webglBtn.addEventListener('click', () => this.toggleWebGL());
+          document.querySelector('.panel-section:nth-last-child(2)').appendChild(webglBtn);
+        }
+      }
+      
+      // 加载瓦片图集（使用资源管理器优化性能）
+      async loadTileset() {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.png,.jpg,.jpeg';
+        
+        input.onchange = async (e) => {
+          const file = e.target.files[0];
+          if (!file) return;
+          
+          try {
+            const status = document.getElementById('tilesetStatus');
+            status.textContent = '加载中...';
+            status.style.color = '#fbbf24';
+            
+            // 使用资源管理器加载（带缓存）
+            const url = URL.createObjectURL(file);
+            const img = await this.resourceManager.loadImage(url);
+            
+            this.tileset = img;
+            status.textContent = '已加载';
+            status.style.color = '#4ade80';
+            
+            this.render();
+            this.initPalette();
+            
+            console.log('瓦片图集加载成功:', img.width + 'x' + img.height);
+          } catch (err) {
+            alert('加载图片失败: ' + err.message);
+            document.getElementById('tilesetStatus').textContent = '加载失败';
+            document.getElementById('tilesetStatus').style.color = '#ef4444';
+          }
+        };
+        
+        input.click();
+      }
+      
+      // 导入原版千年地图文件
+      async importMillenniumMap() {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.map';
+        
+        input.onchange = async (e) => {
+          const file = e.target.files[0];
+          if (!file) return;
+          
+          try {
+            const mapData = await this.importer.importMap(file);
+            this.loadMapData(mapData);
+            this.isModified = true;
+            this.updateStatus();
+            alert(`成功导入地图: ${mapData.width} x ${mapData.height}`);
+          } catch (err) {
+            alert('导入地图失败: ' + err.message);
+          }
+        };
+        
+        input.click();
+      }
+      
+      // 导入原版DDS贴图并转换为瓦片图集
+      async importMillenniumTileset() {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.dds';
+        input.multiple = true;
+        
+        input.onchange = async (e) => {
+          const files = Array.from(e.target.files);
+          if (!files || files.length === 0) return;
+          
+          try {
+            const status = document.getElementById('tilesetStatus');
+            status.textContent = '转换中...';
+            status.style.color = '#fbbf24';
+            
+            // 使用资源管理器加载DDS文件
+            const ddsBuffers = await Promise.all(
+              files.map(f => this.resourceManager.loadBinary(URL.createObjectURL(f)))
+            );
+            
+            // 解析DDS并合并为瓦片图集
+            const tilesetCanvas = await this.importer.importTilesetFromDDS(
+              ddsBuffers.map((buf, i) => ({ buffer: buf, name: files[i].name })),
+              this.tileSize,
+              this.tilesetCols
+            );
+            
+            this.tileset = tilesetCanvas;
+            status.textContent = '已转换';
+            status.style.color = '#4ade80';
+            
+            this.render();
+            this.initPalette();
+            
+            alert(`成功转换 ${files.length} 个DDS文件为瓦片图集`);
+          } catch (err) {
+            alert('转换DDS失败: ' + err.message);
+            document.getElementById('tilesetStatus').textContent = '转换失败';
+            document.getElementById('tilesetStatus').style.color = '#ef4444';
+          }
+        };
+        
+        input.click();
+      }
+      
+      // 加载地图数据
+      loadMapData(mapData) {
+        this.mapWidth = mapData.width;
+        this.mapHeight = mapData.height;
+        this.tiles = mapData.tiles;
+        this.initCanvas();
+        this.render();
+        this.updateStatus();
       }
       
       // 初始化事件
@@ -596,59 +1113,169 @@
         });
       }
       
-      // 渲染地图
+      // 渲染地图（优化版本）
       render() {
-        this.ctx.save();
-        this.ctx.scale(this.zoom, this.zoom);
+        const ctx = this.ctx;
+        const ts = this.tileSize;
+        const mw = this.mapWidth;
+        const mh = this.mapHeight;
+        
+        ctx.save();
+        
+        // 应用缩放
+        ctx.scale(this.zoom, this.zoom);
         
         // 清空画布
-        this.ctx.fillStyle = '#16213e';
-        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        const displayWidth = ctx.canvas.width / this.zoom;
+        const displayHeight = ctx.canvas.height / this.zoom;
+        ctx.fillStyle = '#16213e';
+        ctx.fillRect(0, 0, displayWidth, displayHeight);
         
-        // 绘制网格
-        this.ctx.strokeStyle = '#2d3748';
-        this.ctx.lineWidth = 0.5;
+        // 批量绘制网格
+        ctx.strokeStyle = '#2d3748';
+        ctx.lineWidth = 0.5;
         
-        for (let x = 0; x <= this.mapWidth; x++) {
-          this.ctx.beginPath();
-          this.ctx.moveTo(x * this.tileSize, 0);
-          this.ctx.lineTo(x * this.tileSize, this.mapHeight * this.tileSize);
-          this.ctx.stroke();
+        ctx.beginPath();
+        for (let x = 0; x <= mw; x++) {
+          ctx.moveTo(x * ts, 0);
+          ctx.lineTo(x * ts, mh * ts);
         }
-        
-        for (let y = 0; y <= this.mapHeight; y++) {
-          this.ctx.beginPath();
-          this.ctx.moveTo(0, y * this.tileSize);
-          this.ctx.lineTo(this.mapWidth * this.tileSize, y * this.tileSize);
-          this.ctx.stroke();
+        for (let y = 0; y <= mh; y++) {
+          ctx.moveTo(0, y * ts);
+          ctx.lineTo(mw * ts, y * ts);
         }
+        ctx.stroke();
         
-        // 绘制瓦片
-        for (let y = 0; y < this.mapHeight; y++) {
-          for (let x = 0; x < this.mapWidth; x++) {
-            const tile = this.tiles[y][x];
-            this.drawTile(x, y, tile);
+        // 绘制瓦片（优化：减少函数调用）
+        if (this.tileset) {
+          // 使用图集渲染
+          const cols = this.tilesetCols;
+          for (let y = 0; y < mh; y++) {
+            for (let x = 0; x < mw; x++) {
+              const tile = this.tiles[y][x];
+              const tileIdx = tile.low - 1;
+              const sx = (tileIdx % cols) * ts;
+              const sy = Math.floor(tileIdx / cols) * ts;
+              const px = x * ts;
+              const py = y * ts;
+              ctx.drawImage(this.tileset, sx, sy, ts, ts, px, py, ts, ts);
+              
+              // 绘制阻挡标记
+              if (tile.attr === 1) {
+                ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
+                ctx.fillRect(px + 1, py + 1, ts - 2, ts - 2);
+                ctx.strokeStyle = '#ff0000';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(px + 6, py + 6);
+                ctx.lineTo(px + ts - 6, py + ts - 6);
+                ctx.moveTo(px + ts - 6, py + 6);
+                ctx.lineTo(px + 6, py + ts - 6);
+                ctx.stroke();
+              }
+            }
+          }
+        } else {
+          // 使用颜色块渲染
+          for (let y = 0; y < mh; y++) {
+            for (let x = 0; x < mw; x++) {
+              const tile = this.tiles[y][x];
+              const tileType = this.tileTypeIndex.get(tile.low);
+              const color = tileType ? tileType.color : '#ff00ff';
+              const px = x * ts;
+              const py = y * ts;
+              
+              ctx.fillStyle = color;
+              ctx.fillRect(px + 1, py + 1, ts - 2, ts - 2);
+              
+              // 绘制阻挡标记
+              if (tile.attr === 1) {
+                ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
+                ctx.fillRect(px + 1, py + 1, ts - 2, ts - 2);
+                ctx.strokeStyle = '#ff0000';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(px + 6, py + 6);
+                ctx.lineTo(px + ts - 6, py + ts - 6);
+                ctx.moveTo(px + ts - 6, py + 6);
+                ctx.lineTo(px + 6, py + ts - 6);
+                ctx.stroke();
+              }
+            }
           }
         }
         
-        this.ctx.restore();
+        // 绘制选择区域
+        if (this.selection.active) {
+          this.drawSelection();
+        }
+        
+        // 渲染动画（如果在预览模式）
+        if (this.isPreviewingAnimation) {
+          this.animationSystem.render(ctx, ts, this.tileset);
+        }
+        
+        ctx.restore();
       }
       
-      // 绘制单个瓦片
+      // 绘制选择区域
+      drawSelection() {
+        const { startX, startY, endX, endY } = this.normalizeSelection();
+        
+        // 半透明蓝色填充
+        this.ctx.fillStyle = 'rgba(66, 153, 225, 0.3)';
+        this.ctx.fillRect(
+          startX * this.tileSize,
+          startY * this.tileSize,
+          (endX - startX + 1) * this.tileSize,
+          (endY - startY + 1) * this.tileSize
+        );
+        
+        // 蓝色边框
+        this.ctx.strokeStyle = '#4299e1';
+        this.ctx.lineWidth = 2;
+        this.ctx.setLineDash([5, 5]);
+        this.ctx.strokeRect(
+          startX * this.tileSize,
+          startY * this.tileSize,
+          (endX - startX + 1) * this.tileSize,
+          (endY - startY + 1) * this.tileSize
+        );
+        this.ctx.setLineDash([]);
+        
+        // 更新选区大小显示
+        this.updateSelectionDisplay();
+      }
+      
+      // 绘制单个瓦片（优化版本）
       drawTile(x, y, tile) {
-        const tileType = this.tileTypes.find(t => t.low === tile.low && t.high === tile.high);
+        // 使用索引表快速查找瓦片类型
+        const tileType = this.tileTypeIndex.get(tile.low);
         const color = tileType ? tileType.color : '#ff00ff';
         
-        // 调试：打印未找到的瓦片
-        if (!tileType) {
-          console.log('未找到瓦片类型:', tile, '可用类型:', this.tileTypes.map(t => ({low: t.low, high: t.high, name: t.name})));
+        // 调试：打印未找到的瓦片（仅开发模式）
+        if (!tileType && window.DEV_MODE) {
+          console.log('未找到瓦片类型:', tile.low);
         }
         
         const px = x * this.tileSize;
         const py = y * this.tileSize;
         
-        this.ctx.fillStyle = color;
-        this.ctx.fillRect(px + 1, py + 1, this.tileSize - 2, this.tileSize - 2);
+        // 如果有瓦片图集，使用图集渲染
+        if (this.tileset) {
+          const ts = this.tileSize;
+          const sx = ((tile.low - 1) % this.tilesetCols) * ts;
+          const sy = Math.floor((tile.low - 1) / this.tilesetCols) * ts;
+          this.ctx.drawImage(
+            this.tileset,
+            sx, sy, ts, ts,
+            px, py, ts, ts
+          );
+        } else {
+          // 没有图集，使用颜色块
+          this.ctx.fillStyle = color;
+          this.ctx.fillRect(px + 1, py + 1, this.tileSize - 2, this.tileSize - 2);
+        }
         
         // 绘制通行/阻挡标记
         if (tile.attr === 1) {
@@ -696,6 +1323,14 @@
         } else if (this.currentTool === 'fill') {
           this.floodFill(x, y, { ...this.currentTile });
           this.render();
+        } else if (this.currentTool === 'select') {
+          // 开始选择
+          this.selection.startX = x;
+          this.selection.startY = y;
+          this.selection.endX = x;
+          this.selection.endY = y;
+          this.selection.active = true;
+          this.render();
         }
       }
       
@@ -720,6 +1355,11 @@
           this.drawLine(this.lastX, this.lastY, x, y, { low: tileType.low, high: tileType.high, attr: tileType.attr });
           this.lastX = x;
           this.lastY = y;
+          this.render();
+        } else if (this.currentTool === 'select') {
+          // 更新选择区域
+          this.selection.endX = x;
+          this.selection.endY = y;
           this.render();
         }
       }
@@ -837,8 +1477,7 @@
       setZoom(z) {
         this.zoom = Math.max(0.25, Math.min(4, z));
         document.getElementById('zoomValue').textContent = Math.round(this.zoom * 100) + '%';
-        this.canvas.style.transform = `scale(${this.zoom})`;
-        this.canvas.style.transformOrigin = 'center center';
+        this.render();
       }
       
       // 根据类型设置当前瓦片
@@ -857,7 +1496,16 @@
       
       // 更新瓦片信息
       updateTileInfo() {
-        const tileType = this.tileTypes.find(t => t.low === this.currentTile.low && t.high === this.currentTile.high);
+        // 支持多种数据结构
+        const tileType = this.tileTypes.find(t => {
+          if ('low' in t && 'high' in t) {
+            return t.low === this.currentTile.low && t.high === this.currentTile.high;
+          }
+          if ('id' in t) {
+            return t.id === this.currentTile.low;
+          }
+          return false;
+        });
         document.getElementById('currentTile').textContent = tileType ? `${tileType.name} (${this.currentTile.low},${this.currentTile.high})` : `(${this.currentTile.low},${this.currentTile.high})`;
         document.getElementById('tilePassable').textContent = this.currentTile.attr === 0 ? '是' : '否';
         document.getElementById('tilePassableCheck').checked = this.currentTile.attr === 0;
@@ -1126,6 +1774,511 @@
           this.tiles = JSON.parse(JSON.stringify(this.history[this.historyIndex]));
           this.render();
         }
+      }
+      
+      // 批量导入多个地图
+      async batchImportMaps() {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.map';
+        input.multiple = true;
+        
+        input.onchange = async (e) => {
+          const files = Array.from(e.target.files);
+          if (!files || files.length === 0) return;
+          
+          try {
+            const result = await this.importer.importMultipleMaps(files);
+            
+            if (result.success.length > 0) {
+              this.importedMaps = result.success;
+              document.getElementById('importedCount').textContent = result.success.length;
+              alert(`成功导入 ${result.success.length} 个地图`);
+            }
+            
+            if (result.errors.length > 0) {
+              console.warn('导入错误:', result.errors);
+              alert(`有 ${result.errors.length} 个地图导入失败`);
+            }
+          } catch (err) {
+            alert('批量导入失败: ' + err.message);
+          }
+        };
+        
+        input.click();
+      }
+      
+      // 导出为原版千年格式
+      exportMillenniumFormat() {
+        const mapData = {
+          width: this.mapWidth,
+          height: this.mapHeight,
+          tiles: this.tiles,
+          id: parseInt(document.getElementById('mapId').value) || 1
+        };
+        
+        const buffer = this.importer.exportToMillenniumFormat(mapData);
+        const blob = new Blob([buffer]);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${String(mapData.id).padStart(3, '0')}.map`;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+      
+      // 批量导出
+      async batchExport() {
+        if (this.importedMaps.length === 0) {
+          alert('请先批量导入地图');
+          return;
+        }
+        
+        const results = await this.importer.exportMultipleMaps(this.importedMaps, 'millennium');
+        alert(`成功导出 ${results.filter(r => r.success).length} 个地图`);
+      }
+      
+      // 应用瓦片属性到选区
+      applyTileProps() {
+        const tileId = parseInt(document.getElementById('tileId').value) || 1;
+        const tileHigh = parseInt(document.getElementById('tileHigh').value) || 0;
+        const attr = document.getElementById('tileAttrBlock').checked ? 1 : 0;
+        
+        if (this.selection.active) {
+          const { startX, startY, endX, endY } = this.normalizeSelection();
+          for (let y = startY; y <= endY; y++) {
+            for (let x = startX; x <= endX; x++) {
+              if (this.isValidTile(x, y)) {
+                this.tiles[y][x] = { low: tileId, high: tileHigh, attr };
+              }
+            }
+          }
+        } else {
+          // 如果没有选区，使用当前瓦片
+          this.currentTile = { low: tileId, high: tileHigh, attr };
+          this.updateTileInfo();
+        }
+        
+        this.isModified = true;
+        this.saveHistory();
+        this.render();
+      }
+      
+      // 填充区域
+      fillArea() {
+        if (!this.selection.active) {
+          alert('请先使用选择工具框选区域');
+          return;
+        }
+        
+        const { startX, startY, endX, endY } = this.normalizeSelection();
+        for (let y = startY; y <= endY; y++) {
+          for (let x = startX; x <= endX; x++) {
+            if (this.isValidTile(x, y)) {
+              this.tiles[y][x] = { ...this.currentTile };
+            }
+          }
+        }
+        
+        this.isModified = true;
+        this.saveHistory();
+        this.render();
+      }
+      
+      // 复制选区
+      copySelection() {
+        if (!this.selection.active) {
+          alert('请先使用选择工具框选区域');
+          return;
+        }
+        
+        const { startX, startY, endX, endY } = this.normalizeSelection();
+        const width = endX - startX + 1;
+        const height = endY - startY + 1;
+        
+        this.clipboard = {
+          data: [],
+          width,
+          height
+        };
+        
+        for (let y = startY; y <= endY; y++) {
+          const row = [];
+          for (let x = startX; x <= endX; x++) {
+            row.push(this.isValidTile(x, y) ? { ...this.tiles[y][x] } : null);
+          }
+          this.clipboard.data.push(row);
+        }
+        
+        document.getElementById('selectionSize').textContent = `${width} x ${height}`;
+        alert(`已复制 ${width} x ${height} 的区域到剪贴板`);
+      }
+      
+      // 剪切选区
+      cutSelection() {
+        this.copySelection();
+        this.clearSelection();
+      }
+      
+      // 粘贴
+      pasteSelection() {
+        if (!this.clipboard) {
+          alert('剪贴板为空');
+          return;
+        }
+        
+        const startX = this.selection.startX >= 0 ? this.selection.startX : 0;
+        const startY = this.selection.startY >= 0 ? this.selection.startY : 0;
+        
+        for (let y = 0; y < this.clipboard.height; y++) {
+          for (let x = 0; x < this.clipboard.width; x++) {
+            const mapX = startX + x;
+            const mapY = startY + y;
+            
+            if (this.isValidTile(mapX, mapY) && this.clipboard.data[y] && this.clipboard.data[y][x]) {
+              this.tiles[mapY][mapX] = { ...this.clipboard.data[y][x] };
+            }
+          }
+        }
+        
+        this.isModified = true;
+        this.saveHistory();
+        this.render();
+      }
+      
+      // 清除选区
+      clearSelection() {
+        if (!this.selection.active) {
+          alert('请先使用选择工具框选区域');
+          return;
+        }
+        
+        const { startX, startY, endX, endY } = this.normalizeSelection();
+        const emptyTile = { low: 1, high: 0, attr: 0 };
+        
+        for (let y = startY; y <= endY; y++) {
+          for (let x = startX; x <= endX; x++) {
+            if (this.isValidTile(x, y)) {
+              this.tiles[y][x] = { ...emptyTile };
+            }
+          }
+        }
+        
+        this.isModified = true;
+        this.saveHistory();
+        this.render();
+      }
+      
+      // 旋转选区
+      rotateSelection(degrees) {
+        if (!this.clipboard && !this.selection.active) {
+          alert('请先复制或选择区域');
+          return;
+        }
+        
+        const data = this.clipboard ? this.clipboard.data : this.getSelectionData();
+        const width = this.clipboard ? this.clipboard.width : (this.selection.endX - this.selection.startX + 1);
+        const height = this.clipboard ? this.clipboard.height : (this.selection.endY - this.selection.startY + 1);
+        
+        // 旋转90度
+        const rotated = [];
+        for (let x = 0; x < width; x++) {
+          const newRow = [];
+          for (let y = height - 1; y >= 0; y--) {
+            newRow.push(data[y] ? data[y][x] : null);
+          }
+          rotated.push(newRow);
+        }
+        
+        this.clipboard = {
+          data: rotated,
+          width: height,
+          height: width
+        };
+        
+        document.getElementById('selectionSize').textContent = `${this.clipboard.width} x ${this.clipboard.height}`;
+        alert(`已旋转90度`);
+      }
+      
+      // 翻转选区
+      flipSelection(direction) {
+        if (!this.clipboard && !this.selection.active) {
+          alert('请先复制或选择区域');
+          return;
+        }
+        
+        const data = this.clipboard ? this.clipboard.data : this.getSelectionData();
+        const width = this.clipboard ? this.clipboard.width : (this.selection.endX - this.selection.startX + 1);
+        const height = this.clipboard ? this.clipboard.height : (this.selection.endY - this.selection.startY + 1);
+        
+        let flipped;
+        if (direction === 'horizontal') {
+          flipped = data.map(row => [...row].reverse());
+        } else {
+          flipped = [...data].reverse();
+        }
+        
+        this.clipboard = {
+          data: flipped,
+          width,
+          height
+        };
+        
+        const dirName = direction === 'horizontal' ? '水平' : '垂直';
+        alert(`已${dirName}翻转`);
+      }
+      
+      // 获取选区数据
+      getSelectionData() {
+        const { startX, startY, endX, endY } = this.normalizeSelection();
+        const data = [];
+        
+        for (let y = startY; y <= endY; y++) {
+          const row = [];
+          for (let x = startX; x <= endX; x++) {
+            row.push(this.isValidTile(x, y) ? { ...this.tiles[y][x] } : null);
+          }
+          data.push(row);
+        }
+        
+        return data;
+      }
+      
+      // 标准化选区
+      normalizeSelection() {
+        return {
+          startX: Math.min(this.selection.startX, this.selection.endX),
+          startY: Math.min(this.selection.startY, this.selection.endY),
+          endX: Math.max(this.selection.startX, this.selection.endX),
+          endY: Math.max(this.selection.startY, this.selection.endY)
+        };
+      }
+      
+      // 检查坐标是否有效
+      isValidTile(x, y) {
+        return x >= 0 && x < this.mapWidth && y >= 0 && y < this.mapHeight;
+      }
+      
+      // 更新选择区域显示
+      updateSelectionDisplay() {
+        if (this.selection.active) {
+          const { startX, startY, endX, endY } = this.normalizeSelection();
+          const width = endX - startX + 1;
+          const height = endY - startY + 1;
+          document.getElementById('selectionSize').textContent = `${width} x ${height}`;
+        } else {
+          document.getElementById('selectionSize').textContent = '0 x 0';
+        }
+      }
+      
+      // 添加动画到选区
+      addAnimationToSelection() {
+        const animationType = document.getElementById('animationType').value;
+        if (!animationType) {
+          alert('请选择动画类型');
+          return;
+        }
+        
+        const speed = parseFloat(document.getElementById('animationSpeed').value);
+        
+        if (this.selection.active) {
+          // 添加到选区
+          const { startX, startY, endX, endY } = this.normalizeSelection();
+          for (let y = startY; y <= endY; y++) {
+            for (let x = startX; x <= endX; x++) {
+              if (this.isValidTile(x, y)) {
+                const key = `${x},${y}`;
+                const existingAnim = this.animationSystem.getAnimationAt(x, y);
+                if (existingAnim) {
+                  this.animationSystem.removeAnimation(existingAnim.id);
+                }
+                
+                const animId = `anim_${key}_${Date.now()}`;
+                this.animationSystem.addAnimation(animId, animationType, x * this.tileSize, y * this.tileSize, { speed });
+                this.mapAnimations.set(key, { type: animationType, speed, x, y });
+              }
+            }
+          }
+        } else {
+          // 添加到当前鼠标位置
+          const x = this.lastX >= 0 ? this.lastX : 0;
+          const y = this.lastY >= 0 ? this.lastY : 0;
+          
+          const key = `${x},${y}`;
+          const existingAnim = this.animationSystem.getAnimationAt(x, y);
+          if (existingAnim) {
+            this.animationSystem.removeAnimation(existingAnim.id);
+          }
+          
+          const animId = `anim_${key}_${Date.now()}`;
+          this.animationSystem.addAnimation(animId, animationType, x * this.tileSize, y * this.tileSize, { speed });
+          this.mapAnimations.set(key, { type: animationType, speed, x, y });
+        }
+        
+        this.updateAnimationCount();
+        alert(`已添加 ${animationType} 动画`);
+      }
+      
+      // 移除选区的动画
+      removeAnimationFromSelection() {
+        if (this.selection.active) {
+          const { startX, startY, endX, endY } = this.normalizeSelection();
+          for (let y = startY; y <= endY; y++) {
+            for (let x = startX; x <= endX; x++) {
+              const key = `${x},${y}`;
+              const anim = this.animationSystem.getAnimationAt(x, y);
+              if (anim) {
+                this.animationSystem.removeAnimation(anim.id);
+                this.mapAnimations.delete(key);
+              }
+            }
+          }
+        } else {
+          // 移除当前位置的动画
+          const x = this.lastX >= 0 ? this.lastX : 0;
+          const y = this.lastY >= 0 ? this.lastY : 0;
+          const key = `${x},${y}`;
+          const anim = this.animationSystem.getAnimationAt(x, y);
+          if (anim) {
+            this.animationSystem.removeAnimation(anim.id);
+            this.mapAnimations.delete(key);
+          }
+        }
+        
+        this.updateAnimationCount();
+        alert('已移除动画');
+      }
+      
+      // 切换动画预览
+      toggleAnimationPreview() {
+        this.isPreviewingAnimation = !this.isPreviewingAnimation;
+        
+        if (this.isPreviewingAnimation) {
+          this.animationSystem.start();
+          document.getElementById('btnPreviewAnimation').textContent = '停止预览';
+          document.getElementById('btnPreviewAnimation').classList.add('active');
+          this.startAnimationLoop();
+        } else {
+          this.animationSystem.stop();
+          document.getElementById('btnPreviewAnimation').textContent = '预览动画';
+          document.getElementById('btnPreviewAnimation').classList.remove('active');
+        }
+        
+        this.render();
+      }
+      
+      // 启动动画渲染循环
+      startAnimationLoop() {
+        if (!this.isPreviewingAnimation) return;
+        
+        this.render();
+        requestAnimationFrame(() => this.startAnimationLoop());
+      }
+      
+      // 更新动画数量显示
+      updateAnimationCount() {
+        document.getElementById('animationCount').textContent = this.mapAnimations.size;
+      }
+      
+      // 导出动画数据
+      exportAnimations() {
+        const animations = [];
+        this.mapAnimations.forEach((anim, key) => {
+          animations.push({
+            x: anim.x,
+            y: anim.y,
+            type: anim.type,
+            speed: anim.speed
+          });
+        });
+        
+        return animations;
+      }
+      
+      // 导入动画数据
+      importAnimations(animations) {
+        animations.forEach(anim => {
+          const key = `${anim.x},${anim.y}`;
+          const animId = `anim_${key}_${Date.now()}`;
+          this.animationSystem.addAnimation(animId, anim.type, anim.x * this.tileSize, anim.y * this.tileSize, { speed: anim.speed });
+          this.mapAnimations.set(key, anim);
+        });
+        
+        this.updateAnimationCount();
+      }
+      
+      // 导出动画数据
+      exportAnimationData() {
+        const data = {
+          animations: this.exportAnimations(),
+          triggers: this.triggerSystem.exportTriggers(),
+          events: this.eventSystem.exportEvents(),
+          exportTime: new Date().toISOString(),
+          version: '1.0'
+        };
+        
+        const json = JSON.stringify(data, null, 2);
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `animations_${Date.now()}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        
+        alert('动画数据已导出');
+      }
+      
+      // 切换WebGL渲染
+      toggleWebGL() {
+        if (!window.WebGLAnimationRenderer) {
+          alert('WebGL不可用');
+          return;
+        }
+        
+        this.useWebGL = !this.useWebGL;
+        
+        if (this.useWebGL) {
+          if (!this.webglRenderer) {
+            // 创建一个新的canvas用于WebGL
+            const webglCanvas = document.createElement('canvas');
+            webglCanvas.id = 'webglCanvas';
+            webglCanvas.width = this.canvas.width;
+            webglCanvas.height = this.canvas.height;
+            webglCanvas.style.position = 'absolute';
+            webglCanvas.style.top = '0';
+            webglCanvas.style.left = '0';
+            
+            // 将WebGL canvas添加到画布容器中
+            document.getElementById('canvas-wrapper').appendChild(webglCanvas);
+            
+            this.webglRenderer = new window.WebGLAnimationRenderer(webglCanvas);
+          }
+          
+          if (this.webglRenderer.enabled) {
+            // 隐藏2D canvas
+            this.canvas.style.display = 'none';
+            document.getElementById('btnToggleWebGL').textContent = '🚀 禁用WebGL';
+            document.getElementById('btnToggleWebGL').classList.add('active');
+            console.log('WebGL渲染已启用');
+          } else {
+            this.useWebGL = false;
+            // 清理未成功的WebGL canvas
+            if (this.webglRenderer.canvas) {
+              this.webglRenderer.canvas.remove();
+              this.webglRenderer = null;
+            }
+            alert('WebGL初始化失败，可能您的浏览器不支持WebGL');
+          }
+        } else {
+          // 显示2D canvas
+          this.canvas.style.display = 'block';
+          document.getElementById('btnToggleWebGL').textContent = '🚀 启用WebGL';
+          document.getElementById('btnToggleWebGL').classList.remove('active');
+          console.log('WebGL渲染已禁用，回退到Canvas 2D');
+        }
+        
+        this.render();
       }
     }
     

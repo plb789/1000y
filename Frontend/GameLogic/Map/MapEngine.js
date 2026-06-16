@@ -5,13 +5,21 @@ class MapEngine {
   constructor(canvas) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
-    this.canvas.width = 1000;
-    this.canvas.height = 600;
-    this.tileSize = 32;
+    this.tileSize = 48; // 与服务端配置一致
+    // 延迟初始化画布大小，等待容器显示后再调用
 
     // 地图核心
     this.mapParser = new MillenniumMapParser();
     this.mapRenderer = null;
+
+    // 动画系统
+    if (typeof MapAnimationSystem !== 'undefined' && typeof MapAnimationSystem === 'function') {
+      this.animationSystem = new MapAnimationSystem();
+      this.animationSystem.start();
+    } else {
+      console.warn('MapAnimationSystem is not loaded or not a constructor');
+      this.animationSystem = null;
+    }
 
     // 镜头
     this.camera = {
@@ -19,6 +27,8 @@ class MapEngine {
       offsetY: 0,
       dragStartX: 0,
       dragStartY: 0,
+      mouseStartX: 0,
+      mouseStartY: 0,
       isDrag: false
     };
 
@@ -28,19 +38,38 @@ class MapEngine {
       y: 10,
       pixelX: 0,
       pixelY: 0,
-      speed: 2,
+      speed: 6, // 提高移动速度，使移动更流畅
       movePath: []
     };
 
     // 资源
     this.tilesetImg = null;
     this.roleAnim = null;
+    
+    // FPS 计算
+    this.fps = 0;
+    this.frameCount = 0;
+    this.lastFpsTime = performance.now();
+    this.onFpsUpdate = null; // FPS 更新回调
 
     this.bindEvent();
     this.loop();
   }
 
-  async loadMap(mapUrl, tilesetUrl) {
+  resizeCanvas() {
+    const container = this.canvas.parentElement;
+    if (container) {
+      this.canvas.width = container.clientWidth;
+      this.canvas.height = container.clientHeight;
+      
+      // 如果地图已加载，重新调整相机位置以保持玩家在视野中心
+      if (this.mapRenderer && this.mapParser) {
+        this.followPlayer();
+      }
+    }
+  }
+
+  async loadMap(mapUrl, tilesetUrl, animationData = null) {
     const mapBuf = await CommonUtil.loadBinary(mapUrl);
     this.mapParser.loadMap(mapBuf);
 
@@ -48,7 +77,17 @@ class MapEngine {
     if (tilesetUrl) {
       this.tilesetImg = await CommonUtil.loadImage(tilesetUrl);
     }
-    this.mapRenderer = new MapRenderer(this.canvas, this.tilesetImg);
+    this.mapRenderer = new MapRenderer(this.canvas, this.tilesetImg, this.tileSize);
+    
+    // 设置动画系统
+    if (this.animationSystem) {
+      this.mapRenderer.setAnimationSystem(this.animationSystem);
+      
+      // 加载动画数据
+      if (animationData && animationData.length > 0) {
+        this.mapRenderer.loadAnimations(animationData);
+      }
+    }
 
     this.syncPlayerPixel();
     this.followPlayer();
@@ -90,9 +129,13 @@ class MapEngine {
   bindEvent() {
     // 镜头拖拽
     this.canvas.addEventListener('mousedown', (e) => {
+      // 只响应右键拖拽
+      if (e.button !== 2) return;
       this.camera.isDrag = true;
-      this.camera.dragStartX = e.clientX - this.camera.offsetX;
-      this.camera.dragStartY = e.clientY - this.camera.offsetY;
+      this.camera.dragStartX = this.camera.offsetX; // 记录当前相机位置
+      this.camera.dragStartY = this.camera.offsetY;
+      this.camera.mouseStartX = e.clientX; // 记录鼠标起始位置
+      this.camera.mouseStartY = e.clientY;
     });
 
     this.canvas.addEventListener('mousemove', (e) => {
@@ -102,15 +145,26 @@ class MapEngine {
       const canvasW = this.canvas.width;
       const canvasH = this.canvas.height;
 
-      this.camera.offsetX = e.clientX - this.camera.dragStartX;
-      this.camera.offsetY = e.clientY - this.camera.dragStartY;
+      // 计算鼠标移动距离，反向应用到相机位置
+      const dx = this.camera.mouseStartX - e.clientX;
+      const dy = this.camera.mouseStartY - e.clientY;
+      
+      this.camera.offsetX = this.camera.dragStartX + dx;
+      this.camera.offsetY = this.camera.dragStartY + dy;
 
       this.camera.offsetX = Math.max(0, Math.min(this.camera.offsetX, mapW - canvasW));
       this.camera.offsetY = Math.max(0, Math.min(this.camera.offsetY, mapH - canvasH));
     });
 
-    this.canvas.addEventListener('mouseup', () => {
-      this.camera.isDrag = false;
+    this.canvas.addEventListener('mouseup', (e) => {
+      if (e.button === 2) {
+        this.camera.isDrag = false;
+      }
+    });
+    
+    // 禁用右键菜单
+    this.canvas.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
     });
 
     // 点击寻路
@@ -173,11 +227,35 @@ class MapEngine {
       
       // 检测传送/事件区域
       this.checkEventArea();
+      
+      // 到达目标格子后更新相机
+      this.followPlayer();
     } else {
       this.player.pixelX += (dx / dist) * this.player.speed;
       this.player.pixelY += (dy / dist) * this.player.speed;
+      // 平滑移动时不每帧更新相机，使用插值让相机更平滑
+      this.updateCameraSmooth();
     }
-    this.followPlayer();
+  }
+  
+  // 平滑更新相机位置，减少卡顿感
+  updateCameraSmooth() {
+    const mapW = this.mapParser.width * this.tileSize;
+    const mapH = this.mapParser.height * this.tileSize;
+    const canvasW = this.canvas.width;
+    const canvasH = this.canvas.height;
+    
+    // 目标相机位置
+    const targetOffsetX = this.player.pixelX - canvasW / 2 + this.tileSize / 2;
+    const targetOffsetY = this.player.pixelY - canvasH / 2 + this.tileSize / 2;
+    
+    // 平滑插值
+    this.camera.offsetX += (targetOffsetX - this.camera.offsetX) * 0.2;
+    this.camera.offsetY += (targetOffsetY - this.camera.offsetY) * 0.2;
+    
+    // 限制边界
+    this.camera.offsetX = Math.max(0, Math.min(this.camera.offsetX, mapW - canvasW));
+    this.camera.offsetY = Math.max(0, Math.min(this.camera.offsetY, mapH - canvasH));
   }
 
   checkEventArea() {
@@ -195,7 +273,19 @@ class MapEngine {
     this.ctx.save();
     this.ctx.translate(-this.camera.offsetX, -this.camera.offsetY);
 
-    this.mapRenderer.renderMap(this.mapParser);
+    // 只渲染可见区域的瓦片
+    this.mapRenderer.renderMap(
+      this.mapParser,
+      this.camera.offsetX,
+      this.camera.offsetY,
+      this.canvas.width,
+      this.canvas.height
+    );
+    
+    // 渲染动画效果
+    if (this.animationSystem) {
+      this.animationSystem.render(this.ctx, this.tileSize, this.tilesetImg);
+    }
     
     // 绘制路径
     this.mapRenderer.drawPath(this.player.movePath);
@@ -220,6 +310,21 @@ class MapEngine {
     this.updatePlayerMove();
     if (this.roleAnim) this.roleAnim.update();
     this.render();
+    
+    // FPS 计算：每秒更新一次
+    this.frameCount++;
+    const currentTime = performance.now();
+    const elapsed = currentTime - this.lastFpsTime;
+    if (elapsed >= 1000) {
+      this.fps = Math.round((this.frameCount * 1000) / elapsed);
+      this.frameCount = 0;
+      this.lastFpsTime = currentTime;
+      
+      // 调用 FPS 更新回调
+      if (this.onFpsUpdate) {
+        this.onFpsUpdate(this.fps);
+      }
+    }
     
     // 玩家位置更新后调用回调（用于更新小地图）
     if (this.onPlayerMove) {

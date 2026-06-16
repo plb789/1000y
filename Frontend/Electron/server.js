@@ -20,10 +20,10 @@ const mimeTypes = {
 const server = http.createServer((req, res) => {
   let filePath = path.join(ROOT, req.url === '/' ? '/index.html' : req.url);
   
-  // 安全检查：防止路径遍历攻击
+  // 路径遍历安全检查：确保文件路径在ROOT目录内
   if (!filePath.startsWith(ROOT)) {
     res.writeHead(403);
-    res.end('Forbidden');
+    res.end('403 Forbidden');
     return;
   }
   

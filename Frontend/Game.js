@@ -107,6 +107,23 @@ class Game {
       });
     });
     
+    // 窗口大小调整
+    window.addEventListener('resize', () => {
+      if (this.state === 'playing') {
+        this.mapEngine.resizeCanvas();
+      }
+    });
+    
+    // 页面关闭事件 - 清理资源防止内存泄漏
+    window.addEventListener('beforeunload', (e) => {
+      this.destroy();
+    });
+    
+    // 页面卸载事件
+    window.addEventListener('unload', () => {
+      this.destroy();
+    });
+    
     // 鼠标点击移动由MapEngine处理，这里不再绑定
   }
   
@@ -117,10 +134,37 @@ class Game {
       this.renderPlayers();
     };
     // 设置玩家移动回调，用于更新小地图
+    // 添加节流：只在玩家位置改变时更新小地图
     this.mapEngine.onPlayerMove = (x, y) => {
-      this.player.x = x;
-      this.player.y = y;
-      this.renderMiniMap();
+      if (this.player.x !== x || this.player.y !== y) {
+        this.player.x = x;
+        this.player.y = y;
+        // 节流：小地图更新频率限制为每200ms一次
+        if (!this.minimapUpdateTimer) {
+          this.minimapUpdateTimer = setTimeout(() => {
+            this.renderMiniMap();
+            this.minimapUpdateTimer = null;
+          }, 200);
+        }
+      }
+    };
+    // FPS 更新回调
+    this.mapEngine.onFpsUpdate = (fps) => {
+      const fpsElement = document.getElementById('fpsValue');
+      const fpsContainer = fpsElement.parentElement;
+      if (fpsElement) {
+        fpsElement.textContent = fps;
+        
+        // 根据 FPS 值改变颜色
+        fpsContainer.className = 'fps-counter';
+        if (fps < 30) {
+          fpsContainer.classList.add('low');
+        } else if (fps < 50) {
+          fpsContainer.classList.add('medium');
+        } else {
+          fpsContainer.classList.add('high');
+        }
+      }
     };
   }
   
@@ -195,6 +239,9 @@ class Game {
     this.state = 'playing';
     this.ui.loginPanel.classList.add('hidden');
     this.ui.gamePanel.classList.add('active');
+    
+    // 游戏面板显示后，调整画布大小
+    this.mapEngine.resizeCanvas();
     
     // 加载地图
     this.loadMap(this.player.mapId);
@@ -676,24 +723,103 @@ class Game {
     
     // 绘制其他玩家
     this.players.forEach(player => {
-      const screenX = player.x * 32;
-      const screenY = player.y * 32;
+      const tileSize = this.mapEngine.tileSize || 48;
+      const screenX = player.x * tileSize;
+      const screenY = player.y * tileSize;
       
       // 简单绘制为绿色圆形
       ctx.fillStyle = '#4ade80';
       ctx.beginPath();
-      ctx.arc(screenX + 16, screenY + 16, 12, 0, Math.PI * 2);
+      ctx.arc(screenX + tileSize / 2, screenY + tileSize / 2, tileSize / 3, 0, Math.PI * 2);
       ctx.fill();
       
       // 名字
       ctx.fillStyle = '#fff';
       ctx.font = '12px Microsoft YaHei';
       ctx.textAlign = 'center';
-      ctx.fillText(player.name, screenX + 16, screenY - 5);
+      ctx.fillText(player.name, screenX + tileSize / 2, screenY - 5);
     });
     
     // 恢复变换
     ctx.restore();
+  }
+  
+  /**
+   * 退出游戏：返回登录界面
+   */
+  logout() {
+    console.log('玩家退出游戏');
+    
+    // 发送退出消息给服务器
+    if (window.GameWS) {
+      window.GameWS.send(Protocol.CMD_LOGOUT, {});
+    }
+    
+    // 清理资源
+    this.destroy();
+    
+    // 重置状态
+    this.state = 'login';
+    
+    // 显示登录面板，隐藏游戏面板
+    this.ui.gamePanel.classList.add('hidden');
+    this.ui.loginPanel.classList.remove('hidden');
+    
+    // 重置玩家数据
+    this.player = {
+      id: 0,
+      name: '',
+      level: 1,
+      exp: 0,
+      gold: 0,
+      hp: 100,
+      maxHp: 100,
+      mp: 100,
+      maxMp: 100,
+      attack: 10,
+      defense: 5,
+      speed: 10,
+      hit: 50,
+      dodge: 10,
+      crit: 5,
+      mapId: 1,
+      x: 5,
+      y: 5
+    };
+    
+    // 清空其他玩家列表
+    this.players.clear();
+    
+    console.log('退出游戏完成');
+  }
+  
+  /**
+   * 销毁方法：清理定时器和资源，防止内存泄漏
+   */
+  destroy() {
+    // 清除小地图更新定时器
+    if (this.minimapUpdateTimer) {
+      clearTimeout(this.minimapUpdateTimer);
+      this.minimapUpdateTimer = null;
+    }
+    
+    // 清除其他可能存在的定时器
+    if (this.fpsUpdateTimer) {
+      clearInterval(this.fpsUpdateTimer);
+      this.fpsUpdateTimer = null;
+    }
+    
+    // 清理地图引擎
+    if (this.mapEngine && typeof this.mapEngine.destroy === 'function') {
+      this.mapEngine.destroy();
+    }
+    
+    // 清理 WebSocket 连接
+    if (window.GameWS) {
+      window.GameWS.close();
+    }
+    
+    console.log('Game instance destroyed');
   }
 }
 
