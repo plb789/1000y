@@ -135,7 +135,7 @@ class MapRenderer {
     }
   }
   
-  // 绘制玩家位置小红点
+  // 绘制玩家位置小红点（使用瓦片坐标）
   drawPlayer(x, y) {
     const ts = this.tileSize;
     const px = x * ts + ts / 2;
@@ -144,6 +144,21 @@ class MapRenderer {
     this.ctx.fillStyle = '#e94560';
     this.ctx.beginPath();
     this.ctx.arc(px, py, ts / 3, 0, Math.PI * 2);
+    this.ctx.fill();
+    
+    // 白色边框
+    this.ctx.strokeStyle = '#fff';
+    this.ctx.lineWidth = 2;
+    this.ctx.stroke();
+  }
+  
+  // 绘制玩家位置小红点（使用像素坐标，实现平滑移动）
+  drawPlayerByPixel(px, py) {
+    const ts = this.tileSize;
+    
+    this.ctx.fillStyle = '#e94560';
+    this.ctx.beginPath();
+    this.ctx.arc(px + ts / 2, py + ts / 2, ts / 3, 0, Math.PI * 2);
     this.ctx.fill();
     
     // 白色边框

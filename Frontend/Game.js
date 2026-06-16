@@ -438,8 +438,19 @@ class Game {
       console.log('其他玩家移动:', data.role_id, '->', data.x, data.y);
       const player = this.players.get(data.role_id);
       if (player) {
+        // 保存上次位置用于平滑插值
+        player.lastX = player.x;
+        player.lastY = player.y;
         player.x = data.x;
         player.y = data.y;
+        // 确保 lastScreenX/Y 存在，否则初始化为当前位置
+        const tileSize = this.mapEngine?.tileSize || 48;
+        if (player.lastScreenX === undefined) {
+          player.lastScreenX = player.lastX * tileSize;
+        }
+        if (player.lastScreenY === undefined) {
+          player.lastScreenY = player.lastY * tileSize;
+        }
       } else {
         console.log('未找到玩家:', data.role_id);
       }
@@ -464,14 +475,21 @@ class Game {
     data.players.forEach(player => {
       if (player.role_id === this.player.id) return; // 跳过自己
       
-      this.players.set(player.role_id, {
-        id: player.role_id,
-        name: player.name || `玩家${player.role_id}`,
-        x: player.x || 10,
-        y: player.y || 10,
-        hp: player.hp || 100,
-        maxHp: player.maxHp || 100
-      });
+      const px = player.x || 10;
+        const py = player.y || 10;
+        const tileSize = this.mapEngine?.tileSize || 48;
+        this.players.set(player.role_id, {
+          id: player.role_id,
+          name: player.name || `玩家${player.role_id}`,
+          x: px,
+          y: py,
+          lastX: px, // 用于平滑插值
+          lastY: py, // 用于平滑插值
+          lastScreenX: px * tileSize, // 初始屏幕坐标
+          lastScreenY: py * tileSize, // 初始屏幕坐标
+          hp: player.hp || 100,
+          maxHp: player.maxHp || 100
+        });
       console.log(`添加玩家 ${player.name} 到列表，位置 (${player.x}, ${player.y})`);
     });
     
@@ -715,15 +733,14 @@ class Game {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     
-    // 保存当前变换
-    ctx.save();
-    
-    // 应用摄像机偏移（与地图渲染一致）
-    ctx.translate(-this.mapEngine.camera.offsetX, -this.mapEngine.camera.offsetY);
+    // 注意：摄像机偏移已经在 MapEngine.render() 中应用了
+    // 这里不需要再次应用，直接绘制即可
     
     // 绘制其他玩家
     this.players.forEach(player => {
       const tileSize = this.mapEngine.tileSize || 48;
+      
+      // 直接使用瓦片坐标渲染（像素坐标 = 瓦片坐标 * 瓦片大小）
       const screenX = player.x * tileSize;
       const screenY = player.y * tileSize;
       
@@ -739,9 +756,6 @@ class Game {
       ctx.textAlign = 'center';
       ctx.fillText(player.name, screenX + tileSize / 2, screenY - 5);
     });
-    
-    // 恢复变换
-    ctx.restore();
   }
   
   /**

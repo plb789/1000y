@@ -190,7 +190,7 @@ class MapEngine {
       if (this.player.movePath.length > 0) {
         const target = this.player.movePath[this.player.movePath.length - 1];
         if (window.GameWS && window.GameWS.send) {
-          window.GameWS.send(3002, { // CMD_MOVE
+          window.GameWS.send(2001, { // CMD_MOVE
             x: target.x,
             y: target.y
           });
@@ -290,20 +290,21 @@ class MapEngine {
     // 绘制路径
     this.mapRenderer.drawPath(this.player.movePath);
     
-    // 绘制玩家位置小红点
-    this.mapRenderer.drawPlayer(this.player.x, this.player.y);
+    // 绘制玩家位置小红点（使用像素坐标实现平滑移动）
+    this.mapRenderer.drawPlayerByPixel(this.player.pixelX, this.player.pixelY);
 
     // 绘制角色动画
     if (this.roleAnim) {
       this.roleAnim.draw(this.ctx, this.player.pixelX, this.player.pixelY);
     }
-
-    this.ctx.restore();
     
     // 渲染完成后调用回调（用于绘制其他玩家）
+    // 注意：在 ctx.restore() 之前调用，确保摄像机偏移仍然有效
     if (this.afterRender) {
       this.afterRender();
     }
+
+    this.ctx.restore();
   }
 
   loop() {

@@ -114,6 +114,16 @@ class Game {
       }
     });
     
+    // 页面关闭事件 - 清理资源防止内存泄漏
+    window.addEventListener('beforeunload', (e) => {
+      this.destroy();
+    });
+    
+    // 页面卸载事件
+    window.addEventListener('unload', () => {
+      this.destroy();
+    });
+    
     // 鼠标点击移动由MapEngine处理，这里不再绑定
   }
   
@@ -428,8 +438,19 @@ class Game {
       console.log('其他玩家移动:', data.role_id, '->', data.x, data.y);
       const player = this.players.get(data.role_id);
       if (player) {
+        // 保存上次位置用于平滑插值
+        player.lastX = player.x;
+        player.lastY = player.y;
         player.x = data.x;
         player.y = data.y;
+        // 确保 lastScreenX/Y 存在，否则初始化为当前位置
+        const tileSize = this.mapEngine?.tileSize || 48;
+        if (player.lastScreenX === undefined) {
+          player.lastScreenX = player.lastX * tileSize;
+        }
+        if (player.lastScreenY === undefined) {
+          player.lastScreenY = player.lastY * tileSize;
+        }
       } else {
         console.log('未找到玩家:', data.role_id);
       }
@@ -454,14 +475,21 @@ class Game {
     data.players.forEach(player => {
       if (player.role_id === this.player.id) return; // 跳过自己
       
-      this.players.set(player.role_id, {
-        id: player.role_id,
-        name: player.name || `玩家${player.role_id}`,
-        x: player.x || 10,
-        y: player.y || 10,
-        hp: player.hp || 100,
-        maxHp: player.maxHp || 100
-      });
+      const px = player.x || 10;
+        const py = player.y || 10;
+        const tileSize = this.mapEngine?.tileSize || 48;
+        this.players.set(player.role_id, {
+          id: player.role_id,
+          name: player.name || `玩家${player.role_id}`,
+          x: px,
+          y: py,
+          lastX: px, // 用于平滑插值
+          lastY: py, // 用于平滑插值
+          lastScreenX: px * tileSize, // 初始屏幕坐标
+          lastScreenY: py * tileSize, // 初始屏幕坐标
+          hp: player.hp || 100,
+          maxHp: player.maxHp || 100
+        });
       console.log(`添加玩家 ${player.name} 到列表，位置 (${player.x}, ${player.y})`);
     });
     
@@ -705,15 +733,14 @@ class Game {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     
-    // 保存当前变换
-    ctx.save();
-    
-    // 应用摄像机偏移（与地图渲染一致）
-    ctx.translate(-this.mapEngine.camera.offsetX, -this.mapEngine.camera.offsetY);
+    // 注意：摄像机偏移已经在 MapEngine.render() 中应用了
+    // 这里不需要再次应用，直接绘制即可
     
     // 绘制其他玩家
     this.players.forEach(player => {
       const tileSize = this.mapEngine.tileSize || 48;
+      
+      // 直接使用瓦片坐标渲染（像素坐标 = 瓦片坐标 * 瓦片大小）
       const screenX = player.x * tileSize;
       const screenY = player.y * tileSize;
       
@@ -729,9 +756,84 @@ class Game {
       ctx.textAlign = 'center';
       ctx.fillText(player.name, screenX + tileSize / 2, screenY - 5);
     });
+  }
+  
+  /**
+   * 退出游戏：返回登录界面
+   */
+  logout() {
+    console.log('玩家退出游戏');
     
-    // 恢复变换
-    ctx.restore();
+    // 发送退出消息给服务器
+    if (window.GameWS) {
+      window.GameWS.send(Protocol.CMD_LOGOUT, {});
+    }
+    
+    // 清理资源
+    this.destroy();
+    
+    // 重置状态
+    this.state = 'login';
+    
+    // 显示登录面板，隐藏游戏面板
+    this.ui.gamePanel.classList.add('hidden');
+    this.ui.loginPanel.classList.remove('hidden');
+    
+    // 重置玩家数据
+    this.player = {
+      id: 0,
+      name: '',
+      level: 1,
+      exp: 0,
+      gold: 0,
+      hp: 100,
+      maxHp: 100,
+      mp: 100,
+      maxMp: 100,
+      attack: 10,
+      defense: 5,
+      speed: 10,
+      hit: 50,
+      dodge: 10,
+      crit: 5,
+      mapId: 1,
+      x: 5,
+      y: 5
+    };
+    
+    // 清空其他玩家列表
+    this.players.clear();
+    
+    console.log('退出游戏完成');
+  }
+  
+  /**
+   * 销毁方法：清理定时器和资源，防止内存泄漏
+   */
+  destroy() {
+    // 清除小地图更新定时器
+    if (this.minimapUpdateTimer) {
+      clearTimeout(this.minimapUpdateTimer);
+      this.minimapUpdateTimer = null;
+    }
+    
+    // 清除其他可能存在的定时器
+    if (this.fpsUpdateTimer) {
+      clearInterval(this.fpsUpdateTimer);
+      this.fpsUpdateTimer = null;
+    }
+    
+    // 清理地图引擎
+    if (this.mapEngine && typeof this.mapEngine.destroy === 'function') {
+      this.mapEngine.destroy();
+    }
+    
+    // 清理 WebSocket 连接
+    if (window.GameWS) {
+      window.GameWS.close();
+    }
+    
+    console.log('Game instance destroyed');
   }
 }
 
