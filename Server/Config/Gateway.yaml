@@ -27,4 +27,4 @@ gateway:
   broadcast_channel_size: 5000    # 广播消息队列大小
   max_connections_per_ip: 10      # 同一IP最大连接数(防攻击)
   view_range: 500                 # 视野范围(像素)
-  move_merge_delay: 50            # 移动消息合并延迟(毫秒)
+  move_merge_delay: 0             # 移动消息合并延迟(毫秒)，设为0禁用合并

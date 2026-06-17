@@ -1,0 +1,29 @@
+自动寻路功能 完全保留 ！
+
+现状：
+
+- ✅ AStar 算法文件完整存在： Frontend/Core/Utils/AStar.js
+- ✅ 已在 index.html 中引入
+- ✅ Game.js 中的 onRepathNeeded 回调仍在使用（处理移动中路径被阻挡时的重新寻路）
+新增功能： 我刚刚在 MapEngine 中添加了一个公开的 navigateTo(targetX, targetY) 方法，方便任务系统调用：
+
+```
+// 任务系统调用示例
+mapEngine.navigateTo(targetX, 
+targetY);
+```
+方法说明：
+
+参数 类型 说明 targetX number 目标格子X坐标 targetY number 目标格子Y坐标 返回值 boolean 成功返回 true，失败返回 false（目标不可达或无路径）
+
+使用场景：
+
+```
+// 任务系统引导玩家前往NPC位置
+if (mapEngine.navigateTo(npcX, 
+npcY)) {
+  console.log('开始自动寻路...');
+} else {
+  console.log('目标位置不可到达');
+}
+```

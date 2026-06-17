@@ -46,6 +46,18 @@ class MapEngine {
       waitingServerConfirm: false // 等待服务器确认标志
     };
 
+    // 鼠标跟随移动状态
+    this.mouseFollow = {
+      isPressed: false,      // 是否按住鼠标左键
+      isRunning: false,       // 是否跑步模式（Shift键）
+      targetX: null,          // 当前跟随目标位置
+      targetY: null,
+      lastDirX: 0,            // 上一次移动方向X
+      lastDirY: 0,            // 上一次移动方向Y
+      pressStartTime: 0,      // 按住开始时间（用于区分点击和按住）
+      clickThreshold: 200    // 点击判定阈值（毫秒）
+    };
+
     // 资源
     this.tilesetImg = null;
     this.roleAnim = null;
@@ -218,44 +230,58 @@ class MapEngine {
       e.preventDefault();
     });
 
-    // 点击寻路
-    this.canvas.addEventListener('click', (e) => {
-      if (this.camera.isDrag) return;
+    // 鼠标左键按下 - 开始移动或跟随
+    this.canvas.addEventListener('mousedown', (e) => {
+      if (e.button !== 0 || this.camera.isDrag) return; // 只处理左键
+
+      const now = Date.now();
+      this.mouseFollow.pressStartTime = now; // 记录按住开始时间
+      this.mouseFollow.isPressed = true;
+      this.mouseFollow.isRunning = e.shiftKey; // 保存Shift键状态
+
+      // 记录初始点击位置
       const rect = this.canvas.getBoundingClientRect();
       const clickPx = e.clientX - rect.left + this.camera.offsetX;
       const clickPy = e.clientY - rect.top + this.camera.offsetY;
       const targetTile = this.pixel2Tile(clickPx, clickPy);
 
-      const tile = this.mapParser.getTile(targetTile.x, targetTile.y);
-      if (!tile || tile.attr === 1) return;
+      // 保存目标位置供后续跟随使用
+      this.mouseFollow.targetX = targetTile.x;
+      this.mouseFollow.targetY = targetTile.y;
 
-      this.player.movePath = AStar.findPath(
-        this.player.x, this.player.y,
-        targetTile.x, targetTile.y,
-        this.mapParser.collision,
-        this.mapParser.width,
-        this.mapParser.height
-      );
-      
-      // 保存目标（用于重新寻路）
-      this.player.moveTargetX = targetTile.x;
-      this.player.moveTargetY = targetTile.y;
-      
-      // 如果有路径，调用移动前检查回调（用于玩家间碰撞检测等）
-      if (this.player.movePath.length > 0 && this.onBeforeMove) {
-        this.player.movePath = this.onBeforeMove(this.player.movePath) || this.player.movePath;
+      // 立即执行第一次移动（点击移动一格）
+      this.performMouseMove(e.shiftKey);
+    });
+
+    // 鼠标左键释放 - 停止跟随移动
+    this.canvas.addEventListener('mouseup', (e) => {
+      if (e.button === 2) {
+        this.camera.isDrag = false;
       }
-      
-      // 如果有路径，发送移动消息到服务器
-      if (this.player.movePath.length > 0) {
-        const target = this.player.movePath[this.player.movePath.length - 1];
-        if (window.GameWS && window.GameWS.send) {
-          window.GameWS.send(2001, { // CMD_MOVE
-            x: target.x,
-            y: target.y
-          });
-        }
+      if (e.button === 0) {
+        this.mouseFollow.isPressed = false;
       }
+    });
+
+    // 鼠标移出画布 - 停止跟随移动
+    this.canvas.addEventListener('mouseleave', () => {
+      this.mouseFollow.isPressed = false;
+    });
+
+    // 鼠标移动 - 更新跟随目标位置
+    this.canvas.addEventListener('mousemove', (e) => {
+      if (!this.mouseFollow.isPressed) return;
+      if (this.camera.isDrag) return;
+
+      // 更新目标位置
+      const rect = this.canvas.getBoundingClientRect();
+      const clickPx = e.clientX - rect.left + this.camera.offsetX;
+      const clickPy = e.clientY - rect.top + this.camera.offsetY;
+      const targetTile = this.pixel2Tile(clickPx, clickPy);
+
+      this.mouseFollow.targetX = targetTile.x;
+      this.mouseFollow.targetY = targetTile.y;
+      this.mouseFollow.isRunning = e.shiftKey; // 实时更新Shift键状态
     });
 
     // 标签页可见性变化监听
@@ -414,12 +440,176 @@ class MapEngine {
     this.ctx.restore();
   }
 
+  // 执行鼠标移动（点击移动一格）
+  performMouseMove(isRunning, continueMoving = false) {
+    // 根据是否跑步决定移动距离
+    const moveDistance = isRunning ? 2 : 1;
+
+    // 计算方向向量
+    let dirX, dirY, distance;
+
+    // 检查目标位置是否有效
+    const targetTile = this.mapParser.getTile(this.mouseFollow.targetX, this.mouseFollow.targetY);
+
+    if (targetTile && targetTile.attr !== 1) {
+      // 目标位置有效，计算到鼠标位置的方向
+      const dx = this.mouseFollow.targetX - this.player.x;
+      const dy = this.mouseFollow.targetY - this.player.y;
+      distance = Math.hypot(dx, dy);
+
+      if (distance > 0) {
+        dirX = dx / distance;
+        dirY = dy / distance;
+        // 保存方向供后续使用
+        this.mouseFollow.lastDirX = dirX;
+        this.mouseFollow.lastDirY = dirY;
+      } else if (continueMoving) {
+        // 已到达鼠标位置，使用保存的方向继续向前移动
+        dirX = this.mouseFollow.lastDirX;
+        dirY = this.mouseFollow.lastDirY;
+        if (dirX === 0 && dirY === 0) return;
+        // 更新目标位置为前方位置，避免来回移动
+        this.mouseFollow.targetX = Math.round(this.player.x + dirX * moveDistance);
+        this.mouseFollow.targetY = Math.round(this.player.y + dirY * moveDistance);
+      } else {
+        // 单击时到达目标位置就停止
+        return;
+      }
+    } else if (continueMoving) {
+      // 目标位置无效（可能超出地图），但按住不放时继续沿原方向移动
+      dirX = this.mouseFollow.lastDirX;
+      dirY = this.mouseFollow.lastDirY;
+      if (dirX === 0 && dirY === 0) return;
+    } else {
+      // 单击时目标位置无效，停止
+      return;
+    }
+
+    // 计算实际移动目标
+    const actualDistance = Math.min(distance > 0 ? distance : moveDistance, moveDistance);
+    let newX = Math.round(this.player.x + dirX * actualDistance);
+    let newY = Math.round(this.player.y + dirY * actualDistance);
+
+    // 边界检查
+    newX = Math.max(0, Math.min(newX, this.mapParser.width - 1));
+    newY = Math.max(0, Math.min(newY, this.mapParser.height - 1));
+
+    // 如果新位置和当前位置相同（可能到达边界），停止移动
+    if (newX === this.player.x && newY === this.player.y) return;
+
+    // 检查目标格子是否可行走
+    const targetTileData = this.mapParser.getTile(newX, newY);
+    if (!targetTileData || targetTileData.attr === 1) {
+      return;
+    }
+
+    // 如果正在移动中，不打断当前移动
+    if (this.player.movePath.length > 0) {
+      return;
+    }
+
+    // 设置移动路径
+    this.player.movePath = [{ x: newX, y: newY }];
+    this.player.moveTargetX = newX;
+    this.player.moveTargetY = newY;
+
+    // 设置移动速度
+    this.player.speed = isRunning ? 7 : 6;
+
+    // 如果有路径，调用移动前检查回调
+    if (this.player.movePath.length > 0 && this.onBeforeMove) {
+      this.player.movePath = this.onBeforeMove(this.player.movePath) || this.player.movePath;
+    }
+
+    // 发送移动消息到服务器
+    if (this.player.movePath.length > 0) {
+      const target = this.player.movePath[this.player.movePath.length - 1];
+      if (window.GameWS && window.GameWS.send) {
+        window.GameWS.send(2001, {
+          x: target.x,
+          y: target.y
+        });
+      }
+    }
+  }
+
+  // 处理持续跟随移动
+  handleMouseFollow(currentTime) {
+    if (!this.mouseFollow.isPressed) return;
+
+    // 检查按住时长是否超过阈值（超过才开启持续跟随）
+    const now = Date.now();
+    if (now - this.mouseFollow.pressStartTime < this.mouseFollow.clickThreshold) {
+      return; // 按住时间不足阈值，不执行持续跟随
+    }
+
+    // 检查是否还在移动中（当前格子移动完成后立即开始下一格）
+    if (this.player.movePath.length > 0) return;
+
+    // 执行跟随移动，使用保存的Shift键状态，传入 continueMoving=true 表示按住不放继续移动
+    this.player.speed = this.mouseFollow.isRunning ? 9 : 8; // 跑步或步行速度
+    this.performMouseMove(this.mouseFollow.isRunning, true);
+  }
+
+  // 自动寻路到指定坐标（供任务系统等调用）
+  navigateTo(targetX, targetY) {
+    // 检查目标坐标是否有效
+    const targetTile = this.mapParser.getTile(targetX, targetY);
+    if (!targetTile || targetTile.attr === 1) {
+      console.warn(`navigateTo: 目标位置不可到达 (${targetX}, ${targetY})`);
+      return false;
+    }
+
+    // 使用 AStar 算法计算路径
+    const path = AStar.findPath(
+      this.player.x, this.player.y,
+      targetX, targetY,
+      this.mapParser.collision,
+      this.mapParser.width,
+      this.mapParser.height
+    );
+
+    if (path.length === 0) {
+      console.warn(`navigateTo: 无法找到路径到 (${targetX}, ${targetY})`);
+      return false;
+    }
+
+    // 保存目标（用于重新寻路）
+    this.player.moveTargetX = targetX;
+    this.player.moveTargetY = targetY;
+
+    // 应用路径前检查（过滤被玩家占据的点）
+    if (path.length > 0 && this.onBeforeMove) {
+      const filteredPath = this.onBeforeMove(path);
+      this.player.movePath = filteredPath || path;
+    } else {
+      this.player.movePath = path;
+    }
+
+    // 设置为跑步速度
+    this.player.speed = 8;
+
+    // 发送移动消息到服务器
+    if (this.player.movePath.length > 0 && window.GameWS && window.GameWS.send) {
+      const target = this.player.movePath[this.player.movePath.length - 1];
+      window.GameWS.send(2001, {
+        x: target.x,
+        y: target.y
+      });
+    }
+
+    return true;
+  }
+
   loop() {
     const currentTime = performance.now();
     
     // 计算与上一帧的时间差
     const deltaTime = currentTime - this.lastMoveTime;
     this.lastMoveTime = currentTime;
+    
+    // 处理持续跟随移动
+    this.handleMouseFollow(currentTime);
     
     // 基于时间的移动（确保无论帧率如何移动速度一致）
     this.updatePlayerMove(deltaTime);

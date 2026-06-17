@@ -1,4 +1,10 @@
 # 你要排除的目录（写在这里）
-Build/
-Electron/
+node_modules/
+Core/
+GameLogic/
+Protocol/
+Res/
+ResourceLoad/
+*.png
+*.jpg
 # 所有你不想提交的大文件夹都加进来

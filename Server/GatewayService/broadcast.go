@@ -136,6 +136,17 @@ func PublishToMap(msg BroadcastMessage) error {
 
 // MergeAndBroadcastMove 合并并广播移动消息
 func (cm *ClientManager) MergeAndBroadcastMove(mapID uint32, fromID uint64, x, y int, data []byte) {
+	// 如果合并延迟为0，直接广播不合并
+	if MOVE_MERGE_DELAY <= 0 {
+		msg := &Message{
+			From: fromID,
+			Type: CmdMove,
+			Data: data,
+		}
+		cm.BroadcastToViewRangeConcurrent(mapID, x, y, msg)
+		return
+	}
+
 	moveMerger.mu.Lock()
 
 	// 如果已有待合并的消息，更新位置
