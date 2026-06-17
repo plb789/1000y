@@ -602,7 +602,6 @@ class Game {
     // 获取实际Canvas尺寸（防止样式尺寸和实际尺寸不一致）
     const canvasWidth = this.ui.miniMap.width;
     const canvasHeight = this.ui.miniMap.height;
-    const miniMapSize = Math.min(canvasWidth, canvasHeight);
     
     // 小地图配置
     const backgroundColor = '#1a1a1a';
@@ -615,25 +614,58 @@ class Game {
     ctx.fillStyle = backgroundColor;
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
     
-    // 计算缩放比例（按宽度缩放，确保左右填满整个画布）
-    let scale = canvasWidth / mapWidth;
+    // ===== 关键优化：小地图显示范围与主地图可见范围保持一致 =====
+    // 获取主地图画布尺寸
+    const mainCanvasWidth = this.ui.canvas.width;
+    const mainCanvasHeight = this.ui.canvas.height;
+    const tileSize = this.mapEngine?.tileSize || 48;
+    
+    // 计算主地图可见的瓦片范围
+    const mainVisibleTileWidth = mainCanvasWidth / tileSize;
+    const mainVisibleTileHeight = mainCanvasHeight / tileSize;
+    
+    // 计算缩放比例：让小地图显示的瓦片范围等于主地图的可见范围
+    // 小地图显示的瓦片宽度 = 小地图画布宽度 / scale
+    // 要让两者相等：scale = 小地图画布宽度 / 主地图可见瓦片宽度
+    const scaleX = canvasWidth / mainVisibleTileWidth;
+    const scaleY = canvasHeight / mainVisibleTileHeight;
+    
+    // 取较小的缩放比例，确保小地图显示的范围不超过主地图可见范围
+    let scale = Math.min(scaleX, scaleY);
     
     // 处理极端情况：地图尺寸为0
-    if (mapWidth === 0 || mapHeight === 0 || isNaN(scale) || !isFinite(scale)) {
+    if (mainCanvasWidth === 0 || mainCanvasHeight === 0 || isNaN(scale) || !isFinite(scale)) {
       scale = 1;
     }
     
     // 计算偏移量，让玩家始终显示在小地图中心
-    const finalOffsetX = canvasWidth / 2 - playerX * scale;
-    const finalOffsetY = canvasHeight / 2 - playerY * scale;
+    let finalOffsetX = canvasWidth / 2 - playerX * scale;
+    let finalOffsetY = canvasHeight / 2 - playerY * scale;
     
-    // 绘制地图瓦片（覆盖整个小地图区域）
+    // 限制偏移量，确保画布被地图完全填满（允许裁剪地图边缘）
+    const scaledMapWidth = mapWidth * scale;
+    const scaledMapHeight = mapHeight * scale;
+    
+    // 水平方向：确保地图左右填满画布（允许裁剪地图边缘）
+    finalOffsetX = Math.max(-scaledMapWidth + canvasWidth, Math.min(0, finalOffsetX));
+    
+    // 垂直方向：确保地图上下填满画布（允许裁剪地图边缘）
+    finalOffsetY = Math.max(-scaledMapHeight + canvasHeight, Math.min(0, finalOffsetY));
+    
+    // ===== 性能优化：只计算和绘制可见范围的瓦片 =====
+    // 计算小地图画布能显示的瓦片范围（向外扩展2格作为边界）
+    const visibleTileStartX = Math.max(0, Math.floor(-finalOffsetX / scale) - 2);
+    const visibleTileStartY = Math.max(0, Math.floor(-finalOffsetY / scale) - 2);
+    const visibleTileEndX = Math.min(mapWidth, Math.ceil((canvasWidth - finalOffsetX) / scale) + 2);
+    const visibleTileEndY = Math.min(mapHeight, Math.ceil((canvasHeight - finalOffsetY) / scale) + 2);
+    
+    // 绘制地图瓦片（只绘制可见范围内的瓦片）
     const tiles = mapParser.tiles || [];
     
     if (tiles.length > 0) {
-      // 遍历地图瓦片
-      for (let y = 0; y < mapHeight; y++) {
-        for (let x = 0; x < mapWidth; x++) {
+      // 只遍历可见范围内的瓦片
+      for (let y = visibleTileStartY; y < visibleTileEndY; y++) {
+        for (let x = visibleTileStartX; x < visibleTileEndX; x++) {
           const index = y * mapWidth + x;
           const tile = tiles[index];
           
@@ -648,36 +680,44 @@ class Game {
           const drawX = finalOffsetX + x * scale;
           const drawY = finalOffsetY + y * scale;
           
-          // 确保瓦片不超出画布边界
-          if (drawX >= 0 && drawY >= 0 && drawX < canvasWidth && drawY < canvasHeight) {
-            ctx.fillRect(drawX, drawY, Math.max(1, scale), Math.max(1, scale));
-          }
+          ctx.fillRect(drawX, drawY, Math.max(1, scale), Math.max(1, scale));
         }
       }
     } else if (this.currentMap?.tiles) {
-      // 备用绘制方式
-      for (let y = 0; y < mapHeight; y++) {
-        for (let x = 0; x < mapWidth; x++) {
+      // 备用绘制方式：只遍历可见范围内的瓦片
+      for (let y = visibleTileStartY; y < visibleTileEndY; y++) {
+        for (let x = visibleTileStartX; x < visibleTileEndX; x++) {
           const tile = this.currentMap.tiles[y]?.[x];
           ctx.fillStyle = tile === 1 ? obstacleColor : walkableColor;
           
           const drawX = finalOffsetX + x * scale;
           const drawY = finalOffsetY + y * scale;
           
-          if (drawX >= 0 && drawY >= 0 && drawX < canvasWidth && drawY < canvasHeight) {
-            ctx.fillRect(drawX, drawY, Math.max(1, scale), Math.max(1, scale));
-          }
+          ctx.fillRect(drawX, drawY, Math.max(1, scale), Math.max(1, scale));
         }
       }
     }
     
-    // 绘制其他玩家
+    // ===== 性能优化：只绘制可见范围内的其他玩家 =====
+    // 计算可见区域的瓦片范围（用于玩家筛选）
+    const viewRadius = Math.max(canvasWidth, canvasHeight) / scale / 2 + 2;
+    
+    // 计算玩家自己在小地图上的实际位置（考虑偏移量限制后的真实位置）
+    const selfDrawX = canvasWidth / 2;
+    const selfDrawY = canvasHeight / 2;
+    
     if (this.players && this.players.size > 0) {
       this.players.forEach(otherPlayer => {
-        const px = finalOffsetX + otherPlayer.x * scale;
-        const py = finalOffsetY + otherPlayer.y * scale;
+        // 先检查玩家是否在可见范围内（距离判断）
+        const dx = otherPlayer.x - playerX;
+        const dy = otherPlayer.y - playerY;
         
-        if (px >= 0 && py >= 0 && px < canvasWidth && py < canvasHeight) {
+        // 只绘制可见范围内的玩家
+        if (Math.abs(dx) <= viewRadius && Math.abs(dy) <= viewRadius) {
+          // 基于玩家中心计算其他玩家的位置（相对坐标方式，更准确）
+          const px = selfDrawX + dx * scale;
+          const py = selfDrawY + dy * scale;
+          
           ctx.fillStyle = otherPlayerColor;
           ctx.beginPath();
           ctx.arc(px, py, 2, 0, Math.PI * 2);
@@ -686,16 +726,11 @@ class Game {
       });
     }
     
-    // 绘制自己
-    const selfX = finalOffsetX + playerX * scale;
-    const selfY = finalOffsetY + playerY * scale;
-    
-    if (selfX >= 0 && selfY >= 0 && selfX < canvasWidth && selfY < canvasHeight) {
-      ctx.fillStyle = playerColor;
-      ctx.beginPath();
-      ctx.arc(selfX, selfY, 3, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    // 绘制自己（始终在中心）
+    ctx.fillStyle = playerColor;
+    ctx.beginPath();
+    ctx.arc(selfDrawX, selfDrawY, 3, 0, Math.PI * 2);
+    ctx.fill();
   }
   
   handleMessage(cmd, data) {
