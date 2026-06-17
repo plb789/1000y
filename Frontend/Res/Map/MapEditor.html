@@ -402,9 +402,10 @@
     
     <div class="toolbar-group">
       <span class="toolbar-label">工具</span>
-      <button class="toolbar-btn active" id="btnPen" title="画笔 [B]">✏️</button>
+      <button class="toolbar-btn" id="btnPen" title="画笔 [B]">✏️</button>
       <button class="toolbar-btn" id="btnEraser" title="橡皮擦 [E]">🧹</button>
       <button class="toolbar-btn" id="btnFill" title="填充 [G]">🪣</button>
+      <button class="toolbar-btn" id="btnPicker" title="查看/拾取 [I] - 点击只选择不修改">👁️</button>
       <button class="toolbar-btn" id="btnSelect" title="框选 [S]">⬚</button>
     </div>
     
@@ -448,6 +449,7 @@
     <div class="toolbar-group">
       <span class="toolbar-label">高级</span>
       <button class="toolbar-btn" id="btnAutoGenerate" title="根据图集自动生成地图">✨</button>
+      <button class="toolbar-btn" id="btnClearMap" title="清空地图瓦片数据（重新开始）">🗑️</button>
       <button class="toolbar-btn" id="btnExportMinimap" title="导出小地图PNG">🗾</button>
       <button class="toolbar-btn" id="btnExportAnim" title="导出游戏动画数据">🎮</button>
     </div>
@@ -785,6 +787,9 @@
         
         // 剪贴板
         this.clipboard = null;
+
+        // 查看模式拾取位置
+        this.pickedPos = null;
         
         // 已导入的地图列表
         this.importedMaps = [];
@@ -800,13 +805,13 @@
         this.render();
       }
       
-      // 初始化地图数据
+      // 初始化地图数据（默认空瓦片，low=0 表示空白）
       initMap() {
         this.tiles = [];
         for (let y = 0; y < this.mapHeight; y++) {
           const row = [];
           for (let x = 0; x < this.mapWidth; x++) {
-            row.push({ low: 1, high: 0, attr: 0 });
+            row.push({ low: 0, high: 0, attr: 0 });
           }
           this.tiles.push(row);
         }
@@ -963,6 +968,7 @@
         document.getElementById('btnEraser').addEventListener('click', () => this.setTool('eraser'));
         document.getElementById('btnFill').addEventListener('click', () => this.setTool('fill'));
         document.getElementById('btnSelect').addEventListener('click', () => this.setTool('select'));
+        document.getElementById('btnPicker').addEventListener('click', () => this.setTool('picker'));
         
         // 文件操作
         document.getElementById('btnNew').addEventListener('click', () => this.newMap());
@@ -1006,6 +1012,7 @@
         
         // 高级功能
         document.getElementById('btnAutoGenerate').addEventListener('click', () => this.autoGenerateMap());
+        document.getElementById('btnClearMap').addEventListener('click', () => this.clearAllTiles());
         document.getElementById('btnExportMinimap').addEventListener('click', () => this.exportMinimap());
         document.getElementById('btnExportAnim').addEventListener('click', () => this.exportAnimationFile());
         
@@ -1133,12 +1140,8 @@
               this.render();
               this.initPalette();
 
-              // 自动填充地图
-              if (this.tilesetMetadata) {
-                this.autoFillMapFromTileset();
-              }
-
               console.log(`✅ 瓦片图集加载完成: ${img.width}x${img.height}, 列数=${this.tilesetCols}, 元数据=${this.tilesetMetadata ? '有' : '无'}`);
+              console.log(`   💡 点击「✨」按钮可自动填充地图`);
             };
 
             // 弹出 JSON 文件选择框
@@ -1210,15 +1213,7 @@
             status.style.color = '#4ade80';
 
             console.log(`✅ 手动加载元数据成功: ${metadata.name || file.name}, 瓦片数=${metadata.totalTiles || '?'}, 列数=${metadata.columns || '?'}`);
-
-            // 如果地图已有数据，提示是否自动填充
-            if (this.tiles.length > 0 && this.tiles[0].length > 0) {
-              if (confirm('是否根据元数据重新自动填充地图？')) {
-                this.autoFillMapFromTileset();
-              }
-            } else {
-              this.autoFillMapFromTileset();
-            }
+            console.log(`   💡 点击「✨」按钮可自动填充地图`);
 
             this.render();
             this.initPalette();
@@ -1477,8 +1472,14 @@
 
           for (let y = 0; y < mh; y++) {
             for (let x = 0; x < mw; x++) {
-              const tile = this.tiles[y] && this.tiles[y][x] ? this.tiles[y][x] : { low: 1, high: 0, attr: 0 };
-              const tileIdx = Math.max(0, (tile.low || 1) - 1);  // 防止负数
+              const tile = this.tiles[y] && this.tiles[y][x] ? this.tiles[y][x] : { low: 0, high: 0, attr: 0 };
+
+              // 空瓦片(low=0)跳过绘制，显示透明/背景色
+              if (!tile.low) {
+                continue;
+              }
+
+              const tileIdx = tile.low - 1;
               const sx = (tileIdx % cols) * ts;
               const sy = Math.floor(tileIdx / cols) * ts;
               const px = x * ts;
@@ -1516,8 +1517,12 @@
           // 使用颜色块渲染
           for (let y = 0; y < mh; y++) {
             for (let x = 0; x < mw; x++) {
-              const tile = this.tiles[y] && this.tiles[y][x] ? this.tiles[y][x] : { low: 1, high: 0, attr: 0 };
-              const tileType = this.tileTypeIndex.get(tile.low || 1);
+              const tile = this.tiles[y] && this.tiles[y][x] ? this.tiles[y][x] : { low: 0, high: 0, attr: 0 };
+
+              // 空瓦片跳过
+              if (!tile.low) continue;
+
+              const tileType = this.tileTypeIndex.get(tile.low);
               const color = tileType ? tileType.color : '#ff00ff';
               const px = x * ts;
               const py = y * ts;
@@ -1545,6 +1550,22 @@
         // 绘制选择区域
         if (this.selection.active) {
           this.drawSelection();
+        }
+
+        // 绘制查看模式拾取位置高亮
+        if (this.pickedPos && this.currentTool === 'picker') {
+          const px = this.pickedPos.x * this.tileSize;
+          const py = this.pickedPos.y * this.tileSize;
+          this.ctx.strokeStyle = '#fbbf24';
+          this.ctx.lineWidth = 3;
+          this.ctx.strokeRect(px + 1, py + 1, this.tileSize - 2, this.tileSize - 2);
+          // 角标记
+          const c = 8;
+          this.ctx.fillStyle = '#fbbf24';
+          this.ctx.fillRect(px, py, c, c);
+          this.ctx.fillRect(px + this.tileSize - c, py, c, c);
+          this.ctx.fillRect(px, py + this.tileSize - c, c, c);
+          this.ctx.fillRect(px + this.tileSize - c, py + this.tileSize - c, c, c);
         }
         
         // 渲染动画（如果在预览模式）
@@ -1668,6 +1689,9 @@
           this.selection.endY = y;
           this.selection.active = true;
           this.render();
+        } else if (this.currentTool === 'picker') {
+          // 查看模式：只选中并显示信息，不修改任何内容
+          this.pickTile(x, y);
         }
       }
       
@@ -1736,6 +1760,8 @@
           this.setTool('fill');
         } else if (e.key === 's') {
           this.setTool('select');
+        } else if (e.key === 'i') {
+          this.setTool('picker');
         }
       }
       
@@ -1802,7 +1828,47 @@
           stack.push({ x, y: y - 1 });
         }
       }
-      
+
+      // 查看模式：拾取瓦片信息（只读，不修改）
+      pickTile(x, y) {
+        if (!this.tiles[y] || !this.tiles[y][x]) return;
+
+        const tile = this.tiles[y][x];
+
+        // 更新当前选中瓦片为该位置的瓦片（方便后续用画笔绘制相同内容）
+        this.currentTile = { low: tile.low, high: tile.high, attr: tile.attr };
+
+        // 更新属性面板显示
+        document.getElementById('tileId').value = tile.low;
+        document.getElementById('tileHigh').value = tile.high;
+        document.getElementById('tileAttrPassable').checked = tile.attr !== 1;
+        document.getElementById('tileAttrBlock').checked = tile.attr === 1;
+
+        // 更新调色板高亮（如果瓦片在类型索引中存在）
+        if (this.tileTypeIndex && this.tileTypeIndex.has(tile.low)) {
+          const paletteGrid = document.getElementById('paletteGrid');
+          if (paletteGrid) {
+            document.querySelectorAll('.palette-tile').forEach(t => t.classList.remove('selected'));
+            const targetTile = paletteGrid.querySelector(`[data-id="${tile.low}"]`);
+            if (targetTile) targetTile.classList.add('selected');
+          }
+        }
+
+        // 更新当前瓦片显示
+        const currentTileEl = document.getElementById('currentTile');
+        if (currentTileEl) {
+          const tileInfo = this.tileTypeIndex ? this.tileTypeIndex.get(tile.low) : null;
+          const name = (tileInfo && tileInfo.name) ? tileInfo.name : `瓦片${tile.low}`;
+          currentTileEl.textContent = `${name} (${x},${y})`;
+        }
+
+        // 高亮当前格子（临时选区效果）
+        this.pickedPos = { x, y };
+        this.render();
+
+        console.log(`👁️ 拾取瓦片 (${x},${y}): low=${tile.low}, high=${tile.high}, attr=${tile.attr}`);
+      }
+
       // 设置工具
       setTool(tool) {
         this.currentTool = tool;
@@ -1810,10 +1876,12 @@
         document.querySelectorAll('#toolbar .toolbar-btn').forEach(btn => btn.classList.remove('active'));
         document.getElementById('btn' + tool.charAt(0).toUpperCase() + tool.slice(1)).classList.add('active');
         
-        document.getElementById('statusTool').textContent = 
-          tool === 'pen' ? '画笔' : 
-          tool === 'eraser' ? '橡皮擦' : 
-          tool === 'fill' ? '填充' : '选择';
+        document.getElementById('statusTool').textContent =
+          tool === 'pen' ? '画笔' :
+          tool === 'eraser' ? '橡皮擦' :
+          tool === 'fill' ? '填充' :
+          tool === 'picker' ? '查看' :
+          '选择';
       }
       
       // 设置缩放
@@ -2016,9 +2084,9 @@
           for (let x = 0; x < this.mapWidth; x++) {
             const tile = data.tiles ? data.tiles[y] ? data.tiles[y][x] : null : null;
             if (tile) {
-              row.push({ low: tile.low || 1, high: tile.high || 0, attr: tile.attr || 0 });
+              row.push({ low: tile.low || 0, high: tile.high || 0, attr: tile.attr || 0 });
             } else {
-              row.push({ low: 1, high: 0, attr: 0 });
+              row.push({ low: 0, high: 0, attr: 0 });
             }
           }
           this.tiles.push(row);
@@ -2847,6 +2915,45 @@
         document.getElementById('statusModified').textContent = '是';
 
         console.log(`✅ 地图已填充: ${mapCols} x ${mapRows}, 使用图集列数=${atlasCols}`);
+      }
+
+      // 清空所有瓦片数据（重新开始编辑）
+      clearAllTiles() {
+        if (this.mapWidth <= 0 || this.mapHeight <= 0) {
+          alert('请先设置地图尺寸');
+          return;
+        }
+
+        if (!confirm(`确定要清空地图吗？\n将清除全部 ${this.mapWidth}x${this.mapHeight} = ${this.mapWidth * this.mapHeight} 个格子的瓦片数据`)) {
+          return;
+        }
+
+        // 清空瓦片数据
+        this.tiles = [];
+        for (let y = 0; y < this.mapHeight; y++) {
+          const row = [];
+          for (let x = 0; x < this.mapWidth; x++) {
+            row.push({ low: 0, high: 0, attr: 0 });
+          }
+          this.tiles.push(row);
+        }
+
+        // 清空历史记录（避免撤销回到旧数据）
+        this.history = [];
+        this.historyIndex = -1;
+
+        // 清除选区
+        this.selection = null;
+        this.clipboard = null;
+
+        // 重新渲染
+        this.render();
+
+        // 更新状态
+        this.isModified = true;
+        document.getElementById('statusModified').textContent = '是';
+
+        console.log(`🗑️ 地图已清空: ${this.mapWidth} x ${this.mapHeight}`);
       }
 
       autoGenerateMap() {

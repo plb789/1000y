@@ -154,7 +154,7 @@ class MapRenderer {
           this.ctx.fillStyle = '#ffffff';
           this.ctx.font = 'bold 10px monospace';
           this.ctx.textAlign = 'center';
-          this.ctx.fillText('!' + tileIndex, px + ts/2, py + ts/2);
+          this.ctx.fillText('!' + tileIndex, px + ts / 2, py + ts / 2);
           return; // 不再绘制图集内容
         }
       }

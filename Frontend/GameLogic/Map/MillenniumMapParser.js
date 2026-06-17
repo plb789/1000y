@@ -31,6 +31,10 @@ class MillenniumMapParser {
     this.tiles = [];
     this.collision = [];
 
+    console.log(`📦 地图解析完成:`);
+    console.log(`   尺寸: ${this.width} x ${this.height} = ${total} 瓦片`);
+    console.log(`   文件头tilesetCols[124]: ${this.tilesetCols || '(未指定/旧格式)'}`);
+
     for (let i = 0; i < total; i++) {
       const low = view.getUint8(offset++);
       const high = view.getUint8(offset++);
@@ -38,9 +42,7 @@ class MillenniumMapParser {
       this.tiles.push({ low, high, attr });
       this.collision.push(attr === 1 ? 1 : 0);
     }
-    console.log(`📦 地图解析完成:`);
-    console.log(`   尺寸: ${this.width} x ${this.height} = ${total} 瓦片`);
-    console.log(`   文件头tilesetCols[124]: ${this.tilesetCols || '(未指定/旧格式)'}`);
+
     if (this.tiles.length > 0) {
       console.log(`   前10个瓦片: ${this.tiles.slice(0, 10).map(t => t.low).join(',')}`);
     }
