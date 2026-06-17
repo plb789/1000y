@@ -437,6 +437,7 @@
       <button class="toolbar-btn" id="btnLoadTileset" title="加载PNG/JPG图集">🖼️</button>
       <button class="toolbar-btn" id="btnImportDDS" title="导入原版DDS贴图">📦</button>
       <span class="toolbar-label" id="tilesetStatus">未加载</span>
+      <button class="toolbar-btn" id="btnLoadMetadata" title="加载瓦片元数据JSON" style="font-size:10px;padding:2px 6px;">📋元数据</button>
     </div>
     
     <div class="toolbar-group">
@@ -997,6 +998,7 @@
         
         // 瓦片图集
         document.getElementById('btnLoadTileset').addEventListener('click', () => this.loadTileset());
+        document.getElementById('btnLoadMetadata').addEventListener('click', () => this.manualLoadMetadata());
         document.getElementById('btnImportDDS').addEventListener('click', () => this.importMillenniumTileset());
         
         // 导入原版地图
@@ -1059,48 +1061,97 @@
         }
       }
       
-      // 加载瓦片图集（使用资源管理器优化性能）
+      // 加载瓦片图集
       async loadTileset() {
         const input = document.createElement('input');
         input.type = 'file';
         input.accept = '.png,.jpg,.jpeg';
-        
+
         input.onchange = async (e) => {
           const file = e.target.files[0];
           if (!file) return;
-          
+
           try {
             const status = document.getElementById('tilesetStatus');
             status.textContent = '加载中...';
             status.style.color = '#fbbf24';
-            
+
             // 保存文件名（去掉扩展名）用于加载JSON元数据
             const tilesetName = file.name.replace(/\.(png|jpg|jpeg|gif|webp)$/i, '');
             this.tilesetName = tilesetName;
-            
-            // 使用资源管理器加载（带缓存）
-            const url = URL.createObjectURL(file);
-            const img = await this.resourceManager.loadImage(url);
-            
+
+            // 直接用原生 Image 加载（确保 width/height 正确）
+            const imgUrl = URL.createObjectURL(file);
+            const img = await new Promise((resolve, reject) => {
+              const image = new Image();
+              image.onload = () => resolve(image);
+              image.onerror = reject;
+              image.src = imgUrl;
+            });
+
             this.tileset = img;
-            
-            // 尝试加载对应的JSON元数据文件
-            await this.loadTilesetMetadata(tilesetName);
-            
-            status.textContent = this.tilesetMetadata ? '已加载(有元数据)' : '已加载';
-            status.style.color = '#4ade80';
-            
-            this.render();
-            this.initPalette();
-            
-            console.log('瓦片图集加载成功:', img.width + 'x' + img.height, '元数据:', this.tilesetMetadata ? '有' : '无');
+
+            console.log(`📷 图集图片加载: ${img.width}x${img.height}, 文件名: ${tilesetName}`);
+
+            // 自动弹窗让用户选择对应的 JSON 元数据文件
+            // 此时还在用户点击 onchange 同步上下文中，可以正常弹文件选择框
+            const jsonInput = document.createElement('input');
+            jsonInput.type = 'file';
+            jsonInput.accept = '.json';
+
+            jsonInput.onchange = async (je) => {
+              const jsonFile = je.target.files[0];
+              if (jsonFile) {
+                try {
+                  const text = await this.readFileAsText(jsonFile);
+                  const metadata = JSON.parse(text);
+
+                  if (metadata.tiles && metadata.tileWidth) {
+                    this.tilesetMetadata = metadata;
+                    this.updateTileTypeIndexFromMetadata();
+                    console.log(`✅ 元数据加载成功: ${metadata.name || jsonFile.name}`);
+                  } else {
+                    console.log('⚠️ JSON结构不完整，使用默认属性');
+                  }
+                } catch (err) {
+                  console.log('⚠️ JSON解析失败:', err.message);
+                }
+              }
+
+              // 最终确定图集列数
+              if (this.tilesetMetadata && this.tilesetMetadata.columns > 0) {
+                this.tilesetCols = this.tilesetMetadata.columns;
+                console.log(`📐 使用元数据的图集列数: ${this.tilesetCols}`);
+              } else if (img.width > 0 && img.height > 0) {
+                this.tilesetCols = Math.round(img.width / this.tileSize);
+                console.log(`⚠️ 无元数据，按图片宽度推断列数: ${this.tilesetCols} (${img.width}px / ${this.tileSize}px)`);
+              }
+
+              status.textContent = this.tilesetMetadata ? '已加载(有元数据)' : '已加载';
+              status.style.color = '#4ade80';
+
+              this.render();
+              this.initPalette();
+
+              // 自动填充地图
+              if (this.tilesetMetadata) {
+                this.autoFillMapFromTileset();
+              }
+
+              console.log(`✅ 瓦片图集加载完成: ${img.width}x${img.height}, 列数=${this.tilesetCols}, 元数据=${this.tilesetMetadata ? '有' : '无'}`);
+            };
+
+            // 弹出 JSON 文件选择框
+            console.log('🔍 请选择对应的瓦片元数据 JSON 文件...');
+            jsonInput.click();
+
           } catch (err) {
             alert('加载图片失败: ' + err.message);
             document.getElementById('tilesetStatus').textContent = '加载失败';
             document.getElementById('tilesetStatus').style.color = '#ef4444';
           }
         };
-        
+
         input.click();
       }
       
@@ -1130,12 +1181,59 @@
         this.tilesetMetadata = null;
         this.rebuildTileTypeIndex();
       }
+
+      // 手动加载瓦片元数据JSON（通过用户点击按钮触发，可正常弹文件选择框）
+      manualLoadMetadata() {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json';
+        input.onchange = async (e) => {
+          const file = e.target.files[0];
+          if (!file) return;
+
+          try {
+            const text = await this.readFileAsText(file);
+            const metadata = JSON.parse(text);
+
+            // 验证基本结构
+            if (!metadata.tiles || !metadata.tileWidth) {
+              alert('无效的元数据文件：缺少 tiles 或 tileWidth 字段');
+              return;
+            }
+
+            this.tilesetMetadata = metadata;
+            this.updateTileTypeIndexFromMetadata();
+
+            // 更新状态显示
+            const status = document.getElementById('tilesetStatus');
+            status.textContent = '已加载(有元数据)';
+            status.style.color = '#4ade80';
+
+            console.log(`✅ 手动加载元数据成功: ${metadata.name || file.name}, 瓦片数=${metadata.totalTiles || '?'}, 列数=${metadata.columns || '?'}`);
+
+            // 如果地图已有数据，提示是否自动填充
+            if (this.tiles.length > 0 && this.tiles[0].length > 0) {
+              if (confirm('是否根据元数据重新自动填充地图？')) {
+                this.autoFillMapFromTileset();
+              }
+            } else {
+              this.autoFillMapFromTileset();
+            }
+
+            this.render();
+            this.initPalette();
+
+          } catch (err) {
+            alert('解析元数据失败: ' + err.message);
+          }
+        };
+        input.click();
+      }
       
-      // 提示用户选择JSON文件
+      // 提示用户选择JSON文件（静默模式：不阻塞，找不到就跳过）
       promptForJsonFile() {
         return new Promise((resolve) => {
-          // 尝试自动查找同名JSON文件（通过fetch）
-          // 如果在服务器环境可以直接请求
+          // 尝试自动查找同名JSON文件（仅在服务器环境下有效）
           const jsonUrl = `Res/Map/${this.tilesetName}.json`;
           fetch(jsonUrl)
             .then(resp => {
@@ -1145,18 +1243,14 @@
             .then(data => {
               this.tilesetMetadata = data;
               this.updateTileTypeIndexFromMetadata();
+              console.log(`✅ 自动加载元数据: ${jsonUrl}`);
               resolve(true);
             })
             .catch(() => {
-              // JSON不存在，尝试使用input选择
-              const input = document.createElement('input');
-              input.type = 'file';
-              input.accept = '.json';
-              input.onchange = (e) => {
-                const file = e.target.files[0];
-                resolve(file || null);
-              };
-              input.click();
+              // JSON不存在或加载失败（404等），不弹选择框（Chrome会拦截）
+              // 静默跳过，用户可通过「加载元数据」按钮手动加载
+              console.log(`⚠️ 未找到元数据: ${jsonUrl}（可点击「加载元数据」按钮手动选择）`);
+              resolve(false);
             });
         });
       }
@@ -1174,25 +1268,32 @@
       // 从元数据更新瓦片类型索引
       updateTileTypeIndexFromMetadata() {
         if (!this.tilesetMetadata || !this.tilesetMetadata.tiles) return;
-        
+
+        // 从元数据读取图集列数（关键：确保瓦片正确定位）
+        if (this.tilesetMetadata.columns && this.tilesetMetadata.columns > 0) {
+          this.tilesetCols = this.tilesetMetadata.columns;
+          console.log(`✅ 从元数据更新图集列数为: ${this.tilesetCols}`);
+        }
+
         this.customTileTypes = this.tilesetMetadata.tiles.map(tile => ({
           id: tile.id,
           name: tile.name || `瓦片${tile.id}`,
           color: '#8b7355', // 默认颜色，会被图集图片覆盖
           // attr字段有最高优先级（千年游戏标准）
-          attr: tile.attr || (tile.passable === false || tile.building ? 1 : 0),
-          passable: tile.attr !== 1,
-          layer: tile.layer || (tile.building ? 1 : 0),
-          building: tile.building || false
+          attr: tile.attr !== undefined ? tile.attr : (tile.passable === false || tile.building ? 1 : 0),
+          passable: (tile.attr !== 1) && (tile.passable !== false),
+          layer: tile.layer !== undefined ? tile.layer : (tile.building ? 1 : 0),
+          building: tile.building === true,
+          category: tile.category || 'ground'
         }));
-        
+
         // 重建瓦片类型索引
         this.tileTypeIndex = new Map();
         this.customTileTypes.forEach(tile => {
           this.tileTypeIndex.set(tile.id, tile);
         });
-        
-        console.log('已用元数据更新瓦片类型:', this.customTileTypes.length, '个瓦片');
+
+        console.log(`已用元数据更新瓦片类型: ${this.customTileTypes.length} 个瓦片, 图集列数=${this.tilesetCols}`);
       }
       
       // 重建瓦片类型索引（使用默认或自定义）
@@ -1371,15 +1472,30 @@
         if (this.tileset) {
           // 使用图集渲染
           const cols = this.tilesetCols;
+          const maxTileX = this.tileset.width - ts;  // 图集最大有效x坐标
+          const maxTileY = this.tileset.height - ts;  // 图集最大有效y坐标
+
           for (let y = 0; y < mh; y++) {
             for (let x = 0; x < mw; x++) {
-              const tile = this.tiles[y][x];
-              const tileIdx = tile.low - 1;
+              const tile = this.tiles[y] && this.tiles[y][x] ? this.tiles[y][x] : { low: 1, high: 0, attr: 0 };
+              const tileIdx = Math.max(0, (tile.low || 1) - 1);  // 防止负数
               const sx = (tileIdx % cols) * ts;
               const sy = Math.floor(tileIdx / cols) * ts;
               const px = x * ts;
               const py = y * ts;
-              ctx.drawImage(this.tileset, sx, sy, ts, ts, px, py, ts, ts);
+
+              // 边界检查：确保源坐标在图集范围内
+              if (sx >= 0 && sy >= 0 && sx <= maxTileX && sy <= maxTileY) {
+                ctx.drawImage(this.tileset, sx, sy, ts, ts, px, py, ts, ts);
+              } else {
+                // 瓦片索引超出图集范围，绘制占位符
+                ctx.fillStyle = '#2d3748';
+                ctx.fillRect(px + 1, py + 1, ts - 2, ts - 2);
+                ctx.fillStyle = '#718096';
+                ctx.font = `${Math.max(10, ts / 4)}px Arial`;
+                ctx.textAlign = 'center';
+                ctx.fillText(`${tile.low || '?'}`, px + ts / 2, py + ts / 2 + 4);
+              }
               
               // 绘制阻挡标记
               if (tile.attr === 1) {
@@ -1400,8 +1516,8 @@
           // 使用颜色块渲染
           for (let y = 0; y < mh; y++) {
             for (let x = 0; x < mw; x++) {
-              const tile = this.tiles[y][x];
-              const tileType = this.tileTypeIndex.get(tile.low);
+              const tile = this.tiles[y] && this.tiles[y][x] ? this.tiles[y][x] : { low: 1, high: 0, attr: 0 };
+              const tileType = this.tileTypeIndex.get(tile.low || 1);
               const color = tileType ? tileType.color : '#ff00ff';
               const px = x * ts;
               const py = y * ts;
@@ -1587,10 +1703,16 @@
       
       // 鼠标释放
       onMouseUp() {
-        if (this.isDrawing) {
-          this.saveHistory();
-          this.isDrawing = false;
+        if (!this.isDrawing) return;
+
+        // 选择工具：完成选区后更新显示
+        if (this.currentTool === 'select' && this.selection.active) {
+          this.updateSelectionDisplay();
+          console.log(`✅ 选区完成: (${this.selection.startX},${this.selection.startY}) → (${this.selection.endX},${this.selection.endY})`);
         }
+
+        this.saveHistory();
+        this.isDrawing = false;
       }
       
       // 鼠标离开
@@ -1756,30 +1878,40 @@
       resizeMap() {
         const newWidth = parseInt(document.getElementById('mapWidth').value) || 20;
         const newHeight = parseInt(document.getElementById('mapHeight').value) || 15;
-        
+
+        // 边界检查
+        if (newWidth < 5 || newWidth > 200 || newHeight < 5 || newHeight > 200) {
+          alert('地图尺寸必须在 5-200 之间');
+          return;
+        }
+
         const newTiles = [];
         for (let y = 0; y < newHeight; y++) {
           const row = [];
           for (let x = 0; x < newWidth; x++) {
-            if (y < this.mapHeight && x < this.mapWidth) {
+            if (this.tiles[y] && this.tiles[y][x]) {
+              // 复用已有瓦片
               row.push({ ...this.tiles[y][x] });
             } else {
+              // 新增区域：默认使用瓦片ID=1（草地）
               row.push({ low: 1, high: 0, attr: 0 });
             }
           }
           newTiles.push(row);
         }
-        
+
         this.mapWidth = newWidth;
         this.mapHeight = newHeight;
         this.tiles = newTiles;
-        
-        this.canvas.width = this.mapWidth * this.tileSize;
-        this.canvas.height = this.mapHeight * this.tileSize;
-        
+
+        // 使用 initCanvas 重新初始化（避免直接设 width/height 导致 context 丢失）
+        this.initCanvas();
+
         document.getElementById('statusSize').textContent = `${this.mapWidth} x ${this.mapHeight}`;
         this.saveHistory();
         this.render();
+
+        console.log(`✅ 地图已调整大小: ${newWidth} x ${newHeight}`);
       }
       
       // 新建地图
@@ -1936,19 +2068,27 @@
         const tileSize = 3;
         const buffer = new ArrayBuffer(headerSize + 2 + 2 + this.mapWidth * this.mapHeight * tileSize);
         const view = new Uint8Array(buffer);
-        
-        // 写入文件头
+
+        // 写入文件头标识
         const header = 'MAPFILE';
         for (let i = 0; i < header.length; i++) {
           view[i] = header.charCodeAt(i);
         }
-        
+
+        // 写入瓦片图集列数到文件头偏移 124 (uint16 LE)
+        // 游戏渲染器需要此值来正确从图集中定位瓦片
+        const actualTilesetCols = this.tileset && this.tileset.width > 0
+          ? Math.floor(this.tileset.width / this.tileSize)
+          : this.tilesetCols;
+        view[124] = actualTilesetCols & 0xff;
+        view[125] = (actualTilesetCols >> 8) & 0xff;
+
         // 写入宽高到头部的特定位置
         view[headerSize - 4] = this.mapWidth & 0xff;
         view[headerSize - 3] = (this.mapWidth >> 8) & 0xff;
         view[headerSize - 2] = this.mapHeight & 0xff;
         view[headerSize - 1] = (this.mapHeight >> 8) & 0xff;
-        
+
         // 写入宽高
         view[headerSize] = this.mapWidth & 0xff;
         view[headerSize + 1] = (this.mapWidth >> 8) & 0xff;
@@ -1974,8 +2114,12 @@
         a.href = url;
         a.download = `${String(mapId).padStart(3, '0')}.map`;
         a.click();
-        
+
         URL.revokeObjectURL(url);
+
+        console.log(`✅ 二进制地图导出: ${String(mapId).padStart(3, '0')}.map`);
+        console.log(`   地图尺寸: ${this.mapWidth} x ${this.mapHeight}, 瓦片图集列数: ${actualTilesetCols}`);
+        console.log(`   文件头[124-125]已写入tilesetCols=${actualTilesetCols}`);
         
         // 如果没有加载外部图集，自动生成默认图集PNG
         if (!this.tileset) {
@@ -1987,7 +2131,7 @@
       exportDefaultTilesetPng(mapId) {
         // 创建图集画布
         const tilesetCanvas = document.createElement('canvas');
-        const cols = 16; // 列数（与tilesetCols一致）
+        const cols = this.tilesetCols; // 使用实际的图集列数（不再硬编码16）
         const rows = Math.ceil(this.tileTypes.length / cols);
         tilesetCanvas.width = cols * this.tileSize;
         tilesetCanvas.height = rows * this.tileSize;
@@ -2260,61 +2404,90 @@
       
       // 旋转选区
       rotateSelection(degrees) {
+        // 获取数据源：优先使用剪贴板，否则从当前选区读取
         if (!this.clipboard && !this.selection.active) {
-          alert('请先复制或选择区域');
+          alert('请先使用选择工具框选区域，或先复制区域');
           return;
         }
-        
+
+        const hadClipboard = !!this.clipboard;  // 记录是否已有剪贴板数据
         const data = this.clipboard ? this.clipboard.data : this.getSelectionData();
         const width = this.clipboard ? this.clipboard.width : (this.selection.endX - this.selection.startX + 1);
         const height = this.clipboard ? this.clipboard.height : (this.selection.endY - this.selection.startY + 1);
-        
+
+        if (width <= 0 || height <= 0 || !data || data.length === 0) {
+          alert('选区数据无效，请重新选择');
+          return;
+        }
+
         // 旋转90度
         const rotated = [];
         for (let x = 0; x < width; x++) {
           const newRow = [];
           for (let y = height - 1; y >= 0; y--) {
-            newRow.push(data[y] ? data[y][x] : null);
+            newRow.push(data[y] && data[y][x] !== undefined ? data[y][x] : { low: 1, high: 0, attr: 0 });
           }
           rotated.push(newRow);
         }
-        
+
         this.clipboard = {
           data: rotated,
           width: height,
           height: width
         };
-        
+
         document.getElementById('selectionSize').textContent = `${this.clipboard.width} x ${this.clipboard.height}`;
-        alert(`已旋转90度`);
+
+        // 如果原来没有剪贴板（即直接从选区操作），将旋转结果写回原位置
+        if (!hadClipboard && this.selection.active) {
+          this.pasteSelection();
+        } else {
+          this.render();
+        }
+
+        console.log(`✅ 旋转90°: ${width}x${height} → ${height}x${width}`);
       }
-      
+
       // 翻转选区
       flipSelection(direction) {
         if (!this.clipboard && !this.selection.active) {
-          alert('请先复制或选择区域');
+          alert('请先使用选择工具框选区域，或先复制区域');
           return;
         }
-        
+
+        const hadClipboard = !!this.clipboard;  // 记录是否已有剪贴板数据
         const data = this.clipboard ? this.clipboard.data : this.getSelectionData();
         const width = this.clipboard ? this.clipboard.width : (this.selection.endX - this.selection.startX + 1);
         const height = this.clipboard ? this.clipboard.height : (this.selection.endY - this.selection.startY + 1);
-        
+
+        if (width <= 0 || height <= 0 || !data || data.length === 0) {
+          alert('选区数据无效，请重新选择');
+          return;
+        }
+
         let flipped;
         if (direction === 'horizontal') {
-          flipped = data.map(row => [...row].reverse());
+          flipped = data.map(row => row ? [...row].reverse() : []);
         } else {
           flipped = [...data].reverse();
         }
-        
+
         this.clipboard = {
           data: flipped,
-          width,
-          height
+          width: width,
+          height: height
         };
-        
+
         const dirName = direction === 'horizontal' ? '水平' : '垂直';
-        alert(`已${dirName}翻转`);
+
+        // 如果原来没有剪贴板（即直接从选区操作），将翻转结果写回原位置
+        if (!hadClipboard && this.selection.active) {
+          this.pasteSelection();
+        } else {
+          this.render();
+        }
+
+        console.log(`✅ ${dirName}翻转: ${width}x${height}`);
       }
       
       // 获取选区数据
@@ -2594,7 +2767,88 @@
         this.render();
       }
       
-      // 根据图集自动生成地图（按原图布局）
+      // 加载图集后自动填充地图（根据元数据中的原图布局）
+      autoFillMapFromTileset() {
+        if (!this.tilesetMetadata || !this.tilesetMetadata.tiles) return;
+
+        // ★ 唯一标准：始终使用图集图片的实际列数
+        // 这确保：地图数据中的瓦片ID → 游戏渲染器查找图集的位置 → 完全一致
+        const atlasCols = this.tileset && this.tileset.width > 0
+          ? Math.round(this.tileset.width / this.tileSize)
+          : (this.tilesetMetadata.columns || this.tilesetCols);
+
+        // 地图尺寸也用 atlasCols（确保地图网格与图集网格对齐）
+        const totalTiles = this.tilesetMetadata.tiles.length;
+        const mapCols = atlasCols;
+        const mapRows = Math.ceil(totalTiles / atlasCols);
+
+        if (mapCols <= 0 || mapRows <= 0) {
+          console.log('⚠️ 无法计算地图尺寸，跳过自动填充');
+          return;
+        }
+
+        console.log(`🔄 自动填充地图:`);
+        console.log(`   图集列数(atlasCols)=${mapCols} (图片宽${this.tileset?.width || '?'}px / ${this.tileSize}px)`);
+        console.log(`   地图网格: ${mapCols} x ${mapRows} = ${totalTiles} 瓦片`);
+        if (this.tilesetMetadata.sourceTileCols && this.tilesetMetadata.sourceTileCols !== mapCols) {
+          console.log(`   ⚠️ 注意: 原图列数(${this.tilesetMetadata.sourceTileCols}) ≠ 图集列数(${mapCols})`);
+          console.log(`   已自动使用图集列数作为地图宽度，确保渲染正确`);
+        }
+
+        // 保存历史
+        this.saveHistory();
+
+        // 设置地图尺寸
+        this.mapWidth = mapCols;
+        this.mapHeight = mapRows;
+
+        // 更新UI输入框
+        document.getElementById('mapWidth').value = mapCols;
+        document.getElementById('mapHeight').value = mapRows;
+
+        // ★ 关键：用 atlasCols 分配瓦片ID（和游戏渲染器完全一致）
+        // 瓦片ID = y * atlasCols + x + 1
+        // 游戏端: 位置 = ((ID-1) % atlasCols, floor((ID-1) / atlasCols))
+        // 两者互逆，保证正确显示
+        this.tiles = [];
+        for (let y = 0; y < mapRows; y++) {
+          const row = [];
+          for (let x = 0; x < mapCols; x++) {
+            const linearIndex = y * mapCols + x; // 0-based linear index
+
+            // 如果超出实际瓦片数，填空瓦片
+            if (linearIndex >= totalTiles) {
+              row.push({ low: 0, high: 0, attr: 0 });
+              continue;
+            }
+
+            const tileId = linearIndex + 1; // 1-based tile ID
+            const tileInfo = this.tileTypeIndex.get(tileId);
+
+            row.push({
+              low: tileId,
+              high: (tileInfo && tileInfo.layer === 1) ? 1 : 0,
+              attr: (tileInfo && tileInfo.attr === 1) ? 1 : 0
+            });
+          }
+          this.tiles.push(row);
+        }
+
+        // 同步更新 tilesetCols
+        this.tilesetCols = atlasCols;
+
+        // 重新初始化画布并渲染
+        this.initCanvas();
+        this.render();
+
+        document.getElementById('statusSize').textContent = `${this.mapWidth} x ${this.mapHeight}`;
+
+        this.isModified = true;
+        document.getElementById('statusModified').textContent = '是';
+
+        console.log(`✅ 地图已填充: ${mapCols} x ${mapRows}, 使用图集列数=${atlasCols}`);
+      }
+
       autoGenerateMap() {
         if (!this.tileset || !this.tilesetMetadata) {
           alert('请先加载带有元数据的瓦片图集');

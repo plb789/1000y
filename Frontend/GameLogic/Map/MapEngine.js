@@ -96,7 +96,8 @@ class MapEngine {
     if (tilesetUrl) {
       this.tilesetImg = await CommonUtil.loadImage(tilesetUrl);
     }
-    this.mapRenderer = new MapRenderer(this.canvas, this.tilesetImg, this.tileSize);
+    const tileColFromMap = this.mapParser.tilesetCols || 0;
+    this.mapRenderer = new MapRenderer(this.canvas, this.tilesetImg, this.tileSize, tileColFromMap);
     
     // 设置动画系统
     if (this.animationSystem) {
@@ -140,7 +141,9 @@ class MapEngine {
 
   // 分步加载：初始化地图渲染器
   async initializeMap(animationData = null) {
-    this.mapRenderer = new MapRenderer(this.canvas, this.tilesetImg, this.tileSize);
+    // 从地图解析器获取图集列数（如果文件头中记录了的话）
+    const tileColFromMap = this.mapParser.tilesetCols || 0;
+    this.mapRenderer = new MapRenderer(this.canvas, this.tilesetImg, this.tileSize, tileColFromMap);
     
     // 设置动画系统
     if (this.animationSystem) {

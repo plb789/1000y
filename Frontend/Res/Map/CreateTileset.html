@@ -448,94 +448,133 @@
           alert('请先导入图片');
           return;
         }
-        
-        this.applyConfig();
-        
-        // 计算总瓦片数
+
+        // 读取当前配置（不触发 applyConfig，避免互相调用死循环）
+        this.tileWidth = parseInt(document.getElementById('tileWidth').value) || 48;
+        this.tileHeight = parseInt(document.getElementById('tileHeight').value) || 48;
+        this.tilesetCols = parseInt(document.getElementById('tilesetCols').value) || 16;
+        this.tilesetName = document.getElementById('tilesetName').value || 'custom_tileset';
+
+        // 计算源图的瓦片网格（基于实际图片尺寸）
         const imgWidth = this.sourceImage.width;
         const imgHeight = this.sourceImage.height;
-        const cols = Math.floor(imgWidth / this.tileWidth);
-        const rows = Math.floor(imgHeight / this.tileHeight);
-        const totalTiles = cols * rows;
-        
+        const srcCols = Math.floor(imgWidth / this.tileWidth);
+        const srcRows = Math.floor(imgHeight / this.tileHeight);
+
+        if (srcCols <= 0 || srcRows <= 0) {
+          alert('瓦片尺寸设置过大，无法从源图切出瓦片！请减小瓦片宽高。');
+          return;
+        }
+
+        const totalTiles = srcCols * srcRows;
+
         // 初始化瓦片（如果瓦片数变了）
         if (this.tiles.length !== totalTiles) {
           this.initTiles(totalTiles);
         }
-        
-        // 设置画布大小
+
+        // 设置画布大小（基于目标图集列数）
         const canvasWidth = this.tilesetCols * this.tileWidth;
         const canvasRows = Math.ceil(totalTiles / this.tilesetCols);
         const canvasHeight = canvasRows * this.tileHeight;
-        
+
         this.canvas.width = canvasWidth;
         this.canvas.height = canvasHeight;
-        
-        // 清空画布（透明背景）
-        this.ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-        
-        // 绘制瓦片
+
+        // 清空画布并填充白色背景（确保PNG不透明）
+        this.ctx.fillStyle = '#ffffff';
+        this.ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+        // 绘制瓦片：按行优先顺序从源图读取，写入目标画布
         for (let i = 0; i < totalTiles; i++) {
-          const srcX = (i % cols) * this.tileWidth;
-          const srcY = Math.floor(i / cols) * this.tileHeight;
+          // 源图中的位置（基于源图的实际网格）
+          const srcX = (i % srcCols) * this.tileWidth;
+          const srcY = Math.floor(i / srcCols) * this.tileHeight;
+
+          // 目标画布中的位置（基于配置的图集列数）
           const dstX = (i % this.tilesetCols) * this.tileWidth;
           const dstY = Math.floor(i / this.tilesetCols) * this.tileHeight;
-          
-          // 绘制切片
+
+          // 绘制单个瓦片切片
           this.ctx.drawImage(
             this.sourceImage,
             srcX, srcY, this.tileWidth, this.tileHeight,
             dstX, dstY, this.tileWidth, this.tileHeight
           );
         }
-        
-        console.log(`预览切片: ${cols}x${rows}=${totalTiles} 瓦片, 画布 ${canvasWidth}x${canvasHeight}`);
+
+        // 记录当前状态，供导出使用
+        this.lastGeneratedInfo = { totalTiles, srcCols, srcRows, canvasWidth, canvasHeight };
+
+        console.log(`预览切片完成: 源图 ${srcCols}x${srcRows}=${totalTiles} 瓦片 → 图集 ${this.tilesetCols}x${canvasRows}, 画布 ${canvasWidth}x${canvasHeight}`);
       }
       
-      // 生成图集
+      // 生成图集（最终导出版本）
       generateTileset() {
         if (!this.sourceImage) {
           alert('请先导入图片');
           return;
         }
-        
-        // 更新画布显示
-        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-        
+
+        this.applyConfig();
+
         const totalTiles = this.tiles.length;
+        if (totalTiles === 0) {
+          alert('没有瓦片数据，请先导入图片并预览切片');
+          return;
+        }
+
+        // 计算源图的实际网格
+        const srcCols = Math.floor(this.sourceImage.width / this.tileWidth);
+        const srcRows = Math.floor(this.sourceImage.height / this.tileHeight);
+
+        if (srcCols <= 0 || srcRows <= 0) {
+          alert('瓦片尺寸设置过大，无法从源图切出瓦片！请减小瓦片宽高。');
+          return;
+        }
+
+        // 设置画布大小
         const canvasWidth = this.tilesetCols * this.tileWidth;
         const canvasRows = Math.ceil(totalTiles / this.tilesetCols);
         const canvasHeight = canvasRows * this.tileHeight;
-        
+
         this.canvas.width = canvasWidth;
         this.canvas.height = canvasHeight;
-        
-        // 重新计算源图片的瓦片网格
-        const srcCols = Math.floor(this.sourceImage.width / this.tileWidth);
-        
-        // 绘制瓦片
+
+        // 清空画布并填充白色背景
+        this.ctx.fillStyle = '#ffffff';
+        this.ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+        // 绘制所有瓦片：从源图按行优先顺序读取，写入目标图集画布
         for (let i = 0; i < totalTiles; i++) {
+          // 源图中的位置
           const srcX = (i % srcCols) * this.tileWidth;
           const srcY = Math.floor(i / srcCols) * this.tileHeight;
+
+          // 目标图集中的位置
           const dstX = (i % this.tilesetCols) * this.tileWidth;
           const dstY = Math.floor(i / this.tilesetCols) * this.tileHeight;
-          
+
           this.ctx.drawImage(
             this.sourceImage,
             srcX, srcY, this.tileWidth, this.tileHeight,
             dstX, dstY, this.tileWidth, this.tileHeight
           );
         }
-        
+
         // 确保瓦片名称不为空
         this.tiles.forEach((tile, i) => {
           if (!tile.name || tile.name === `瓦片${i + 1}`) {
             tile.name = `tile_${i + 1}`;
           }
         });
-        
+
+        // 记录生成信息
+        this.lastGeneratedInfo = { totalTiles, srcCols, srcRows, canvasWidth, canvasHeight };
+
         this.updateTileGrid();
-        alert(`图集生成完成！共 ${totalTiles} 个瓦片`);
+        console.log(`✅ 瓦片图集生成完成: ${totalTiles} 个瓦片, 图集尺寸 ${canvasWidth}x${canvasHeight}, 源图网格 ${srcCols}x${srcRows}`);
+        alert(`图集生成完成！共 ${totalTiles} 个瓦片\n图集尺寸: ${canvasWidth} x ${canvasHeight} 像素\n每块瓦片: ${this.tileWidth} x ${this.tileHeight} 像素`);
       }
       
       // 更新瓦片网格
@@ -708,50 +747,88 @@
         console.log(`已应用预设 ${preset} 到 ${selectedTiles.length} 个瓦片`);
       }
       
-      // 生成元数据JSON
+      // 生成元数据JSON（供地图编辑器使用）
       generateMetadata() {
-        // 计算原图的瓦片网格（用于自动生成地图）
-        const sourceCols = this.sourceImage 
+        // 计算源图的瓦片网格
+        const sourceCols = this.sourceImage
           ? Math.floor(this.sourceImage.width / this.tileWidth)
           : this.tilesetCols;
-        const sourceRows = this.sourceImage 
+        const sourceRows = this.sourceImage
           ? Math.floor(this.sourceImage.height / this.tileHeight)
           : Math.ceil(this.tiles.length / this.tilesetCols);
-        
+
+        const totalTiles = this.tiles.length;
+        const tilesetRows = Math.ceil(totalTiles / this.tilesetCols);
+        const tilesetWidth = this.tilesetCols * this.tileWidth;
+        const tilesetHeight = tilesetRows * this.tileHeight;
+
         const metadata = {
           name: this.tilesetName,
+          version: '1.0',
+          description: `由瓦片图集生成器导出 - ${new Date().toLocaleString('zh-CN')}`,
+
+          // 瓦片尺寸（每个瓦片的像素大小）
           tileWidth: this.tileWidth,
           tileHeight: this.tileHeight,
-          columns: this.tilesetCols,
-          // 原图尺寸信息（用于自动生成地图）
+
+          // 图集布局（导出的PNG图片的网格信息）
+          columns: this.tilesetCols,        // 图集每行多少个瓦片
+          rows: tilesetRows,                // 图集总共有多少行
+
+          // 图集图片实际像素尺寸
+          imageWidth: tilesetWidth,         // PNG图片宽度(像素)
+          imageHeight: tilesetHeight,       // PNG图片高度(像素)
+
+          // 源图片信息（原始大图的信息）
           sourceWidth: this.sourceImage ? this.sourceImage.width : 0,
           sourceHeight: this.sourceImage ? this.sourceImage.height : 0,
-          sourceTileCols: sourceCols,
-          sourceTileRows: sourceRows,
+          sourceTileCols: sourceCols,       // 源图每行多少个瓦片
+          sourceTileRows: sourceRows,       // 源图总共有多少行瓦片
+
+          // 总瓦片数
+          totalTiles: totalTiles,
+
+          // 瓦片属性列表（索引从1开始，与千年服务端一致）
           tiles: this.tiles.map(tile => ({
-            id: tile.index,
-            name: tile.name,
-            passable: tile.passable,
-            building: tile.building,
-            category: tile.category || 'ground',  // 添加分类字段
-            attr: tile.passable ? 0 : 1,  // 兼容旧格式: 0=通行, 1=阻挡
-            layer: tile.building ? 1 : 0  // 0=地面层, 1=物体层
+            id: tile.index,                 // 瓦片ID（从1开始）
+            name: tile.name || `tile_${tile.index}`,
+            passable: tile.passable !== false,  // 是否可通行
+            building: tile.building === true,   // 是否为建筑物
+            category: tile.category || 'ground', // 分类
+            attr: (tile.passable === false || tile.building === true) ? 1 : 0,  // 千年格式: 0=通行 1=阻挡
+            layer: tile.building === true ? 1 : 0    // 图层: 0=地面层 1=物体层
           }))
         };
+
         return metadata;
       }
       
-      // 下载PNG
+      // 下载PNG（瓦片图集）
       downloadPng() {
-        if (this.canvas.width === 0 || this.canvas.height === 0) {
-          alert('请先生成图集');
+        if (!this.sourceImage) {
+          alert('请先导入图片！');
           return;
         }
-        
+
+        // 如果画布为空或没有生成过，先自动生成图集
+        if (this.canvas.width === 0 || this.canvas.height === 0 || !this.lastGeneratedInfo) {
+          console.log('画布未初始化，自动调用 generateTileset...');
+          this.generateTileset();
+        }
+
+        // 再次检查
+        if (this.canvas.width === 0 || this.canvas.height === 0) {
+          alert('图集生成失败，无法导出');
+          return;
+        }
+
+        const info = this.lastGeneratedInfo;
         const link = document.createElement('a');
         link.download = `${this.tilesetName}.png`;
         link.href = this.canvas.toDataURL('image/png');
         link.click();
+
+        console.log(`✅ PNG 导出成功: ${this.tilesetName}.png (${info?.canvasWidth || this.canvas.width}x${info?.canvasHeight || this.canvas.height}), ${info?.totalTiles || '?'} 个瓦片`);
       }
       
       // 下载JSON
@@ -764,26 +841,45 @@
         link.click();
       }
       
-      // 下载完整包
+      // 下载完整包（PNG + JSON）
       downloadBoth() {
-        // 先确保有图集
-        if (this.canvas.width === 0 || this.canvas.height === 0) {
+        if (!this.sourceImage) {
+          alert('请先导入图片！');
+          return;
+        }
+
+        // 确保图集已生成
+        if (!this.lastGeneratedInfo || this.canvas.width === 0) {
           this.generateTileset();
         }
-        
-        // 生成ZIP文件
-        const pngData = this.canvas.toDataURL('image/png').split(',')[1];
+
+        const info = this.lastGeneratedInfo;
         const metadata = this.generateMetadata();
-        const jsonData = JSON.stringify(metadata, null, 2);
-        
-        // 创建包含两个文件的下载
-        // 1. 下载PNG
+
+        console.log(`📦 导出完整包: ${this.tilesetName}.png + ${this.tilesetName}.json`);
+        console.log(`   图集: ${info?.canvasWidth}x${info?.canvasHeight}, ${info?.totalTiles} 个瓦片`);
+        console.log(`   元数据: tileWidth=${metadata.tileWidth}, tileHeight=${metadata.tileHeight}, columns=${metadata.columns}`);
+
+        // 1. 下载PNG（瓦片图集图片）
         this.downloadPng();
-        
-        // 2. 下载JSON
-        setTimeout(() => this.downloadJson(), 100);
-        
-        alert(`已生成图集包:\n- ${this.tilesetName}.png (图片)\n- ${this.tilesetName}.json (元数据)\n\n请将这两个文件放到 Res/Map/ 目录下，在地图编辑器中加载 PNG 文件即可自动读取元数据。`);
+
+        // 2. 延迟下载JSON（元数据）
+        setTimeout(() => this.downloadJson(), 200);
+
+        setTimeout(() => {
+          alert(`✅ 已生成瓦片图集包：\n\n` +
+                `📷 ${this.tilesetName}.png\n` +
+                `   尺寸: ${info?.canvasWidth || '?'} x ${info?.canvasHeight || '?'} 像素\n` +
+                `   瓦片数: ${info?.totalTiles || '?'} 个\n` +
+                `   每块尺寸: ${this.tileWidth} x ${this.tileHeight}\n\n` +
+                `📋 ${this.tilesetName}.json\n` +
+                `   包含: 瓦片名称、通行属性、阻挡属性等元数据\n\n` +
+                `⚠️ 使用方法:\n` +
+                `1. 将两个文件放入 Res/Map/ 目录\n` +
+                `2. 打开地图编辑器 (MapEditor.html)\n` +
+                `3. 点击「加载PNG/JPG图集」按钮，选择 .png 文件\n` +
+                `4. 再选择对应的 .json 元数据文件即可`);
+        }, 300);
       }
     }
     

@@ -925,7 +925,14 @@ class Game {
   
   handleKeyDown(e) {
     if (this.state !== 'playing') return;
-    
+
+    // F3: 切换地图瓦片调试模式（显示每个格子的瓦片ID和图集坐标）
+    if (e.key === 'F3' && this.mapEngine && this.mapEngine.mapRenderer) {
+      this.mapEngine.mapRenderer.debugMode = !this.mapEngine.mapRenderer.debugMode;
+      console.log(`🔍 调试模式: ${this.mapEngine.mapRenderer.debugMode ? '开启 (按F3关闭)' : '关闭'}`);
+      return;
+    }
+
     const step = 1;
     let newX = this.player.x;
     let newY = this.player.y;

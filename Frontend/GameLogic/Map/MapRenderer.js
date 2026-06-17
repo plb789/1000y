@@ -2,11 +2,49 @@
  * 地图渲染器：底层+高层瓦片绘制
  */
 class MapRenderer {
-  constructor(canvas, tileSetImage, tileSize = 48) {
+  /**
+   * @param {HTMLCanvasElement} canvas - 渲染画布
+   * @param {HTMLImageElement} tileSetImage - 瓦片图集图片
+   * @param {number} tileSize - 瓦片像素尺寸
+   * @param {number} [tileColOverride] - 外部指定的图集列数（优先于图片宽度计算）
+   */
+  constructor(canvas, tileSetImage, tileSize = 48, tileColOverride = 0) {
     this.ctx = canvas.getContext('2d');
     this.tileSet = tileSetImage || null; // 确保正确处理 null
     this.tileSize = tileSize;
-    this.tileCol = 16; // 瓦片图集一行16个
+    this.debugMode = false; // 调试模式：显示瓦片ID
+
+    // 图集列数优先级：外部指定 > 图片宽度计算 > 默认16
+    if (tileColOverride > 0) {
+      this.tileCol = tileColOverride;
+    } else if (tileSetImage && tileSetImage.width > 0) {
+      this.tileCol = Math.floor(tileSetImage.width / tileSize);
+    } else {
+      this.tileCol = 16;
+    }
+
+    // 验证日志：输出渲染器的关键参数
+    console.log(`🎨 MapRenderer 初始化:`);
+    console.log(`   最终tileCol=${this.tileCol} (来源: ${tileColOverride > 0 ? '.map文件头' : (tileSetImage ? '图片宽度计算' : '默认')})`);
+    if (tileSetImage) {
+      console.log(`   图集尺寸: ${tileSetImage.width}x${tileSetImage.height}px`);
+      console.log(`   图集实际列数(宽/瓦片): ${Math.floor(tileSetImage.width / tileSize)}, 行数: ${Math.floor(tileSetImage.height / tileSize)}`);
+      // 验证前5个瓦片在图集中的位置
+      for (let i = 1; i <= 5; i++) {
+        const idx = i - 1;
+        const sx = (idx % this.tileCol) * tileSize;
+        const sy = Math.floor(idx / this.tileCol) * tileSize;
+        console.log(`   瓦片${i} → 图集位置(${sx},${sy}) 第${Math.floor(idx / this.tileCol)+1}行第${(idx % this.tileCol)+1}列`);
+      }
+      // 关键验证：检查图集最后一行的几个瓦片是否越界
+      const lastTileIdx = Math.floor(tileSetImage.width / tileSize) * Math.floor(tileSetImage.height / tileSize) - 1;
+      if (lastTileIdx > 0) {
+        const lsx = (lastTileIdx % this.tileCol) * tileSize;
+        const lsy = Math.floor(lastTileIdx / this.tileCol) * tileSize;
+        const inBounds = (lsx + tileSize <= tileSetImage.width) && (lsy + tileSize <= tileSetImage.height);
+        console.log(`   最后瓦片#${lastTileIdx+1} → 图集位置(${lsx},${lsy}) 越界=${!inBounds}`);
+      }
+    }
     
     // 动画系统
     this.animationSystem = null;
@@ -92,24 +130,50 @@ class MapRenderer {
     const ts = this.tileSize;
     const px = x * ts;
     const py = y * ts;
-    
+
     // 瓦片索引从1开始，图集索引从0开始，需要减1
     const atlasIndex = tileIndex - 1;
-    
+
     // tileIndex = 0 表示空瓦片，跳过绘制
     if (tileIndex === 0) {
       return;
     }
-    
+
     // 如果有瓦片图集，使用图集
     if (this.tileSet && atlasIndex >= 0) {
       const sx = (atlasIndex % this.tileCol) * ts;
       const sy = Math.floor(atlasIndex / this.tileCol) * ts;
+
+      // 调试模式：检测越界并标记
+      if (this.debugMode) {
+        const outOfBounds = (sx + ts > this.tileSet.width) || (sy + ts > this.tileSet.height);
+        if (outOfBounds) {
+          // 越界：用红色填充 + 显示警告
+          this.ctx.fillStyle = '#ff0000';
+          this.ctx.fillRect(px, py, ts, ts);
+          this.ctx.fillStyle = '#ffffff';
+          this.ctx.font = 'bold 10px monospace';
+          this.ctx.textAlign = 'center';
+          this.ctx.fillText('!' + tileIndex, px + ts/2, py + ts/2);
+          return; // 不再绘制图集内容
+        }
+      }
+
       this.ctx.drawImage(
         this.tileSet,
         sx, sy, ts, ts,
         px, py, ts, ts
       );
+
+      // 调试模式：显示瓦片ID和坐标信息
+      if (this.debugMode) {
+        this.ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        this.ctx.fillRect(px, py + ts - 14, ts, 14);
+        this.ctx.fillStyle = '#00ff00';
+        this.ctx.font = 'bold 9px monospace';
+        this.ctx.textAlign = 'left';
+        this.ctx.fillText(`${tileIndex}(${sx},${sy})`, px + 1, py + ts - 3);
+      }
     } else {
       // 没有瓦片图集，使用颜色
       const colorIndex = atlasIndex >= 0 ? atlasIndex % this.tileColors.length : 0;
