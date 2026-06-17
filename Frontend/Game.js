@@ -586,101 +586,127 @@ class Game {
   }
   
   renderMiniMap() {
+    // 获取地图解析器
     const mapParser = this.mapEngine?.mapParser;
     if (!mapParser) return;
     
+    // 获取Canvas上下文
     const ctx = this.ui.miniMap.getContext('2d');
     const mapWidth = mapParser.width;
     const mapHeight = mapParser.height;
     
-    // 获取玩家当前位置（瓦片坐标）
-    const playerTileX = this.player.x;
-    const playerTileY = this.player.y;
+    // 获取玩家位置
+    const playerX = this.player.x;
+    const playerY = this.player.y;
     
-    // 小地图尺寸
-    const miniMapSize = 180;
+    // 获取实际Canvas尺寸（防止样式尺寸和实际尺寸不一致）
+    const canvasWidth = this.ui.miniMap.width;
+    const canvasHeight = this.ui.miniMap.height;
+    const miniMapSize = Math.min(canvasWidth, canvasHeight);
     
-    // 计算实际显示的瓦片数量（不超过地图大小）
-    const maxVisibleTiles = Math.min(20, mapWidth, mapHeight);
+    // 小地图配置
+    const backgroundColor = '#1a1a1a';
+    const obstacleColor = '#4a4a4a';
+    const walkableColor = '#3a3a5a';
+    const playerColor = '#ff4444';
+    const otherPlayerColor = '#44ff44';
     
-    // 计算可见区域的起始位置（以玩家为中心）
-    let startTileX = Math.floor(playerTileX - maxVisibleTiles / 2);
-    let startTileY = Math.floor(playerTileY - maxVisibleTiles / 2);
+    // 清空整个画布（使用实际canvas尺寸）
+    ctx.fillStyle = backgroundColor;
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
     
-    // 确保不超出地图边界
-    startTileX = Math.max(0, Math.min(startTileX, mapWidth - maxVisibleTiles));
-    startTileY = Math.max(0, Math.min(startTileY, mapHeight - maxVisibleTiles));
+    // 计算缩放比例（确保地图填满小地图）
+    const maxDimension = Math.max(mapWidth, mapHeight);
+    let scale = miniMapSize / maxDimension;
     
-    // 计算实际绘制的瓦片数量
-    const actualTileWidth = Math.min(maxVisibleTiles, mapWidth - startTileX);
-    const actualTileHeight = Math.min(maxVisibleTiles, mapHeight - startTileY);
+    // 处理极端情况：地图尺寸为0
+    if (maxDimension === 0 || isNaN(scale) || !isFinite(scale)) {
+      scale = 1;
+    }
     
-    // 计算缩放比例（让可见区域正好填满小地图）
-    const scale = miniMapSize / maxVisibleTiles;
+    // 计算居中偏移
+    const offsetX = (canvasWidth - mapWidth * scale) / 2;
+    const offsetY = (canvasHeight - mapHeight * scale) / 2;
     
-    // 计算居中偏移（当地图小于显示区域时居中）
-    const offsetX = (miniMapSize - actualTileWidth * scale) / 2;
-    const offsetY = (miniMapSize - actualTileHeight * scale) / 2;
+    // 直接使用原始偏移量（不需要强制非负，让地图自然居中）
+    const finalOffsetX = offsetX;
+    const finalOffsetY = offsetY;
     
-    // 清空背景
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, miniMapSize, miniMapSize);
+    // 绘制地图瓦片（覆盖整个小地图区域）
+    const tiles = mapParser.tiles || [];
     
-    // 绘制地图瓦片
-    if (mapParser.tiles && mapParser.tiles.length > 0) {
-      for (let y = 0; y < actualTileHeight; y++) {
-        for (let x = 0; x < actualTileWidth; x++) {
-          const tileX = startTileX + x;
-          const tileY = startTileY + y;
-          const idx = tileY * mapWidth + tileX;
-          const tile = mapParser.tiles[idx];
+    // 先绘制背景填充整个小地图区域
+    ctx.fillStyle = backgroundColor;
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    
+    if (tiles.length > 0) {
+      // 遍历地图瓦片
+      for (let y = 0; y < mapHeight; y++) {
+        for (let x = 0; x < mapWidth; x++) {
+          const index = y * mapWidth + x;
+          const tile = tiles[index];
           
+          // 根据瓦片属性设置颜色
           if (tile && tile.attr === 1) {
-            ctx.fillStyle = '#444';
+            ctx.fillStyle = obstacleColor;
           } else {
-            ctx.fillStyle = '#2d3748';
+            ctx.fillStyle = walkableColor;
           }
           
-          ctx.fillRect(offsetX + x * scale, offsetY + y * scale, scale, scale);
+          // 绘制瓦片
+          const drawX = finalOffsetX + x * scale;
+          const drawY = finalOffsetY + y * scale;
+          
+          // 确保瓦片不超出画布边界
+          if (drawX >= 0 && drawY >= 0 && drawX < canvasWidth && drawY < canvasHeight) {
+            ctx.fillRect(drawX, drawY, Math.max(1, scale), Math.max(1, scale));
+          }
         }
       }
-    } else if (this.currentMap && this.currentMap.tiles) {
-      for (let y = 0; y < actualTileHeight; y++) {
-        for (let x = 0; x < actualTileWidth; x++) {
-          const tileX = startTileX + x;
-          const tileY = startTileY + y;
-          const tile = this.currentMap.tiles[tileY]?.[tileX];
+    } else if (this.currentMap?.tiles) {
+      // 备用绘制方式
+      for (let y = 0; y < mapHeight; y++) {
+        for (let x = 0; x < mapWidth; x++) {
+          const tile = this.currentMap.tiles[y]?.[x];
+          ctx.fillStyle = tile === 1 ? obstacleColor : walkableColor;
           
-          if (tile === 1) {
-            ctx.fillStyle = '#444';
-          } else {
-            ctx.fillStyle = '#2d3748';
+          const drawX = finalOffsetX + x * scale;
+          const drawY = finalOffsetY + y * scale;
+          
+          if (drawX >= 0 && drawY >= 0 && drawX < canvasWidth && drawY < canvasHeight) {
+            ctx.fillRect(drawX, drawY, Math.max(1, scale), Math.max(1, scale));
           }
-          
-          ctx.fillRect(offsetX + x * scale, offsetY + y * scale, scale, scale);
         }
       }
     }
     
-    // 绘制其他玩家（绿色点）
-    this.players.forEach(player => {
-      const drawX = offsetX + (player.x - startTileX) * scale;
-      const drawY = offsetY + (player.y - startTileY) * scale;
-      if (drawX >= 0 && drawX < miniMapSize && drawY >= 0 && drawY < miniMapSize) {
-        ctx.fillStyle = '#4ade80';
-        ctx.beginPath();
-        ctx.arc(drawX, drawY, 2.5, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    });
+    // 绘制其他玩家
+    if (this.players && this.players.size > 0) {
+      this.players.forEach(otherPlayer => {
+        const px = finalOffsetX + otherPlayer.x * scale;
+        const py = finalOffsetY + otherPlayer.y * scale;
+        
+        // 确保玩家标记在画布内
+        if (px >= 0 && py >= 0 && px < canvasWidth && py < canvasHeight) {
+          ctx.fillStyle = otherPlayerColor;
+          ctx.beginPath();
+          ctx.arc(px, py, 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      });
+    }
     
-    // 绘制自己（红色点，在小地图中的实际位置）
-    const playerDrawX = offsetX + (playerTileX - startTileX) * scale;
-    const playerDrawY = offsetY + (playerTileY - startTileY) * scale;
-    ctx.fillStyle = '#e94560';
-    ctx.beginPath();
-    ctx.arc(playerDrawX, playerDrawY, 3, 0, Math.PI * 2);
-    ctx.fill();
+    // 绘制自己
+    const selfX = finalOffsetX + playerX * scale;
+    const selfY = finalOffsetY + playerY * scale;
+    
+    // 确保自己的标记在画布内
+    if (selfX >= 0 && selfY >= 0 && selfX < canvasWidth && selfY < canvasHeight) {
+      ctx.fillStyle = playerColor;
+      ctx.beginPath();
+      ctx.arc(selfX, selfY, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
   
   handleMessage(cmd, data) {
