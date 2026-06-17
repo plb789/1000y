@@ -408,9 +408,11 @@ class Game {
           console.log('动画数据加载成功');
         } else {
           console.log('动画数据文件响应异常');
+          animationData = null; // 确保重置为null
         }
       } catch (err) {
-        console.log('没有找到动画数据文件');
+        console.log('动画数据文件加载失败:', err.message);
+        animationData = null; // 确保重置为null
       }
       
       // 步骤2: 加载地图数据 (30%)
@@ -584,44 +586,80 @@ class Game {
   }
   
   renderMiniMap() {
-    // 使用地图引擎的地图数据
     const mapParser = this.mapEngine?.mapParser;
     if (!mapParser) return;
     
     const ctx = this.ui.miniMap.getContext('2d');
-    const width = mapParser.width;
-    const height = mapParser.height;
-    const scale = 180 / Math.max(width, height);
+    const mapWidth = mapParser.width;
+    const mapHeight = mapParser.height;
+    const tileSize = this.mapEngine.tileSize;
+    
+    // 获取摄像机信息
+    const camera = this.mapEngine.camera;
+    const canvasWidth = this.mapEngine.canvas.width;
+    const canvasHeight = this.mapEngine.canvas.height;
+    
+    // 计算可见区域（瓦片坐标）
+    const startTileX = Math.floor(camera.offsetX / tileSize);
+    const startTileY = Math.floor(camera.offsetY / tileSize);
+    const visibleTilesX = Math.ceil(canvasWidth / tileSize);
+    const visibleTilesY = Math.ceil(canvasHeight / tileSize);
+    
+    // 计算小地图缩放比例（让可见区域适应180x180）
+    const miniMapSize = 180;
+    const scale = miniMapSize / Math.max(visibleTilesX, visibleTilesY);
     
     // 清空背景
     ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, 180, 180);
+    ctx.fillRect(0, 0, miniMapSize, miniMapSize);
     
-    // 绘制地图（地图数据是一维数组）
+    // 计算绘制偏移量（让玩家位置在小地图中心）
+    const playerTileX = Math.floor(this.player.x);
+    const playerTileY = Math.floor(this.player.y);
+    const offsetX = (miniMapSize / 2) - (playerTileX * scale);
+    const offsetY = (miniMapSize / 2) - (playerTileY * scale);
+    
+    // 绘制可见区域内的瓦片
     if (mapParser.tiles && mapParser.tiles.length > 0) {
-      for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-          const idx = y * width + x;
+      const endTileX = Math.min(mapWidth, startTileX + visibleTilesX);
+      const endTileY = Math.min(mapHeight, startTileY + visibleTilesY);
+      
+      for (let y = startTileY; y < endTileY; y++) {
+        for (let x = startTileX; x < endTileX; x++) {
+          const idx = y * mapWidth + x;
           const tile = mapParser.tiles[idx];
           if (tile && tile.attr === 1) {
             ctx.fillStyle = '#444';
           } else {
             ctx.fillStyle = '#2d3748';
           }
-          ctx.fillRect(x * scale, y * scale, scale, scale);
+          ctx.fillRect(
+            offsetX + x * scale,
+            offsetY + y * scale,
+            scale,
+            scale
+          );
         }
       }
     } else if (this.currentMap && this.currentMap.tiles) {
       // 备用：使用currentMap的数据（二维数组）
-      for (let y = 0; y < this.currentMap.height; y++) {
-        for (let x = 0; x < this.currentMap.width; x++) {
+      const endTileX = Math.min(this.currentMap.width, startTileX + visibleTilesX);
+      const endTileY = Math.min(this.currentMap.height, startTileY + visibleTilesY);
+      
+      for (let y = startTileY; y < endTileY; y++) {
+        for (let x = startTileX; x < endTileX; x++) {
           const tile = this.currentMap.tiles[y]?.[x];
           if (tile === 1) {
             ctx.fillStyle = '#444';
           } else {
             ctx.fillStyle = '#2d3748';
           }
-          ctx.fillRect(x * scale, y * scale, scale, scale);
+          ctx.fillRect(
+            offsetX + x * scale,
+            offsetY + y * scale,
+            scale,
+            scale
+          );
         }
       }
     }
@@ -630,14 +668,22 @@ class Game {
     this.players.forEach(player => {
       ctx.fillStyle = '#4ade80';
       ctx.beginPath();
-      ctx.arc(player.x * scale, player.y * scale, 2.5, 0, Math.PI * 2);
+      ctx.arc(
+        offsetX + player.x * scale,
+        offsetY + player.y * scale,
+        2.5, 0, Math.PI * 2
+      );
       ctx.fill();
     });
     
-    // 绘制自己（红色点）
+    // 绘制自己（红色点，在小地图中心）
     ctx.fillStyle = '#e94560';
     ctx.beginPath();
-    ctx.arc(this.player.x * scale, this.player.y * scale, 3, 0, Math.PI * 2);
+    ctx.arc(
+      miniMapSize / 2,
+      miniMapSize / 2,
+      3, 0, Math.PI * 2
+    );
     ctx.fill();
   }
   
