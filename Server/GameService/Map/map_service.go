@@ -73,6 +73,7 @@ func (s *Service) GetMapBase(mapID uint32) (*MapBase, error) {
 		TileWidth:   config.TileWidth,
 		TileHeight:  config.TileHeight,
 		MapFile:     config.MapFile,
+		TilesetFile: config.TilesetFile,
 		Music:       config.Music,
 		PkAllowed:   config.PkAllowed,
 		ReviveMapID: config.ReviveMapID,

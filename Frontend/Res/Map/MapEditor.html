@@ -443,6 +443,13 @@
       <span class="toolbar-label">导入</span>
       <button class="toolbar-btn" id="btnImportMap" title="导入原版.map文件">🗺️</button>
     </div>
+    
+    <div class="toolbar-group">
+      <span class="toolbar-label">高级</span>
+      <button class="toolbar-btn" id="btnAutoGenerate" title="根据图集自动生成地图">✨</button>
+      <button class="toolbar-btn" id="btnExportMinimap" title="导出小地图PNG">🗾</button>
+      <button class="toolbar-btn" id="btnExportAnim" title="导出游戏动画数据">🎮</button>
+    </div>
   </div>
   
   <!-- 主区域 -->
@@ -688,6 +695,9 @@
         // 瓦片图集
         this.tileset = null;
         this.tilesetCols = 16;
+        this.tilesetName = '';  // 当前图集名称（不含扩展名）
+        this.tilesetMetadata = null;  // 图集元数据（通行/阻挡等属性）
+        this.customTileTypes = [];  // 自定义瓦片类型列表
         
         // 资源管理器
         this.resourceManager = window.ResourceManager;
@@ -813,19 +823,63 @@
         const grid = document.getElementById('paletteGrid');
         grid.innerHTML = '';
         
+        // 确定要显示的瓦片列表
+        let tilesToShow = [];
+        
+        if (this.tileset && this.tilesetMetadata && this.tilesetMetadata.tiles) {
+          // 使用元数据定义的瓦片
+          tilesToShow = this.tilesetMetadata.tiles;
+        } else if (this.tileset) {
+          // 有图集但无元数据，根据图集尺寸计算瓦片数
+          const tileCount = Math.floor(this.tileset.width / this.tileSize) * 
+                           Math.floor(this.tileset.height / this.tileSize);
+          for (let i = 1; i <= tileCount; i++) {
+            tilesToShow.push({ id: i, name: `瓦片${i}`, passable: true, attr: 0, layer: 0, category: 'ground' });
+          }
+        } else {
+          // 没有图集，使用预设瓦片类型
+          tilesToShow = this.tileTypes;
+        }
+        
         // 根据分类筛选瓦片
-        let tilesToShow = this.tileTypes;
-        if (this.currentCategory !== 'all' && window.TileDefinitions) {
-          tilesToShow = TileDefinitions.getByCategory(this.currentCategory);
+        if (this.currentCategory && this.currentCategory !== 'all') {
+          tilesToShow = tilesToShow.filter(tile => {
+            // 获取瓦片的分类，如果没有则根据属性推断
+            let tileCategory = tile.category;
+            
+            // 如果没有明确的category字段，根据passable和layer属性推断分类
+            if (!tileCategory) {
+              const passable = tile.passable !== undefined ? tile.passable : (tile.attr === 0);
+              const layer = tile.layer !== undefined ? tile.layer : 0;
+              
+              if (passable && layer === 0) {
+                tileCategory = 'ground';  // 地面：可通行且在地面层
+              } else if (!passable && layer === 0) {
+                tileCategory = 'water';   // 水域：不可通行且在地面层
+              } else if (!passable && layer === 1) {
+                tileCategory = 'walls';   // 墙壁：不可通行且在物体层
+              } else if (passable && layer === 1) {
+                tileCategory = 'plants';  // 植物：可通行且在物体层
+              } else {
+                tileCategory = 'ground';  // 默认
+              }
+            }
+            
+            return tileCategory === this.currentCategory;
+          });
         }
         
         tilesToShow.forEach((tile, index) => {
           const div = document.createElement('div');
           div.className = 'palette-tile';
           if (index === 0) div.classList.add('selected');
-          div.title = tile.name + (tile.attr === 1 || !tile.passable ? ' [阻挡]' : ' [可通行]');
-          div.dataset.index = index;
-          div.dataset.tileId = tile.id || tile.low;
+          
+          // 计算通行属性
+          // attr字段有最高优先级（千年游戏标准）
+          const isBlocking = tile.attr === 1;
+          const isPassable = !isBlocking;
+          
+          div.title = `${tile.name || '瓦片' + (tile.id || index + 1)}${isBlocking ? ' [阻挡]' : ' [可通行]'}${tile.layer === 1 ? ' [物体层]' : ''}`;
           
           // 如果有瓦片图集，使用图集渲染调色板
           if (this.tileset) {
@@ -834,13 +888,34 @@
             canvas.height = 40;
             const ctx = canvas.getContext('2d');
             const ts = this.tileSize;
-            const tileIndex = tile.id || tile.low;
+            const tileIndex = tile.id || (index + 1);
             const sx = ((tileIndex - 1) % this.tilesetCols) * ts;
             const sy = Math.floor((tileIndex - 1) / this.tilesetCols) * ts;
-            ctx.drawImage(this.tileset, sx, sy, ts, ts, 0, 0, 40, 40);
+            
+            // 确保不超出图集范围
+            if (sx + ts <= this.tileset.width && sy + ts <= this.tileset.height) {
+              ctx.drawImage(this.tileset, sx, sy, ts, ts, 0, 0, 40, 40);
+            } else {
+              // 瓦片超出范围，显示占位符
+              ctx.fillStyle = '#2d3748';
+              ctx.fillRect(0, 0, 40, 40);
+              ctx.fillStyle = '#718096';
+              ctx.font = '10px Arial';
+              ctx.textAlign = 'center';
+              ctx.fillText(tile.id || index + 1, 20, 24);
+            }
             div.appendChild(canvas);
+            
+            // 如果是阻挡瓦片，添加红色X标记
+            if (isBlocking) {
+              const overlay = document.createElement('div');
+              overlay.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(255,0,0,0.3);display:flex;align-items:center;justify-content:center;';
+              overlay.innerHTML = '<span style="color:#ff4444;font-weight:bold;font-size:20px;">X</span>';
+              div.style.position = 'relative';
+              div.appendChild(overlay);
+            }
           } else {
-            div.style.backgroundColor = tile.color;
+            div.style.backgroundColor = tile.color || '#8b7355';
             if (tile.icon) {
               div.textContent = tile.icon;
               div.style.fontSize = '20px';
@@ -852,12 +927,12 @@
             div.classList.add('selected');
             // 深拷贝瓦片数据
             this.currentTile = { 
-              low: tile.id || tile.low, 
-              high: tile.high || 0, 
-              attr: tile.attr || (tile.passable === false ? 1 : 0) 
+              low: tile.id || (index + 1), 
+              high: tile.layer === 1 ? 1 : 0, 
+              attr: isBlocking ? 1 : 0 
             };
             this.updateTileInfo();
-            console.log('选中瓦片:', tile.name, this.currentTile);
+            console.log('选中瓦片:', tile.name, this.currentTile, '通行:', isPassable);
           });
           
           grid.appendChild(div);
@@ -927,6 +1002,11 @@
         // 导入原版地图
         document.getElementById('btnImportMap').addEventListener('click', () => this.importMillenniumMap());
         
+        // 高级功能
+        document.getElementById('btnAutoGenerate').addEventListener('click', () => this.autoGenerateMap());
+        document.getElementById('btnExportMinimap').addEventListener('click', () => this.exportMinimap());
+        document.getElementById('btnExportAnim').addEventListener('click', () => this.exportAnimationFile());
+        
         // 分类筛选
         document.querySelectorAll('.category-btn').forEach(btn => {
           btn.addEventListener('click', (e) => {
@@ -994,18 +1074,26 @@
             status.textContent = '加载中...';
             status.style.color = '#fbbf24';
             
+            // 保存文件名（去掉扩展名）用于加载JSON元数据
+            const tilesetName = file.name.replace(/\.(png|jpg|jpeg|gif|webp)$/i, '');
+            this.tilesetName = tilesetName;
+            
             // 使用资源管理器加载（带缓存）
             const url = URL.createObjectURL(file);
             const img = await this.resourceManager.loadImage(url);
             
             this.tileset = img;
-            status.textContent = '已加载';
+            
+            // 尝试加载对应的JSON元数据文件
+            await this.loadTilesetMetadata(tilesetName);
+            
+            status.textContent = this.tilesetMetadata ? '已加载(有元数据)' : '已加载';
             status.style.color = '#4ade80';
             
             this.render();
             this.initPalette();
             
-            console.log('瓦片图集加载成功:', img.width + 'x' + img.height);
+            console.log('瓦片图集加载成功:', img.width + 'x' + img.height, '元数据:', this.tilesetMetadata ? '有' : '无');
           } catch (err) {
             alert('加载图片失败: ' + err.message);
             document.getElementById('tilesetStatus').textContent = '加载失败';
@@ -1014,6 +1102,139 @@
         };
         
         input.click();
+      }
+      
+      // 加载瓦片图集元数据JSON
+      async loadTilesetMetadata(tilesetName) {
+        try {
+          // 尝试从相同路径加载JSON文件
+          // 由于浏览器安全限制，我们使用一个模拟的URL来触发文件选择
+          // 或者尝试从服务器加载（如果文件在服务器上）
+          // 这里我们提供手动选择JSON文件的选项
+          
+          const jsonFile = await this.promptForJsonFile();
+          if (jsonFile) {
+            const text = await this.readFileAsText(jsonFile);
+            this.tilesetMetadata = JSON.parse(text);
+            console.log('瓦片元数据加载成功:', this.tilesetMetadata);
+            
+            // 用元数据更新瓦片类型索引
+            this.updateTileTypeIndexFromMetadata();
+            return;
+          }
+        } catch (err) {
+          console.log('未找到元数据文件或加载失败，将使用默认属性');
+        }
+        
+        // 如果没有元数据，检查是否有预设的元数据可用
+        this.tilesetMetadata = null;
+        this.rebuildTileTypeIndex();
+      }
+      
+      // 提示用户选择JSON文件
+      promptForJsonFile() {
+        return new Promise((resolve) => {
+          // 尝试自动查找同名JSON文件（通过fetch）
+          // 如果在服务器环境可以直接请求
+          const jsonUrl = `Res/Map/${this.tilesetName}.json`;
+          fetch(jsonUrl)
+            .then(resp => {
+              if (resp.ok) return resp.json();
+              throw new Error('JSON文件不存在');
+            })
+            .then(data => {
+              this.tilesetMetadata = data;
+              this.updateTileTypeIndexFromMetadata();
+              resolve(true);
+            })
+            .catch(() => {
+              // JSON不存在，尝试使用input选择
+              const input = document.createElement('input');
+              input.type = 'file';
+              input.accept = '.json';
+              input.onchange = (e) => {
+                const file = e.target.files[0];
+                resolve(file || null);
+              };
+              input.click();
+            });
+        });
+      }
+      
+      // 读取文件为文本
+      readFileAsText(file) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (e) => resolve(e.target.result);
+          reader.onerror = reject;
+          reader.readAsText(file);
+        });
+      }
+      
+      // 从元数据更新瓦片类型索引
+      updateTileTypeIndexFromMetadata() {
+        if (!this.tilesetMetadata || !this.tilesetMetadata.tiles) return;
+        
+        this.customTileTypes = this.tilesetMetadata.tiles.map(tile => ({
+          id: tile.id,
+          name: tile.name || `瓦片${tile.id}`,
+          color: '#8b7355', // 默认颜色，会被图集图片覆盖
+          // attr字段有最高优先级（千年游戏标准）
+          attr: tile.attr || (tile.passable === false || tile.building ? 1 : 0),
+          passable: tile.attr !== 1,
+          layer: tile.layer || (tile.building ? 1 : 0),
+          building: tile.building || false
+        }));
+        
+        // 重建瓦片类型索引
+        this.tileTypeIndex = new Map();
+        this.customTileTypes.forEach(tile => {
+          this.tileTypeIndex.set(tile.id, tile);
+        });
+        
+        console.log('已用元数据更新瓦片类型:', this.customTileTypes.length, '个瓦片');
+      }
+      
+      // 重建瓦片类型索引（使用默认或自定义）
+      rebuildTileTypeIndex() {
+        // 如果有自定义瓦片类型，使用它
+        if (this.customTileTypes && this.customTileTypes.length > 0) {
+          this.tileTypeIndex = new Map();
+          this.customTileTypes.forEach(tile => {
+            this.tileTypeIndex.set(tile.id, tile);
+          });
+          return;
+        }
+        
+        // 否则使用TileDefinitions或备用列表
+        this.tileTypeIndex = new Map();
+        if (window.TileDefinitions) {
+          this.tileTypes = TileDefinitions.getAll().filter(t => t.id > 0);
+        } else {
+          this.tileTypes = [
+            { id: 1, name: '草地', color: '#3a5f0b', passable: true, attr: 0, layer: 0, category: 'ground' },
+            { id: 2, name: '水域', color: '#1e4d8c', passable: false, attr: 1, layer: 0, category: 'water' },
+            { id: 3, name: '墙壁', color: '#5c5c5c', passable: false, attr: 1, layer: 1, category: 'walls' },
+            { id: 4, name: '地板', color: '#8b7355', passable: true, attr: 0, layer: 0, category: 'ground' },
+            { id: 5, name: '树木', color: '#228b22', passable: false, attr: 1, layer: 1, category: 'plants' },
+            { id: 6, name: '沙地', color: '#c2b280', passable: true, attr: 0, layer: 0, category: 'ground' },
+            { id: 7, name: '泥土', color: '#8b4513', passable: true, attr: 0, layer: 0, category: 'ground' },
+            { id: 8, name: '石板路', color: '#696969', passable: true, attr: 0, layer: 0, category: 'roads' },
+            { id: 9, name: '楼梯', color: '#a0522d', passable: true, attr: 0, layer: 0, category: 'ground' },
+            { id: 10, name: '门', color: '#654321', passable: false, attr: 1, layer: 1, category: 'walls' },
+            { id: 11, name: '桥梁', color: '#8b7765', passable: true, attr: 0, layer: 0, category: 'roads' },
+            { id: 12, name: '花丛', color: '#ff69b4', passable: true, attr: 0, layer: 0, category: 'plants' },
+            { id: 13, name: '石头', color: '#4a5568', passable: false, attr: 1, layer: 1, category: 'plants' },
+            { id: 14, name: '深墙', color: '#2d3748', passable: false, attr: 1, layer: 1, category: 'walls' },
+            { id: 15, name: '洞穴', color: '#1a202c', passable: true, attr: 0, layer: 0, category: 'ground' },
+            { id: 16, name: '终点', color: '#e94560', passable: true, attr: 0, layer: 0, category: 'ground' }
+          ];
+        }
+        
+        this.tileTypes.forEach(tile => {
+          const key = tile.id !== undefined ? tile.id : tile.low;
+          this.tileTypeIndex.set(key, tile);
+        });
       }
       
       // 导入原版千年地图文件
@@ -1496,19 +1717,39 @@
       
       // 更新瓦片信息
       updateTileInfo() {
-        // 支持多种数据结构
-        const tileType = this.tileTypes.find(t => {
-          if ('low' in t && 'high' in t) {
-            return t.low === this.currentTile.low && t.high === this.currentTile.high;
-          }
-          if ('id' in t) {
-            return t.id === this.currentTile.low;
-          }
-          return false;
-        });
-        document.getElementById('currentTile').textContent = tileType ? `${tileType.name} (${this.currentTile.low},${this.currentTile.high})` : `(${this.currentTile.low},${this.currentTile.high})`;
-        document.getElementById('tilePassable').textContent = this.currentTile.attr === 0 ? '是' : '否';
-        document.getElementById('tilePassableCheck').checked = this.currentTile.attr === 0;
+        // 优先从自定义瓦片类型中查找
+        let tileType = null;
+        
+        // 1. 先从自定义元数据中查找
+        if (this.tilesetMetadata && this.tilesetMetadata.tiles) {
+          tileType = this.tilesetMetadata.tiles.find(t => t.id === this.currentTile.low);
+        }
+        
+        // 2. 再从customTileTypes中查找
+        if (!tileType && this.customTileTypes) {
+          tileType = this.customTileTypes.find(t => t.id === this.currentTile.low);
+        }
+        
+        // 3. 最后从tileTypes中查找
+        if (!tileType) {
+          tileType = this.tileTypes.find(t => {
+            if ('low' in t && 'high' in t) {
+              return t.low === this.currentTile.low && t.high === this.currentTile.high;
+            }
+            if ('id' in t) {
+              return t.id === this.currentTile.low;
+            }
+            return false;
+          });
+        }
+        
+        const tileName = tileType ? tileType.name : `瓦片${this.currentTile.low}`;
+        document.getElementById('currentTile').textContent = `${tileName} (${this.currentTile.low},${this.currentTile.high})`;
+        
+        // 根据attr判断通行性
+        const isPassable = this.currentTile.attr === 0;
+        document.getElementById('tilePassable').textContent = isPassable ? '是' : '否';
+        document.getElementById('tilePassableCheck').checked = isPassable;
       }
       
       // 调整地图大小
@@ -1671,7 +1912,8 @@
           name: mapName || '未命名',
           width: this.mapWidth,
           height: this.mapHeight,
-          tiles: this.tiles
+          tiles: this.tiles,
+          animations: this.exportAnimations()  // 包含动画数据
         };
         
         const blob = new Blob([JSON.stringify(mapData, null, 2)], { type: 'application/json' });
@@ -2207,7 +2449,7 @@
         this.updateAnimationCount();
       }
       
-      // 导出动画数据
+      // 导出动画数据（通用）
       exportAnimationData() {
         const data = {
           animations: this.exportAnimations(),
@@ -2227,6 +2469,30 @@
         URL.revokeObjectURL(url);
         
         alert('动画数据已导出');
+      }
+      
+      // 导出动画数据文件（按地图ID命名，用于游戏加载）
+      exportAnimationFile() {
+        const mapId = document.getElementById('mapId').value;
+        const animations = this.exportAnimations();
+        
+        const data = {
+          animations: animations,
+          mapId: parseInt(mapId) || 1,
+          exportTime: new Date().toISOString(),
+          version: '1.0'
+        };
+        
+        const json = JSON.stringify(data, null, 2);
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${String(mapId).padStart(3, '0')}_anim.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        
+        alert(`动画数据已导出: ${String(mapId).padStart(3, '0')}_anim.json`);
       }
       
       // 切换WebGL渲染
@@ -2279,6 +2545,107 @@
         }
         
         this.render();
+      }
+      
+      // 根据图集自动生成地图（按原图布局）
+      autoGenerateMap() {
+        if (!this.tileset || !this.tilesetMetadata) {
+          alert('请先加载带有元数据的瓦片图集');
+          return;
+        }
+        
+        // 从元数据获取原图的瓦片网格尺寸
+        const sourceCols = this.tilesetMetadata.sourceTileCols || this.tilesetCols;
+        const sourceRows = this.tilesetMetadata.sourceTileRows || Math.ceil(this.customTileTypes.length / this.tilesetCols);
+        
+        if (sourceCols <= 0 || sourceRows <= 0) {
+          alert('元数据中没有原图尺寸信息，请使用新版CreateTileset.html生成图集');
+          return;
+        }
+        
+        // 确认是否要重新生成地图
+        const confirmMsg = `将根据图集原图布局自动生成 ${sourceCols} x ${sourceRows} 的地图，是否继续？`;
+        if (!confirm(confirmMsg)) return;
+        
+        // 保存历史
+        this.saveHistory();
+        
+        // 设置地图尺寸
+        this.mapWidth = sourceCols;
+        this.mapHeight = sourceRows;
+        
+        // 更新UI
+        document.getElementById('mapWidth').value = sourceCols;
+        document.getElementById('mapHeight').value = sourceRows;
+        
+        // 初始化瓦片数组（按原图顺序自动填充）
+        this.tiles = [];
+        for (let y = 0; y < sourceRows; y++) {
+          const row = [];
+          for (let x = 0; x < sourceCols; x++) {
+            // 计算原图中的瓦片索引
+            const sourceIndex = y * sourceCols + x;
+            
+            // 获取瓦片属性
+            const tileInfo = this.tileTypeIndex.get(sourceIndex + 1);
+            const low = sourceIndex + 1;
+            const high = tileInfo && tileInfo.layer === 1 ? 1 : 0;
+            // attr字段有最高优先级，这是千年游戏的标准格式
+            const attr = tileInfo && tileInfo.attr === 1 ? 1 : 0;
+            
+            row.push({ low, high, attr });
+          }
+          this.tiles.push(row);
+        }
+        
+        // 重新初始化画布
+        this.initCanvas();
+        this.render();
+        
+        this.isModified = true;
+        document.getElementById('statusModified').textContent = '是';
+        
+        console.log(`自动生成地图完成: ${sourceCols} x ${sourceRows} 瓦片`);
+        alert(`地图自动生成完成！\n尺寸: ${sourceCols} x ${sourceRows} 瓦片\n您可以在此基础上进行微调编辑。`);
+      }
+      
+      // 导出小地图PNG
+      exportMinimap() {
+        if (!this.tiles || this.tiles.length === 0) {
+          alert('请先创建或打开地图');
+          return;
+        }
+        
+        // 创建小地图画布（每个瓦片1像素）
+        const minimapCanvas = document.createElement('canvas');
+        minimapCanvas.width = this.mapWidth;
+        minimapCanvas.height = this.mapHeight;
+        const ctx = minimapCanvas.getContext('2d');
+        
+        // 定义颜色映射（基于瓦片通行属性）
+        const getColor = (tile) => {
+          if (!tile) return '#1a202c'; // 空白
+          if (tile.attr === 1) return '#4a5568'; // 阻挡区域（灰色）
+          return '#4ade80'; // 可通行区域（绿色）
+        };
+        
+        // 绘制小地图
+        for (let y = 0; y < this.mapHeight; y++) {
+          for (let x = 0; x < this.mapWidth; x++) {
+            ctx.fillStyle = getColor(this.tiles[y][x]);
+            ctx.fillRect(x, y, 1, 1);
+          }
+        }
+        
+        // 下载（文件名格式与服务端配置一致）
+        const mapId = document.getElementById('mapId').value;
+        const link = document.createElement('a');
+        // 服务端配置使用 minimap/xxx.png 格式
+        link.download = `${String(mapId).padStart(3, '0')}_minimap.png`;
+        link.href = minimapCanvas.toDataURL('image/png');
+        link.click();
+        
+        console.log(`小地图导出完成: ${this.mapWidth} x ${this.mapHeight}`);
       }
     }
     

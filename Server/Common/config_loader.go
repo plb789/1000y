@@ -40,6 +40,7 @@ type MapBaseConfig struct {
 	TileWidth   int     `json:"tile_width"`
 	TileHeight  int     `json:"tile_height"`
 	MapFile     string  `json:"map_file"`
+	TilesetFile string  `json:"tileset_file"` // 瓦片图集文件
 	Music       string  `json:"music"`
 	PkAllowed   uint8   `json:"pk_allowed"`
 	ReviveMapID *uint32 `json:"revive_map_id"`

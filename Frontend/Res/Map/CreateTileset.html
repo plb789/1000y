@@ -5,130 +5,790 @@
   <title>瓦片图集生成器</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: 'Microsoft YaHei', sans-serif; background: #1a1a2e; color: #fff; padding: 20px; }
-    .container { max-width: 800px; margin: 0 auto; }
+    body { font-family: 'Microsoft YaHei', sans-serif; background: #1a1a2e; color: #fff; padding: 20px; min-height: 100vh; }
+    
+    .container { max-width: 1200px; margin: 0 auto; }
     h1 { text-align: center; margin-bottom: 20px; color: #e94560; }
-    .canvas-container { text-align: center; margin: 20px 0; }
-    #tilesetCanvas { border: 2px solid #4a5568; border-radius: 8px; }
-    .controls { display: flex; justify-content: center; gap: 10px; margin: 20px 0; }
+    
+    .main-layout { display: flex; gap: 20px; }
+    .left-panel { flex: 1; }
+    .right-panel { width: 300px; }
+    
+    .panel {
+      background: #1a202c;
+      border: 2px solid #4a5568;
+      border-radius: 8px;
+      padding: 15px;
+      margin-bottom: 15px;
+    }
+    
+    .panel-title { color: #4ade80; font-size: 14px; font-weight: bold; margin-bottom: 12px; border-bottom: 1px solid #4a5568; padding-bottom: 8px; }
+    
+    .canvas-container { text-align: center; margin: 15px 0; }
+    #tilesetCanvas { border: 2px solid #4a5568; border-radius: 8px; max-width: 100%; }
+    
+    .controls { display: flex; flex-wrap: wrap; gap: 10px; margin: 15px 0; justify-content: center; }
     .btn { padding: 10px 20px; background: linear-gradient(135deg, #e94560, #c53030); border: none; border-radius: 6px; color: #fff; cursor: pointer; font-size: 14px; transition: all 0.2s; }
     .btn:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(233, 69, 96, 0.4); }
+    .btn.secondary { background: linear-gradient(135deg, #4a5568, #2d3748); }
+    .btn.secondary:hover { box-shadow: 0 4px 12px rgba(74, 85, 104, 0.4); }
+    .btn.small { padding: 6px 12px; font-size: 12px; }
+    
+    .form-row { display: flex; align-items: center; margin: 8px 0; gap: 10px; }
+    .form-label { font-size: 13px; color: #a0aec0; min-width: 80px; }
+    .form-input { flex: 1; height: 32px; background: #2d3748; border: 1px solid #4a5568; border-radius: 4px; color: #fff; padding: 0 10px; font-size: 13px; }
+    .form-input:focus { outline: none; border-color: #e94560; }
+    .form-select { flex: 1; height: 32px; background: #2d3748; border: 1px solid #4a5568; border-radius: 4px; color: #fff; padding: 0 10px; font-size: 13px; }
+    
     .info { background: #2d3748; padding: 15px; border-radius: 8px; margin-top: 20px; }
     .info h3 { color: #4ade80; margin-bottom: 10px; }
     .info ul { list-style: none; padding-left: 20px; }
-    .info li { margin: 5px 0; }
-    .tile-preview { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; margin-top: 10px; }
-    .tile-item { width: 40px; height: 40px; border: 1px solid #4a5568; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 10px; }
+    .info li { margin: 5px 0; font-size: 13px; color: #a0aec0; }
+    
+    .tile-grid {
+      display: grid;
+      grid-template-columns: repeat(8, 1fr);
+      gap: 4px;
+      max-height: 400px;
+      overflow-y: auto;
+      padding: 5px;
+    }
+    
+    .tile-item {
+      width: 100%;
+      aspect-ratio: 1;
+      border: 2px solid #4a5568;
+      border-radius: 4px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .tile-item:hover { border-color: #fff; }
+    .tile-item.selected { border-color: #e94560; box-shadow: 0 0 8px rgba(233, 69, 96, 0.5); }
+    .tile-item.blocked { background: repeating-linear-gradient(45deg, rgba(239, 68, 68, 0.25) 0px, rgba(239, 68, 68, 0.25) 4px, transparent 4px, transparent 8px); }
+    
+    .tile-item canvas { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
+    
+    .tile-index {
+      position: absolute;
+      bottom: 1px;
+      right: 2px;
+      font-size: 8px;
+      color: #fff;
+      text-shadow: 1px 1px 1px #000;
+    }
+    
+    .tile-name-overlay {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: rgba(0,0,0,0.7);
+      font-size: 8px;
+      padding: 1px 2px;
+      text-align: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    
+    .checkbox-row { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
+    .checkbox-row input[type="checkbox"] { width: 16px; height: 16px; }
+    
+    .drop-zone {
+      border: 2px dashed #4a5568;
+      border-radius: 8px;
+      padding: 30px;
+      text-align: center;
+      margin: 15px 0;
+      transition: all 0.2s;
+    }
+    .drop-zone.dragover { border-color: #e94560; background: rgba(233, 69, 96, 0.1); }
+    .drop-zone p { color: #718096; margin-top: 10px; }
+    
+    #sourceImage { max-width: 100%; max-height: 300px; display: none; margin: 10px auto; border: 1px solid #4a5568; border-radius: 4px; }
+    
+    .export-options { display: flex; gap: 10px; margin: 15px 0; }
+    
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    .fade-in { animation: fadeIn 0.3s ease; }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>🎨 瓦片图集生成器</h1>
     
-    <div class="canvas-container">
-      <canvas id="tilesetCanvas" width="768" height="96"></canvas>
-    </div>
-    
-    <div class="controls">
-      <button class="btn" id="btnGenerate">生成图集</button>
-      <button class="btn" id="btnDownload">下载图集</button>
+    <div class="main-layout">
+      <div class="left-panel">
+        <!-- 图片导入区 -->
+        <div class="panel">
+          <div class="panel-title">📁 图片导入</div>
+          <div class="drop-zone" id="dropZone">
+            <div style="font-size: 40px;">🖼️</div>
+            <p>拖拽图片到这里，或点击选择文件</p>
+            <p style="font-size: 11px; color: #718096;">支持 PNG, JPG, GIF, WebP</p>
+          </div>
+          <input type="file" id="fileInput" accept=".png,.jpg,.jpeg,.gif,.webp" style="display:none">
+          <img id="sourceImage" alt="源图片">
+          
+          <!-- 图片信息显示 -->
+          <div id="imageInfo" style="display: none; margin-top: 15px; padding: 10px; background: #2d3748; border-radius: 6px;">
+            <div style="display: flex; justify-content: space-between; font-size: 12px;">
+              <span style="color: #a0aec0;">原图尺寸:</span>
+              <span style="color: #4ade80;" id="imgSize">0 x 0</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 12px; margin-top: 5px;">
+              <span style="color: #a0aec0;">图集尺寸:</span>
+              <span style="color: #fbbf24;" id="tilesetSize">0 x 0</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 12px; margin-top: 5px;">
+              <span style="color: #a0aec0;">瓦片网格:</span>
+              <span style="color: #4ade80;" id="tileGridSize">0 x 0</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 12px; margin-top: 5px;">
+              <span style="color: #a0aec0;">瓦片总数:</span>
+              <span style="color: #4ade80;" id="totalTiles">0</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 12px; margin-top: 5px;">
+              <span style="color: #a0aec0;">建议地图尺寸:</span>
+              <span style="color: #e94560;" id="suggestedMapSize">0 x 0</span>
+            </div>
+          </div>
+        </div>
+        
+        <!-- 瓦片配置 -->
+        <div class="panel">
+          <div class="panel-title">⚙️ 图集配置</div>
+          <div class="form-row">
+            <span class="form-label">瓦片宽度:</span>
+            <input type="number" class="form-input" id="tileWidth" value="48" min="16" max="128">
+          </div>
+          <div class="form-row">
+            <span class="form-label">瓦片高度:</span>
+            <input type="number" class="form-input" id="tileHeight" value="48" min="16" max="128">
+          </div>
+          <div class="form-row">
+            <span class="form-label">图集列数:</span>
+            <input type="number" class="form-input" id="tilesetCols" value="16" min="1" max="32">
+          </div>
+          <div class="form-row">
+            <span class="form-label">图集名称:</span>
+            <input type="text" class="form-input" id="tilesetName" value="custom_tileset">
+          </div>
+          <button class="btn secondary small" id="btnPreview">预览切片</button>
+          <button class="btn small" id="btnApplyConfig">应用配置</button>
+        </div>
+        
+        <!-- 瓦片预览 -->
+        <div class="panel">
+          <div class="panel-title">🖼️ 生成的图集预览</div>
+          <div class="canvas-container">
+            <canvas id="tilesetCanvas" width="768" height="192"></canvas>
+          </div>
+          <div class="controls">
+            <button class="btn" id="btnGenerate">📋 生成图集</button>
+            <button class="btn secondary" id="btnDownloadPng">📥 下载 PNG</button>
+            <button class="btn secondary" id="btnDownloadJson">📥 下载 JSON</button>
+            <button class="btn secondary" id="btnDownloadBoth">📥 下载完整包</button>
+          </div>
+        </div>
+      </div>
+      
+      <div class="right-panel">
+        <!-- 瓦片属性编辑 -->
+        <div class="panel">
+          <div class="panel-title">🏷️ 瓦片属性编辑</div>
+          <div class="form-row">
+            <span class="form-label">瓦片索引:</span>
+            <input type="number" class="form-input" id="editTileIndex" value="1" min="1" max="256" disabled>
+          </div>
+          <div class="form-row">
+            <span class="form-label">瓦片名称:</span>
+            <input type="text" class="form-input" id="editTileName" value="草地" placeholder="输入瓦片名称">
+          </div>
+          <div class="checkbox-row">
+            <input type="checkbox" id="editTilePassable" checked>
+            <label for="editTilePassable">可通行</label>
+          </div>
+          <div class="checkbox-row">
+            <input type="checkbox" id="editTileBuilding">
+            <label for="editTileBuilding">建筑物</label>
+          </div>
+          <button class="btn small" id="btnApplyTileProps">应用属性</button>
+          <button class="btn small secondary" id="btnSelectAll">全选</button>
+          <button class="btn small secondary" id="btnClearSelection">清除选中</button>
+        </div>
+        
+        <!-- 预设瓦片属性 -->
+        <div class="panel">
+          <div class="panel-title">📌 批量设置属性</div>
+          <div class="form-row">
+            <span class="form-label">预设类型:</span>
+            <select class="form-select" id="presetType">
+              <option value="">-- 选择预设 --</option>
+              <optgroup label="地面类">
+                <option value="ground">通用地面</option>
+                <option value="grass">草地</option>
+                <option value="dirt">泥土</option>
+                <option value="sand">沙地</option>
+                <option value="stone_floor">石板地</option>
+              </optgroup>
+              <optgroup label="水域类">
+                <option value="water">水域(不可通行)</option>
+                <option value="shallow_water">浅水(不可通行)</option>
+              </optgroup>
+              <optgroup label="墙壁类">
+                <option value="wall">墙壁(不可通行)</option>
+                <option value="wood_wall">木墙</option>
+                <option value="stone_wall">石墙</option>
+              </optgroup>
+              <optgroup label="植物类">
+                <option value="tree">树木(不可通行)</option>
+                <option value="flower">花丛(可通行)</option>
+              </optgroup>
+              <optgroup label="道路类">
+                <option value="road">道路(可通行)</option>
+                <option value="bridge">桥梁(可通行)</option>
+              </optgroup>
+              <optgroup label="建筑类">
+                <option value="door">门</option>
+                <option value="stairs">楼梯</option>
+              </optgroup>
+            </select>
+          </div>
+          <button class="btn small" id="btnApplyPreset">应用预设到选中</button>
+        </div>
+        
+        <!-- 瓦片列表 -->
+        <div class="panel">
+          <div class="panel-title">📋 瓦片列表 (<span id="tileCount">0</span>)</div>
+          <div class="tile-grid" id="tileGrid"></div>
+        </div>
+      </div>
     </div>
     
     <div class="info">
       <h3>📋 使用说明</h3>
       <ul>
-        <li>点击"生成图集"按钮生成测试用瓦片图集</li>
-        <li>点击"下载图集"按钮保存到本地</li>
-        <li>将下载的 tileset.png 放到 Res/Map 目录下</li>
-        <li>在地图编辑器中点击🖼️按钮加载该图集</li>
+        <li><b>步骤1:</b> 拖拽或选择一张完整的大图（包含多个瓦片拼成的图）</li>
+        <li><b>步骤2:</b> 设置瓦片尺寸和图集列数</li>
+        <li><b>步骤3:</b> 点击"预览切片"确认切片是否正确</li>
+        <li><b>步骤4:</b> 编辑每个瓦片的属性（通行/阻挡/名称）</li>
+        <li><b>步骤5:</b> 点击"下载完整包"导出 PNG + JSON 元数据</li>
+        <li><b>步骤6:</b> 将导出的文件放入 <code>Res/Map/</code> 目录</li>
+        <li><b>步骤7:</b> 在地图编辑器中加载图集（会自动读取JSON）</li>
       </ul>
       <h3>🏷️ 瓦片索引说明</h3>
-      <div class="tile-preview" id="tilePreview"></div>
+      <ul>
+        <li>索引从 1 开始，与千年服务端地图格式一致</li>
+        <li>通行属性：玩家可以走到该瓦片上</li>
+        <li>建筑物：作为物体层渲染，会遮挡地面</li>
+        <li>导出的 JSON 文件需要与 PNG 同名</li>
+      </ul>
     </div>
   </div>
 
   <script>
-    const canvas = document.getElementById('tilesetCanvas');
-    const ctx = canvas.getContext('2d');
-    const tileSize = 48;
-    const cols = 16;
+    // ============================================
+    // 瓦片图集生成器
+    // ============================================
     
-    // 瓦片颜色配置
-    const tileConfigs = [
-      { name: '草地', color: '#3a5f0b', icon: '🌿' },
-      { name: '水域', color: '#1e4d8c', icon: '🌊' },
-      { name: '墙壁', color: '#5c5c5c', icon: '🧱' },
-      { name: '地板', color: '#8b7355', icon: '🟫' },
-      { name: '树木', color: '#228b22', icon: '🌲' },
-      { name: '沙地', color: '#c2b280', icon: '🏜️' },
-      { name: '泥土', color: '#8b4513', icon: '🟤' },
-      { name: '石板路', color: '#696969', icon: '⬜' },
-      { name: '楼梯', color: '#a0522d', icon: '🪜' },
-      { name: '门', color: '#654321', icon: '🚪' },
-      { name: '桥梁', color: '#8b7765', icon: '🌉' },
-      { name: '花丛', color: '#ff69b4', icon: '🌸' },
-      { name: '石头', color: '#4a5568', icon: '🪨' },
-      { name: '深墙', color: '#2d3748', icon: '🧱' },
-      { name: '洞穴', color: '#1a202c', icon: '🕳️' },
-      { name: '终点', color: '#e94560', icon: '🏁' },
-    ];
-    
-    function generateTileset() {
-      // 清空画布
-      ctx.fillStyle = '#000';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    class TilesetCreator {
+      constructor() {
+        // 瓦片配置
+        this.tileWidth = 48;
+        this.tileHeight = 48;
+        this.tilesetCols = 16;
+        this.tilesetName = 'custom_tileset';
+        
+        // 源图片
+        this.sourceImage = null;
+        
+        // 瓦片数据
+        this.tiles = []; // [{ index, name, passable, building, selected }]
+        
+        // 画布
+        this.canvas = document.getElementById('tilesetCanvas');
+        this.ctx = this.canvas.getContext('2d');
+        
+        // 初始化
+        this.init();
+      }
       
-      // 绘制每个瓦片
-      tileConfigs.forEach((config, index) => {
-        const x = (index % cols) * tileSize;
-        const y = Math.floor(index / cols) * tileSize;
-        
-        // 绘制背景
-        ctx.fillStyle = config.color;
-        ctx.fillRect(x + 1, y + 1, tileSize - 2, tileSize - 2);
-        
-        // 绘制图标
-        ctx.fillStyle = 'rgba(255,255,255,0.8)';
-        ctx.font = '16px Arial';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(config.icon, x + tileSize / 2, y + tileSize / 2);
-        
-        // 绘制边框
-        ctx.strokeStyle = 'rgba(0,0,0,0.3)';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(x, y, tileSize, tileSize);
-      });
+      init() {
+        this.bindEvents();
+        this.updateTileGrid();
+      }
       
-      updatePreview();
+      bindEvents() {
+        // 拖拽上传
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          dropZone.classList.add('dragover');
+        });
+        dropZone.addEventListener('dragleave', () => {
+          dropZone.classList.remove('dragover');
+        });
+        dropZone.addEventListener('drop', (e) => {
+          e.preventDefault();
+          dropZone.classList.remove('dragover');
+          const file = e.dataTransfer.files[0];
+          if (file) this.loadImage(file);
+        });
+        fileInput.addEventListener('change', (e) => {
+          const file = e.target.files[0];
+          if (file) this.loadImage(file);
+        });
+        
+        // 配置按钮
+        document.getElementById('btnPreview').addEventListener('click', () => this.previewSlices());
+        document.getElementById('btnApplyConfig').addEventListener('click', () => this.applyConfig());
+        
+        // 生成按钮
+        document.getElementById('btnGenerate').addEventListener('click', () => this.generateTileset());
+        
+        // 下载按钮
+        document.getElementById('btnDownloadPng').addEventListener('click', () => this.downloadPng());
+        document.getElementById('btnDownloadJson').addEventListener('click', () => this.downloadJson());
+        document.getElementById('btnDownloadBoth').addEventListener('click', () => this.downloadBoth());
+        
+        // 瓦片属性编辑
+        document.getElementById('btnApplyTileProps').addEventListener('click', () => this.applyTileProps());
+        document.getElementById('btnSelectAll').addEventListener('click', () => this.selectAll());
+        document.getElementById('btnClearSelection').addEventListener('click', () => this.clearSelection());
+        document.getElementById('btnApplyPreset').addEventListener('click', () => this.applyPreset());
+      }
+      
+      // 加载图片
+      loadImage(file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const img = new Image();
+          img.onload = () => {
+            this.sourceImage = img;
+            document.getElementById('sourceImage').src = e.target.result;
+            document.getElementById('sourceImage').style.display = 'block';
+            
+            // 自动计算列数和瓦片数
+            const cols = Math.floor(img.width / this.tileWidth);
+            const rows = Math.floor(img.height / this.tileHeight);
+            document.getElementById('tilesetCols').value = cols;
+            this.tilesetCols = cols;
+            
+            // 更新图片信息显示
+            this.updateImageInfo(img.width, img.height, cols, rows);
+            
+            // 初始化瓦片数据
+            this.initTiles(cols * rows);
+            
+            this.previewSlices();
+            console.log(`图片加载成功: ${img.width}x${img.height}, ${cols}x${rows}=${cols*rows} 个瓦片`);
+          };
+          img.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
+      }
+      
+      // 更新图片信息显示
+      updateImageInfo(width, height, cols, rows) {
+        document.getElementById('imageInfo').style.display = 'block';
+        document.getElementById('imgSize').textContent = `${width} x ${height} px`;
+        
+        // 计算图集尺寸（生成的图集图片大小）
+        const totalTiles = cols * rows;
+        const tilesetWidth = this.tilesetCols * this.tileWidth;
+        const tilesetRows = Math.ceil(totalTiles / this.tilesetCols);
+        const tilesetHeight = tilesetRows * this.tileHeight;
+        document.getElementById('tilesetSize').textContent = `${tilesetWidth} x ${tilesetHeight} px`;
+        
+        document.getElementById('tileGridSize').textContent = `${cols} x ${rows} 瓦片`;
+        document.getElementById('totalTiles').textContent = totalTiles;
+        document.getElementById('suggestedMapSize').textContent = `${cols} x ${rows} 瓦片`;
+      }
+      
+      // 初始化瓦片数据
+      initTiles(count) {
+        this.tiles = [];
+        for (let i = 0; i < count; i++) {
+          this.tiles.push({
+            index: i + 1,
+            name: `瓦片${i + 1}`,
+            passable: true,
+            building: false,
+            selected: false
+          });
+        }
+        this.updateTileGrid();
+      }
+      
+      // 应用配置
+      applyConfig() {
+        this.tileWidth = parseInt(document.getElementById('tileWidth').value) || 48;
+        this.tileHeight = parseInt(document.getElementById('tileHeight').value) || 48;
+        this.tilesetCols = parseInt(document.getElementById('tilesetCols').value) || 16;
+        this.tilesetName = document.getElementById('tilesetName').value || 'custom_tileset';
+        
+        if (this.sourceImage) {
+          this.previewSlices();
+        }
+      }
+      
+      // 预览切片
+      previewSlices() {
+        if (!this.sourceImage) {
+          alert('请先导入图片');
+          return;
+        }
+        
+        this.applyConfig();
+        
+        // 计算总瓦片数
+        const imgWidth = this.sourceImage.width;
+        const imgHeight = this.sourceImage.height;
+        const cols = Math.floor(imgWidth / this.tileWidth);
+        const rows = Math.floor(imgHeight / this.tileHeight);
+        const totalTiles = cols * rows;
+        
+        // 初始化瓦片（如果瓦片数变了）
+        if (this.tiles.length !== totalTiles) {
+          this.initTiles(totalTiles);
+        }
+        
+        // 设置画布大小
+        const canvasWidth = this.tilesetCols * this.tileWidth;
+        const canvasRows = Math.ceil(totalTiles / this.tilesetCols);
+        const canvasHeight = canvasRows * this.tileHeight;
+        
+        this.canvas.width = canvasWidth;
+        this.canvas.height = canvasHeight;
+        
+        // 清空画布（透明背景）
+        this.ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+        
+        // 绘制瓦片
+        for (let i = 0; i < totalTiles; i++) {
+          const srcX = (i % cols) * this.tileWidth;
+          const srcY = Math.floor(i / cols) * this.tileHeight;
+          const dstX = (i % this.tilesetCols) * this.tileWidth;
+          const dstY = Math.floor(i / this.tilesetCols) * this.tileHeight;
+          
+          // 绘制切片
+          this.ctx.drawImage(
+            this.sourceImage,
+            srcX, srcY, this.tileWidth, this.tileHeight,
+            dstX, dstY, this.tileWidth, this.tileHeight
+          );
+        }
+        
+        console.log(`预览切片: ${cols}x${rows}=${totalTiles} 瓦片, 画布 ${canvasWidth}x${canvasHeight}`);
+      }
+      
+      // 生成图集
+      generateTileset() {
+        if (!this.sourceImage) {
+          alert('请先导入图片');
+          return;
+        }
+        
+        // 更新画布显示
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        
+        const totalTiles = this.tiles.length;
+        const canvasWidth = this.tilesetCols * this.tileWidth;
+        const canvasRows = Math.ceil(totalTiles / this.tilesetCols);
+        const canvasHeight = canvasRows * this.tileHeight;
+        
+        this.canvas.width = canvasWidth;
+        this.canvas.height = canvasHeight;
+        
+        // 重新计算源图片的瓦片网格
+        const srcCols = Math.floor(this.sourceImage.width / this.tileWidth);
+        
+        // 绘制瓦片
+        for (let i = 0; i < totalTiles; i++) {
+          const srcX = (i % srcCols) * this.tileWidth;
+          const srcY = Math.floor(i / srcCols) * this.tileHeight;
+          const dstX = (i % this.tilesetCols) * this.tileWidth;
+          const dstY = Math.floor(i / this.tilesetCols) * this.tileHeight;
+          
+          this.ctx.drawImage(
+            this.sourceImage,
+            srcX, srcY, this.tileWidth, this.tileHeight,
+            dstX, dstY, this.tileWidth, this.tileHeight
+          );
+        }
+        
+        // 确保瓦片名称不为空
+        this.tiles.forEach((tile, i) => {
+          if (!tile.name || tile.name === `瓦片${i + 1}`) {
+            tile.name = `tile_${i + 1}`;
+          }
+        });
+        
+        this.updateTileGrid();
+        alert(`图集生成完成！共 ${totalTiles} 个瓦片`);
+      }
+      
+      // 更新瓦片网格
+      updateTileGrid() {
+        const grid = document.getElementById('tileGrid');
+        grid.innerHTML = '';
+        document.getElementById('tileCount').textContent = this.tiles.length;
+        
+        this.tiles.forEach((tile, index) => {
+          const div = document.createElement('div');
+          div.className = 'tile-item' + (tile.selected ? ' selected' : '') + (!tile.passable ? ' blocked' : '');
+          div.title = `${tile.index}: ${tile.name} ${tile.passable ? '[可通行]' : '[不可通行]'}`;
+          
+          // 创建缩略图
+          const canvas = document.createElement('canvas');
+          canvas.width = 40;
+          canvas.height = 40;
+          const ctx = canvas.getContext('2d');
+          
+          // 计算源位置
+          const srcCols = this.sourceImage 
+            ? Math.floor(this.sourceImage.width / this.tileWidth)
+            : this.tilesetCols;
+          const srcX = (index % srcCols) * this.tileWidth;
+          const srcY = Math.floor(index / srcCols) * this.tileHeight;
+          
+          if (this.sourceImage && this.canvas.width > 0) {
+            // 从主画布获取切片
+            const tsx = (index % this.tilesetCols) * this.tileWidth;
+            const tsy = Math.floor(index / this.tilesetCols) * this.tileHeight;
+            ctx.drawImage(this.canvas, tsx, tsy, this.tileWidth, this.tileHeight, 0, 0, 40, 40);
+          } else {
+            // 绘制占位符
+            ctx.fillStyle = '#2d3748';
+            ctx.fillRect(0, 0, 40, 40);
+            ctx.fillStyle = '#718096';
+            ctx.font = '10px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(tile.index.toString(), 20, 24);
+          }
+          
+          div.appendChild(canvas);
+          
+          // 索引标签
+          const indexLabel = document.createElement('span');
+          indexLabel.className = 'tile-index';
+          indexLabel.textContent = tile.index;
+          div.appendChild(indexLabel);
+          
+          // 通行标记
+          if (!tile.passable) {
+            const nameOverlay = document.createElement('span');
+            nameOverlay.className = 'tile-name-overlay';
+            nameOverlay.textContent = 'X';
+            div.appendChild(nameOverlay);
+          }
+          
+          div.addEventListener('click', () => this.selectTile(index));
+          grid.appendChild(div);
+        });
+      }
+      
+      // 选中瓦片
+      selectTile(index) {
+        // 切换选中状态
+        if (this.tiles[index].selected) {
+          this.tiles[index].selected = false;
+        } else {
+          this.tiles[index].selected = true;
+        }
+        
+        this.updateTileGrid();
+        
+        // 更新属性面板
+        const tile = this.tiles[index];
+        document.getElementById('editTileIndex').value = tile.index;
+        document.getElementById('editTileName').value = tile.name;
+        document.getElementById('editTilePassable').checked = tile.passable;
+        document.getElementById('editTileBuilding').checked = tile.building;
+      }
+      
+      // 应用瓦片属性
+      applyTileProps() {
+        const selectedTiles = this.tiles.filter(t => t.selected);
+        if (selectedTiles.length === 0) {
+          // 如果没有选中任何瓦片，应用到当前编辑的瓦片
+          const index = parseInt(document.getElementById('editTileIndex').value) - 1;
+          if (index >= 0 && index < this.tiles.length) {
+            this.tiles[index].name = document.getElementById('editTileName').value;
+            this.tiles[index].passable = document.getElementById('editTilePassable').checked;
+            this.tiles[index].building = document.getElementById('editTileBuilding').checked;
+          }
+        } else {
+          // 应用到所有选中的瓦片
+          const name = document.getElementById('editTileName').value;
+          const passable = document.getElementById('editTilePassable').checked;
+          const building = document.getElementById('editTileBuilding').checked;
+          
+          selectedTiles.forEach(tile => {
+            tile.name = name;
+            tile.passable = passable;
+            tile.building = building;
+          });
+        }
+        
+        this.updateTileGrid();
+      }
+      
+      // 全选
+      selectAll() {
+        this.tiles.forEach(tile => tile.selected = true);
+        this.updateTileGrid();
+      }
+      
+      // 清除选中
+      clearSelection() {
+        this.tiles.forEach(tile => tile.selected = false);
+        this.updateTileGrid();
+      }
+      
+      // 应用预设
+      applyPreset() {
+        const preset = document.getElementById('presetType').value;
+        if (!preset) {
+          alert('请选择预设类型');
+          return;
+        }
+        
+        const presets = {
+          'ground': { name: '地面', passable: true, building: false, category: 'ground' },
+          'grass': { name: '草地', passable: true, building: false, category: 'ground' },
+          'dirt': { name: '泥土', passable: true, building: false, category: 'ground' },
+          'sand': { name: '沙地', passable: true, building: false, category: 'ground' },
+          'stone_floor': { name: '石板地', passable: true, building: false, category: 'ground' },
+          'water': { name: '水域', passable: false, building: false, category: 'water' },
+          'shallow_water': { name: '浅水', passable: false, building: false, category: 'water' },
+          'wall': { name: '墙壁', passable: false, building: true, category: 'walls' },
+          'wood_wall': { name: '木墙', passable: false, building: true, category: 'walls' },
+          'stone_wall': { name: '石墙', passable: false, building: true, category: 'walls' },
+          'tree': { name: '树木', passable: false, building: true, category: 'plants' },
+          'flower': { name: '花丛', passable: true, building: false, category: 'plants' },
+          'road': { name: '道路', passable: true, building: false, category: 'roads' },
+          'bridge': { name: '桥梁', passable: true, building: false, category: 'roads' },
+          'door': { name: '门', passable: false, building: true, category: 'walls' },
+          'stairs': { name: '楼梯', passable: true, building: false, category: 'ground' }
+        };
+        
+        const config = presets[preset];
+        if (!config) return;
+        
+        const selectedTiles = this.tiles.filter(t => t.selected);
+        if (selectedTiles.length === 0) {
+          alert('请先在瓦片列表中选择要设置的瓦片（点击选中）');
+          return;
+        }
+        
+        selectedTiles.forEach(tile => {
+          tile.name = config.name;
+          tile.passable = config.passable;
+          tile.building = config.building;
+          tile.category = config.category;
+        });
+        
+        // 更新属性面板
+        document.getElementById('editTileName').value = config.name;
+        document.getElementById('editTilePassable').checked = config.passable;
+        document.getElementById('editTileBuilding').checked = config.building;
+        
+        this.updateTileGrid();
+        console.log(`已应用预设 ${preset} 到 ${selectedTiles.length} 个瓦片`);
+      }
+      
+      // 生成元数据JSON
+      generateMetadata() {
+        // 计算原图的瓦片网格（用于自动生成地图）
+        const sourceCols = this.sourceImage 
+          ? Math.floor(this.sourceImage.width / this.tileWidth)
+          : this.tilesetCols;
+        const sourceRows = this.sourceImage 
+          ? Math.floor(this.sourceImage.height / this.tileHeight)
+          : Math.ceil(this.tiles.length / this.tilesetCols);
+        
+        const metadata = {
+          name: this.tilesetName,
+          tileWidth: this.tileWidth,
+          tileHeight: this.tileHeight,
+          columns: this.tilesetCols,
+          // 原图尺寸信息（用于自动生成地图）
+          sourceWidth: this.sourceImage ? this.sourceImage.width : 0,
+          sourceHeight: this.sourceImage ? this.sourceImage.height : 0,
+          sourceTileCols: sourceCols,
+          sourceTileRows: sourceRows,
+          tiles: this.tiles.map(tile => ({
+            id: tile.index,
+            name: tile.name,
+            passable: tile.passable,
+            building: tile.building,
+            category: tile.category || 'ground',  // 添加分类字段
+            attr: tile.passable ? 0 : 1,  // 兼容旧格式: 0=通行, 1=阻挡
+            layer: tile.building ? 1 : 0  // 0=地面层, 1=物体层
+          }))
+        };
+        return metadata;
+      }
+      
+      // 下载PNG
+      downloadPng() {
+        if (this.canvas.width === 0 || this.canvas.height === 0) {
+          alert('请先生成图集');
+          return;
+        }
+        
+        const link = document.createElement('a');
+        link.download = `${this.tilesetName}.png`;
+        link.href = this.canvas.toDataURL('image/png');
+        link.click();
+      }
+      
+      // 下载JSON
+      downloadJson() {
+        const metadata = this.generateMetadata();
+        const blob = new Blob([JSON.stringify(metadata, null, 2)], { type: 'application/json' });
+        const link = document.createElement('a');
+        link.download = `${this.tilesetName}.json`;
+        link.href = URL.createObjectURL(blob);
+        link.click();
+      }
+      
+      // 下载完整包
+      downloadBoth() {
+        // 先确保有图集
+        if (this.canvas.width === 0 || this.canvas.height === 0) {
+          this.generateTileset();
+        }
+        
+        // 生成ZIP文件
+        const pngData = this.canvas.toDataURL('image/png').split(',')[1];
+        const metadata = this.generateMetadata();
+        const jsonData = JSON.stringify(metadata, null, 2);
+        
+        // 创建包含两个文件的下载
+        // 1. 下载PNG
+        this.downloadPng();
+        
+        // 2. 下载JSON
+        setTimeout(() => this.downloadJson(), 100);
+        
+        alert(`已生成图集包:\n- ${this.tilesetName}.png (图片)\n- ${this.tilesetName}.json (元数据)\n\n请将这两个文件放到 Res/Map/ 目录下，在地图编辑器中加载 PNG 文件即可自动读取元数据。`);
+      }
     }
     
-    function updatePreview() {
-      const preview = document.getElementById('tilePreview');
-      preview.innerHTML = '';
-      
-      tileConfigs.forEach((config, index) => {
-        const div = document.createElement('div');
-        div.className = 'tile-item';
-        div.style.backgroundColor = config.color;
-        div.title = `${index + 1}: ${config.name}`;
-        div.textContent = index + 1;
-        preview.appendChild(div);
-      });
-    }
-    
-    function downloadTileset() {
-      const link = document.createElement('a');
-      link.download = 'tileset.png';
-      link.href = canvas.toDataURL('image/png');
-      link.click();
-    }
-    
-    document.getElementById('btnGenerate').addEventListener('click', generateTileset);
-    document.getElementById('btnDownload').addEventListener('click', downloadTileset);
-    
-    // 初始化生成
-    generateTileset();
+    // 初始化
+    const creator = new TilesetCreator();
   </script>
 </body>
 </html>

@@ -9,6 +9,7 @@ type MapBase struct {
 	TileWidth   int     `gorm:"column:tile_width;default:48" json:"tile_width"`   // 瓦片宽度
 	TileHeight  int     `gorm:"column:tile_height;default:48" json:"tile_height"` // 瓦片高度
 	MapFile     string  `gorm:"column:map_file;size:100" json:"map_file"`         // 地图文件路径(.map)
+	TilesetFile string  `gorm:"column:tileset_file;size:100" json:"tileset_file"` // 瓦片图集文件路径(.png)
 	Music       string  `gorm:"column:music;size:100" json:"music"`               // 背景音乐
 	PkAllowed   uint8   `gorm:"column:pk_allowed;default:1" json:"pk_allowed"`    // 是否允许PK
 	ReviveMapID *uint32 `gorm:"column:revive_map_id" json:"revive_map_id"`        // 复活地图ID

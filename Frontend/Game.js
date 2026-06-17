@@ -359,11 +359,29 @@ class Game {
     this.startGameLoop();
   }
   
-  loadMap(mapId) {
+  async loadMap(mapId) {
     this.player.mapId = mapId;
     
-    // 加载地图数据
-    this.mapEngine.loadMap(`/Res/Map/${String(mapId).padStart(3, '0')}.map`)
+    // 构建地图文件和瓦片图集路径
+    const mapFile = `/Res/Map/${String(mapId).padStart(3, '0')}.map`;
+    const tilesetFile = `/Res/Map/${String(mapId).padStart(3, '0')}.png`;
+    const animationFile = `/Res/Map/${String(mapId).padStart(3, '0')}_anim.json`;
+    
+    // 尝试加载动画数据
+    let animationData = null;
+    try {
+      const response = await fetch(animationFile);
+      if (response.ok) {
+        const data = await response.json();
+        animationData = data.animations || data;
+        console.log('动画数据加载成功');
+      }
+    } catch (err) {
+      console.log('没有找到动画数据文件');
+    }
+    
+    // 加载地图数据、瓦片图集和动画数据
+    this.mapEngine.loadMap(mapFile, tilesetFile, animationData)
       .then(() => {
         console.log('地图加载成功');
         this.currentMap = this.mapEngine.currentMap;
@@ -384,8 +402,24 @@ class Game {
       })
       .catch(err => {
         console.error('地图加载失败:', err);
-        // 使用测试地图
-        this.createTestMap();
+        // 尝试不加载瓦片图集再次加载
+        this.mapEngine.loadMap(mapFile, null, animationData)
+          .then(() => {
+            console.log('地图加载成功（无瓦片图集）');
+            this.currentMap = this.mapEngine.currentMap;
+            this.syncPlayerPosition();
+            window.GameWS.send(Protocol.CMD_ENTER_MAP, {
+              role_id: this.player.id,
+              map_id: mapId,
+              x: this.player.x,
+              y: this.player.y
+            });
+            this.renderMiniMap();
+          })
+          .catch(() => {
+            // 使用测试地图
+            this.createTestMap();
+          });
       });
   }
   
