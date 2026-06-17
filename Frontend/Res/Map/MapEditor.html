@@ -1976,6 +1976,53 @@
         a.click();
         
         URL.revokeObjectURL(url);
+        
+        // 如果没有加载外部图集，自动生成默认图集PNG
+        if (!this.tileset) {
+          this.exportDefaultTilesetPng(mapId);
+        }
+      }
+      
+      // 导出默认瓦片图集PNG（当没有外部图集时使用）
+      exportDefaultTilesetPng(mapId) {
+        // 创建图集画布
+        const tilesetCanvas = document.createElement('canvas');
+        const cols = 16; // 列数（与tilesetCols一致）
+        const rows = Math.ceil(this.tileTypes.length / cols);
+        tilesetCanvas.width = cols * this.tileSize;
+        tilesetCanvas.height = rows * this.tileSize;
+        const ctx = tilesetCanvas.getContext('2d');
+        
+        // 绘制所有默认瓦片
+        this.tileTypes.forEach((tile, index) => {
+          const x = (index % cols) * this.tileSize;
+          const y = Math.floor(index / cols) * this.tileSize;
+          
+          // 绘制瓦片背景色
+          ctx.fillStyle = tile.color || '#8b7355';
+          ctx.fillRect(x + 1, y + 1, this.tileSize - 2, this.tileSize - 2);
+          
+          // 如果是阻挡瓦片，添加红色边框
+          if (tile.attr === 1 || !tile.passable) {
+            ctx.strokeStyle = '#ff0000';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x + 2, y + 2, this.tileSize - 4, this.tileSize - 4);
+          }
+          
+          // 添加瓦片ID标记
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+          ctx.font = 'bold 12px Arial';
+          ctx.textAlign = 'center';
+          ctx.fillText((index + 1).toString(), x + this.tileSize / 2, y + this.tileSize / 2 + 4);
+        });
+        
+        // 下载图集PNG
+        const link = document.createElement('a');
+        link.download = `${String(mapId).padStart(3, '0')}_tileset.png`;
+        link.href = tilesetCanvas.toDataURL('image/png');
+        link.click();
+        
+        console.log(`默认图集PNG已导出: ${cols * this.tileSize} x ${rows * this.tileSize}`);
       }
       
       // 导出JSON格式

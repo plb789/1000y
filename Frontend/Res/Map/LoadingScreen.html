@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>地图加载中</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { overflow: hidden; }
+    
+    #loadingScreen {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 9999;
+    }
+    
+    #loadingBg {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-size: cover;
+      background-position: center;
+      background-color: #1a1a2e;
+      filter: brightness(0.5);
+    }
+    
+    .loading-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(180deg, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.3) 50%, rgba(0,0,0,0.7) 100%);
+    }
+    
+    .loading-content {
+      position: relative;
+      z-index: 2;
+      text-align: center;
+      padding-top: 40vh;
+    }
+    
+    .loading-title {
+      color: #fff;
+      font-size: 36px;
+      text-shadow: 0 0 20px rgba(0,0,0,0.8), 0 0 15px rgba(233, 69, 96, 0.6);
+      margin-bottom: 20px;
+      font-weight: bold;
+      font-family: 'Microsoft YaHei', sans-serif;
+    }
+    
+    .loading-subtitle {
+      color: rgba(255,255,255,0.8);
+      font-size: 18px;
+      margin-bottom: 35px;
+      font-family: 'Microsoft YaHei', sans-serif;
+    }
+    
+    .loading-progress-bar {
+      width: 450px;
+      height: 14px;
+      background: rgba(0,0,0,0.6);
+      border-radius: 7px;
+      overflow: hidden;
+      margin: 0 auto;
+      border: 1px solid rgba(233, 69, 96, 0.4);
+      box-shadow: 0 0 15px rgba(233, 69, 96, 0.3), inset 0 1px 1px rgba(255,255,255,0.1);
+    }
+    
+    .loading-progress {
+      height: 100%;
+      background: linear-gradient(90deg, #e94560, #ff8787, #e94560);
+      background-size: 200% 100%;
+      animation: progressFlow 2s linear infinite;
+      width: 0%;
+      border-radius: 6px;
+      transition: width 0.3s ease-out;
+    }
+    
+    @keyframes progressFlow {
+      0% { background-position: 0% 50%; }
+      100% { background-position: 200% 50%; }
+    }
+    
+    .loading-percent {
+      color: #fff;
+      font-size: 20px;
+      margin-top: 18px;
+      text-shadow: 0 0 10px rgba(0,0,0,0.8);
+      font-weight: bold;
+      font-family: 'Microsoft YaHei', sans-serif;
+    }
+    
+    .loading-map-name {
+      color: #e94560;
+      font-size: 24px;
+      margin-top: 25px;
+      text-shadow: 0 0 15px rgba(233, 69, 96, 0.6);
+      font-family: 'Microsoft YaHei', sans-serif;
+    }
+    
+    .loading-decor {
+      position: absolute;
+      bottom: 50px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: rgba(255,255,255,0.5);
+      font-size: 14px;
+      font-family: 'Microsoft YaHei', sans-serif;
+    }
+  </style>
+</head>
+<body>
+  <div id="loadingScreen">
+    <div id="loadingBg"></div>
+    <div class="loading-overlay"></div>
+    <div class="loading-content">
+      <div class="loading-title">千年江湖</div>
+      <div class="loading-subtitle" id="loadingSubtitle">正在进入地图...</div>
+      <div class="loading-progress-bar">
+        <div class="loading-progress" id="loadingProgress"></div>
+      </div>
+      <div class="loading-percent" id="loadingPercent">0%</div>
+      <div class="loading-map-name" id="loadingMapName"></div>
+    </div>
+    <div class="loading-decor">千年江湖 v1.0</div>
+  </div>
+  
+  <script>
+    // 导出加载控制函数供外部调用
+    window.MapLoading = {
+      show: function(mapConfig) {
+        document.getElementById('loadingScreen').style.display = 'block';
+        
+        // 设置背景图
+        const bg = document.getElementById('loadingBg');
+        if (mapConfig && mapConfig.bgImage) {
+          bg.style.backgroundImage = `url(${mapConfig.bgImage})`;
+        } else {
+          bg.style.backgroundImage = 'url(/Res/Map/loading/default.jpg)';
+        }
+        
+        // 设置地图名称
+        const mapName = document.getElementById('loadingMapName');
+        if (mapConfig && mapConfig.name) {
+          mapName.textContent = `正在进入「${mapConfig.name}」`;
+        } else {
+          mapName.textContent = '';
+        }
+        
+        // 重置进度
+        this.setProgress(0, '正在进入地图...');
+      },
+      
+      hide: function() {
+        const screen = document.getElementById('loadingScreen');
+        screen.style.opacity = '0';
+        setTimeout(() => {
+          screen.style.display = 'none';
+          screen.style.opacity = '1';
+        }, 500);
+      },
+      
+      setProgress: function(percent, message) {
+        const progress = document.getElementById('loadingProgress');
+        const percentText = document.getElementById('loadingPercent');
+        const subtitle = document.getElementById('loadingSubtitle');
+        
+        progress.style.width = `${Math.min(percent, 100)}%`;
+        percentText.textContent = `${Math.min(percent, 100)}%`;
+        
+        if (message) {
+          subtitle.textContent = message;
+        }
+      }
+    };
+  </script>
+</body>
+</html>

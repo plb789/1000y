@@ -4,9 +4,10 @@
 const CommonUtil = {
   // 加载图片资源
   loadImage(url) {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const img = new Image();
       img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('图片加载失败: ' + url));
       img.src = url;
     });
   },

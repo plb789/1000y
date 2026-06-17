@@ -4,7 +4,7 @@
 class MapRenderer {
   constructor(canvas, tileSetImage, tileSize = 48) {
     this.ctx = canvas.getContext('2d');
-    this.tileSet = tileSetImage;
+    this.tileSet = tileSetImage || null; // 确保正确处理 null
     this.tileSize = tileSize;
     this.tileCol = 16; // 瓦片图集一行16个
     

@@ -11,6 +11,7 @@ class MapEngine {
     // 地图核心
     this.mapParser = new MillenniumMapParser();
     this.mapRenderer = null;
+    this.currentMap = this.mapParser; // 当前地图数据引用
 
     // 动画系统
     if (typeof MapAnimationSystem !== 'undefined' && typeof MapAnimationSystem === 'function') {
@@ -83,6 +84,50 @@ class MapEngine {
     if (tilesetUrl) {
       this.tilesetImg = await CommonUtil.loadImage(tilesetUrl);
     }
+    this.mapRenderer = new MapRenderer(this.canvas, this.tilesetImg, this.tileSize);
+    
+    // 设置动画系统
+    if (this.animationSystem) {
+      this.mapRenderer.setAnimationSystem(this.animationSystem);
+      
+      // 加载动画数据
+      if (animationData && animationData.length > 0) {
+        this.mapRenderer.loadAnimations(animationData);
+      }
+    }
+
+    this.syncPlayerPixel();
+    this.followPlayer();
+  }
+
+  // 分步加载：加载地图数据
+  async loadMapData(mapUrl) {
+    try {
+      const mapBuf = await CommonUtil.loadBinary(mapUrl);
+      this.mapParser.loadMap(mapBuf);
+    } catch (err) {
+      console.error('地图数据加载失败:', err.message);
+      throw err; // 重新抛出异常，让上层处理
+    }
+  }
+
+  // 分步加载：加载瓦片图集
+  async loadTileset(tilesetUrl) {
+    // 瓦片图集是可选的
+    if (tilesetUrl) {
+      try {
+        this.tilesetImg = await CommonUtil.loadImage(tilesetUrl);
+      } catch (err) {
+        console.warn('瓦片图集加载失败，将使用颜色块渲染:', err.message);
+        this.tilesetImg = null;
+      }
+    } else {
+      this.tilesetImg = null;
+    }
+  }
+
+  // 分步加载：初始化地图渲染器
+  async initializeMap(animationData = null) {
     this.mapRenderer = new MapRenderer(this.canvas, this.tilesetImg, this.tileSize);
     
     // 设置动画系统

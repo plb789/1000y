@@ -344,6 +344,114 @@
       margin-top: 20px;
       font-size: 16px;
     }
+    
+    /* 地图加载界面 */
+    #loadingScreen {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 3000;
+      display: none;
+    }
+    
+    #loadingBg {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-size: cover;
+      background-position: center;
+      background-color: #1a1a2e;
+      filter: brightness(0.5);
+    }
+    
+    .map-loading-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(180deg, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.3) 50%, rgba(0,0,0,0.7) 100%);
+    }
+    
+    .map-loading-content {
+      position: relative;
+      z-index: 2;
+      text-align: center;
+      padding-top: 40vh;
+    }
+    
+    .map-loading-title {
+      color: #fff;
+      font-size: 36px;
+      text-shadow: 0 0 20px rgba(0,0,0,0.8), 0 0 15px rgba(233, 69, 96, 0.6);
+      margin-bottom: 20px;
+      font-weight: bold;
+      font-family: 'Microsoft YaHei', sans-serif;
+    }
+    
+    .map-loading-subtitle {
+      color: rgba(255,255,255,0.8);
+      font-size: 18px;
+      margin-bottom: 35px;
+      font-family: 'Microsoft YaHei', sans-serif;
+    }
+    
+    .map-loading-progress-bar {
+      width: 450px;
+      height: 14px;
+      background: rgba(0,0,0,0.6);
+      border-radius: 7px;
+      overflow: hidden;
+      margin: 0 auto;
+      border: 1px solid rgba(233, 69, 96, 0.4);
+      box-shadow: 0 0 15px rgba(233, 69, 96, 0.3), inset 0 1px 1px rgba(255,255,255,0.1);
+    }
+    
+    .map-loading-progress {
+      height: 100%;
+      background: linear-gradient(90deg, #e94560, #ff8787, #e94560);
+      background-size: 200% 100%;
+      animation: progressFlow 2s linear infinite;
+      width: 0%;
+      border-radius: 6px;
+      transition: width 0.3s ease-out;
+    }
+    
+    @keyframes progressFlow {
+      0% { background-position: 0% 50%; }
+      100% { background-position: 200% 50%; }
+    }
+    
+    .map-loading-percent {
+      color: #fff;
+      font-size: 20px;
+      margin-top: 18px;
+      text-shadow: 0 0 10px rgba(0,0,0,0.8);
+      font-weight: bold;
+      font-family: 'Microsoft YaHei', sans-serif;
+    }
+    
+    .map-loading-map-name {
+      color: #e94560;
+      font-size: 24px;
+      margin-top: 25px;
+      text-shadow: 0 0 15px rgba(233, 69, 96, 0.6);
+      font-family: 'Microsoft YaHei', sans-serif;
+    }
+    
+    .map-loading-decor {
+      position: absolute;
+      bottom: 50px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: rgba(255,255,255,0.5);
+      font-size: 14px;
+      font-family: 'Microsoft YaHei', sans-serif;
+    }
   </style>
 </head>
 <body>
@@ -351,6 +459,22 @@
   <div id="loadingOverlay" class="loading-overlay">
     <div class="loading-spinner"></div>
     <div class="loading-text">正在连接服务器...</div>
+  </div>
+
+  <!-- 地图加载界面 -->
+  <div id="loadingScreen">
+    <div id="loadingBg"></div>
+    <div class="map-loading-overlay"></div>
+    <div class="map-loading-content">
+      <div class="map-loading-title">千年江湖</div>
+      <div class="map-loading-subtitle" id="loadingSubtitle">正在进入地图...</div>
+      <div class="map-loading-progress-bar">
+        <div class="map-loading-progress" id="loadingProgress"></div>
+      </div>
+      <div class="map-loading-percent" id="loadingPercent">0%</div>
+      <div class="map-loading-map-name" id="loadingMapName"></div>
+    </div>
+    <div class="map-loading-decor">千年江湖 v1.0</div>
   </div>
 
   <!-- 登录界面 -->
@@ -432,6 +556,7 @@
   <!-- 5. 地图模块 -->
   <script src="GameLogic/Map/MillenniumMapParser.js"></script>
   <script src="GameLogic/Map/MapRenderer.js"></script>
+  <script src="GameLogic/Map/MapAnimationSystem.js"></script>
   <script src="GameLogic/Map/MapEngine.js"></script>
 
   <!-- 6. 游戏主逻辑 -->

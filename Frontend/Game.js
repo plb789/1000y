@@ -34,6 +34,9 @@ class Game {
     this.mapEngine = null;
     this.currentMap = null;
     
+    // 地图配置（用于加载界面背景）
+    this.mapConfigs = null;
+    
     // 技能冷却
     this.skillCooldowns = new Map();
     
@@ -63,7 +66,7 @@ class Game {
     this.init();
   }
   
-  init() {
+  async init() {
     console.log('游戏初始化...');
     
     // 绑定事件
@@ -72,6 +75,9 @@ class Game {
     // 初始化地图引擎
     this.initMapEngine();
     
+    // 加载地图配置（用于加载界面背景）
+    await this.loadMapConfigs();
+    
     // 连接WebSocket
     this.connect();
     
@@ -79,6 +85,23 @@ class Game {
     this.state = 'login';
     this.ui.loadingOverlay.classList.add('hidden');
     this.ui.loginPanel.classList.remove('hidden');
+  }
+  
+  async loadMapConfigs() {
+    try {
+      const response = await fetch('/Res/Map/maps.json');
+      if (response.ok) {
+        const data = await response.json();
+        this.mapConfigs = data.maps || [];
+        console.log('地图配置加载成功');
+      } else {
+        console.log('地图配置文件响应异常，使用默认配置');
+        this.mapConfigs = [];
+      }
+    } catch (err) {
+      console.log('没有找到地图配置文件，使用默认配置');
+      this.mapConfigs = [];
+    }
   }
   
   bindEvents() {
@@ -362,65 +385,168 @@ class Game {
   async loadMap(mapId) {
     this.player.mapId = mapId;
     
+    // 获取地图配置（用于加载界面背景）
+    const mapConfig = this.getMapConfig(mapId);
+    
+    // 显示加载界面
+    this.showLoadingScreen(mapConfig);
+    
     // 构建地图文件和瓦片图集路径
     const mapFile = `/Res/Map/${String(mapId).padStart(3, '0')}.map`;
     const tilesetFile = `/Res/Map/${String(mapId).padStart(3, '0')}.png`;
     const animationFile = `/Res/Map/${String(mapId).padStart(3, '0')}_anim.json`;
     
-    // 尝试加载动画数据
-    let animationData = null;
     try {
-      const response = await fetch(animationFile);
-      if (response.ok) {
-        const data = await response.json();
-        animationData = data.animations || data;
-        console.log('动画数据加载成功');
+      // 步骤1: 加载动画数据 (10%)
+      this.updateLoadingProgress(10, '加载动画数据...');
+      let animationData = null;
+      try {
+        const response = await fetch(animationFile);
+        if (response.ok) {
+          const data = await response.json();
+          animationData = data.animations || data;
+          console.log('动画数据加载成功');
+        } else {
+          console.log('动画数据文件响应异常');
+          animationData = null; // 确保重置为null
+        }
+      } catch (err) {
+        console.log('动画数据文件加载失败:', err.message);
+        animationData = null; // 确保重置为null
       }
+      
+      // 步骤2: 加载地图数据 (30%)
+      this.updateLoadingProgress(30, '加载地图数据...');
+      await this.mapEngine.loadMapData(mapFile);
+      
+      // 步骤3: 加载瓦片图集 (60%)
+      this.updateLoadingProgress(60, '加载瓦片图集...');
+      await this.mapEngine.loadTileset(tilesetFile);
+      
+      // 步骤4: 初始化地图渲染器 (80%)
+      this.updateLoadingProgress(80, '初始化地图...');
+      await this.mapEngine.initializeMap(animationData);
+      
+      console.log('地图加载成功');
+      this.currentMap = this.mapEngine.currentMap;
+      
+      // 步骤5: 同步玩家位置 (90%)
+      this.updateLoadingProgress(90, '同步玩家位置...');
+      this.syncPlayerPosition();
+      
+      // 步骤6: 通知服务器 (95%)
+      this.updateLoadingProgress(95, '连接服务器...');
+      window.GameWS.send(Protocol.CMD_ENTER_MAP, {
+        role_id: this.player.id,
+        map_id: mapId,
+        x: this.player.x,
+        y: this.player.y
+      });
+      
+      // 步骤7: 绘制小地图 (100%)
+      this.updateLoadingProgress(100, '加载完成');
+      this.renderMiniMap();
+      
+      // 隐藏加载界面（延迟500ms显示完成状态）
+      setTimeout(() => {
+        this.hideLoadingScreen();
+      }, 500);
+      
     } catch (err) {
-      console.log('没有找到动画数据文件');
-    }
-    
-    // 加载地图数据、瓦片图集和动画数据
-    this.mapEngine.loadMap(mapFile, tilesetFile, animationData)
-      .then(() => {
-        console.log('地图加载成功');
+      console.error('地图加载失败:', err);
+      
+      try {
+        // 尝试不加载瓦片图集再次加载
+        this.updateLoadingProgress(40, '重试加载地图数据...');
+        await this.mapEngine.loadMapData(mapFile);
+        
+        this.updateLoadingProgress(60, '跳过瓦片图集...');
+        await this.mapEngine.loadTileset(null);
+        
+        this.updateLoadingProgress(80, '初始化地图...');
+        await this.mapEngine.initializeMap(animationData);
+        
+        console.log('地图加载成功（无瓦片图集）');
         this.currentMap = this.mapEngine.currentMap;
-        
-        // 同步玩家位置到地图引擎
         this.syncPlayerPosition();
-        
-        // 通知服务器玩家进入地图
         window.GameWS.send(Protocol.CMD_ENTER_MAP, {
           role_id: this.player.id,
           map_id: mapId,
           x: this.player.x,
           y: this.player.y
         });
-        
-        // 绘制小地图
         this.renderMiniMap();
-      })
-      .catch(err => {
-        console.error('地图加载失败:', err);
-        // 尝试不加载瓦片图集再次加载
-        this.mapEngine.loadMap(mapFile, null, animationData)
-          .then(() => {
-            console.log('地图加载成功（无瓦片图集）');
-            this.currentMap = this.mapEngine.currentMap;
-            this.syncPlayerPosition();
-            window.GameWS.send(Protocol.CMD_ENTER_MAP, {
-              role_id: this.player.id,
-              map_id: mapId,
-              x: this.player.x,
-              y: this.player.y
-            });
-            this.renderMiniMap();
-          })
-          .catch(() => {
-            // 使用测试地图
-            this.createTestMap();
-          });
-      });
+        
+        this.updateLoadingProgress(100, '加载完成');
+        setTimeout(() => {
+          this.hideLoadingScreen();
+        }, 500);
+        
+      } catch {
+        // 使用测试地图
+        this.updateLoadingProgress(100, '使用测试地图');
+        this.createTestMap();
+        setTimeout(() => {
+          this.hideLoadingScreen();
+        }, 500);
+      }
+    }
+  }
+  
+  getMapConfig(mapId) {
+    if (!this.mapConfigs) return null;
+    return this.mapConfigs.find(m => m.id === mapId);
+  }
+  
+  showLoadingScreen(mapConfig) {
+    const screen = document.getElementById('loadingScreen');
+    if (!screen) return;
+    
+    screen.style.display = 'block';
+    
+    // 设置背景图
+    const bg = document.getElementById('loadingBg');
+    if (bg) {
+      if (mapConfig && mapConfig.bgImage) {
+        bg.style.backgroundImage = `url(${mapConfig.bgImage})`;
+      } else {
+        bg.style.backgroundImage = 'url(/Res/Map/loading/default.jpg)';
+      }
+    }
+    
+    // 设置地图名称
+    const mapName = document.getElementById('loadingMapName');
+    if (mapName) {
+      if (mapConfig && mapConfig.name) {
+        mapName.textContent = `正在进入「${mapConfig.name}」`;
+      } else {
+        mapName.textContent = '';
+      }
+    }
+    
+    // 重置进度
+    this.updateLoadingProgress(0, '正在进入地图...');
+  }
+  
+  hideLoadingScreen() {
+    const screen = document.getElementById('loadingScreen');
+    if (!screen) return;
+    
+    screen.style.opacity = '0';
+    setTimeout(() => {
+      screen.style.display = 'none';
+      screen.style.opacity = '1';
+    }, 500);
+  }
+  
+  updateLoadingProgress(percent, message) {
+    const progress = document.getElementById('loadingProgress');
+    const percentText = document.getElementById('loadingPercent');
+    const subtitle = document.getElementById('loadingSubtitle');
+    
+    if (progress) progress.style.width = `${Math.min(percent, 100)}%`;
+    if (percentText) percentText.textContent = `${Math.min(percent, 100)}%`;
+    if (subtitle && message) subtitle.textContent = message;
   }
   
   syncPlayerPosition() {
