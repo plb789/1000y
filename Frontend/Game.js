@@ -635,10 +635,6 @@ class Game {
     // 绘制地图瓦片（覆盖整个小地图区域）
     const tiles = mapParser.tiles || [];
     
-    // 先绘制背景填充整个小地图区域
-    ctx.fillStyle = backgroundColor;
-    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
-    
     if (tiles.length > 0) {
       // 遍历地图瓦片
       for (let y = 0; y < mapHeight; y++) {
