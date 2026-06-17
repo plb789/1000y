@@ -615,22 +615,17 @@ class Game {
     ctx.fillStyle = backgroundColor;
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
     
-    // 计算缩放比例（确保地图填满小地图）
-    const maxDimension = Math.max(mapWidth, mapHeight);
-    let scale = miniMapSize / maxDimension;
+    // 计算缩放比例（按宽度缩放，确保左右填满整个画布）
+    let scale = canvasWidth / mapWidth;
     
     // 处理极端情况：地图尺寸为0
-    if (maxDimension === 0 || isNaN(scale) || !isFinite(scale)) {
+    if (mapWidth === 0 || mapHeight === 0 || isNaN(scale) || !isFinite(scale)) {
       scale = 1;
     }
     
-    // 计算居中偏移
-    const offsetX = (canvasWidth - mapWidth * scale) / 2;
-    const offsetY = (canvasHeight - mapHeight * scale) / 2;
-    
-    // 直接使用原始偏移量（不需要强制非负，让地图自然居中）
-    const finalOffsetX = offsetX;
-    const finalOffsetY = offsetY;
+    // 计算偏移量，让玩家始终显示在小地图中心
+    const finalOffsetX = canvasWidth / 2 - playerX * scale;
+    const finalOffsetY = canvasHeight / 2 - playerY * scale;
     
     // 绘制地图瓦片（覆盖整个小地图区域）
     const tiles = mapParser.tiles || [];
@@ -682,7 +677,6 @@ class Game {
         const px = finalOffsetX + otherPlayer.x * scale;
         const py = finalOffsetY + otherPlayer.y * scale;
         
-        // 确保玩家标记在画布内
         if (px >= 0 && py >= 0 && px < canvasWidth && py < canvasHeight) {
           ctx.fillStyle = otherPlayerColor;
           ctx.beginPath();
@@ -696,7 +690,6 @@ class Game {
     const selfX = finalOffsetX + playerX * scale;
     const selfY = finalOffsetY + playerY * scale;
     
-    // 确保自己的标记在画布内
     if (selfX >= 0 && selfY >= 0 && selfX < canvasWidth && selfY < canvasHeight) {
       ctx.fillStyle = playerColor;
       ctx.beginPath();
