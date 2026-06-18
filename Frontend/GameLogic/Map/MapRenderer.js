@@ -14,13 +14,23 @@ class MapRenderer {
     this.tileSize = tileSize;
     this.debugMode = false; // 调试模式：显示瓦片ID
 
-    // 图集列数优先级：外部指定 > 图片宽度计算 > 默认16
+    // 图集列数优先级：外部指定(.map文件头) > 图片宽度计算 > 默认16
     if (tileColOverride > 0) {
       this.tileCol = tileColOverride;
     } else if (tileSetImage && tileSetImage.width > 0) {
       this.tileCol = Math.floor(tileSetImage.width / tileSize);
     } else {
       this.tileCol = 16;
+    }
+
+    // ★ 关键验证：如果同时有文件头值和图片，检查是否一致
+    if (tileColOverride > 0 && tileSetImage && tileSetImage.width > 0) {
+      const calcCols = Math.floor(tileSetImage.width / tileSize);
+      if (tileColOverride !== calcCols) {
+        console.warn(`⚠️ 列数不一致！文件头tilesetCols=${tileColOverride} vs 图片宽度计算=${calcCols}`);
+        console.warn(`   这可能导致瓦片显示错位！请确保使用新版MapEditor导出.map文件`);
+        // 不自动修正，使用文件头值（因为这是编辑器显式写入的）
+      }
     }
 
     // 验证日志：输出渲染器的关键参数

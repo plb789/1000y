@@ -11,21 +11,106 @@ class MillenniumImporter {
 
   /**
    * 导入原版地图文件
-   * 原版地图格式：128字节头 + 宽(2) + 高(2) + (low+high+attr)*n
+   * 支持两种格式:
+   *   1. ATZMAP2格式 (千年3原版客户端): 56字节头 + uint32宽高 + 每瓦片12字节(u32+u32+u32)
+   *   2. MAPFILE格式 (本编辑器导出): 128字节头 + uint16宽高 + 每瓦片3字节(u8+u8+u8)
    */
   async importMap(filePath) {
     const buffer = await this.loadFile(filePath);
     const view = new DataView(buffer);
-    
-    let offset = 128; // 跳过文件头
-    
+
+    // 检测文件格式（通过magic或文件大小特征）
+    const magic = String.fromCharCode(view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3),
+                                   view.getUint8(4), view.getUint8(5), view.getUint8(6), view.getUint8(7));
+
+    if (magic.startsWith('ATZMAP')) {
+      // ★ ATZMAP2 格式 (千年3原版 .map 文件)
+      return this._importAtzMap(buffer, view);
+    } else {
+      // ★ MAPFILE 格式 (本编辑器导出的 .map 文件)
+      return this._importMapFileFormat(buffer, view);
+    }
+  }
+
+  /**
+   * 解析 ATZMAP2 格式 (千年3原版客户端)
+   * 头部结构:
+   *   0x00: "ATZMAP2" magic (8字节)
+   *   0x08: 填充0 (8字节)
+   *   0x10: width (uint32 LE)
+   *   0x14: height (uint32 LE)
+   *   0x18: tileSize (uint32 LE)
+   *   0x1C-0x2E: 填充0 (19字节)
+   *   0x2F: 瓦片数据开始，每瓦片12字节:
+   *     [0]    low (地面层瓦片ID, u8)
+   *     [1-2]  图集引用/组ID (uint16 LE, 通常=总瓦片数如0x0640=1600)
+   *     [3]    保留 (u8, 通常=0)
+   *     [4]    high (高层/装饰层瓦片ID或变体, u8)
+   *     [5-11] 填充0 (7字节)
+   */
+  _importAtzMap(buffer, view) {
+    const width = view.getUint32(0x10, true);
+    const height = view.getUint32(0x14, true);
+    // 总瓦片数在0x30处(uint32)，但实际验证发现数据从0x2F开始
+    const totalTiles = width * height;
+
+    console.log(`📦 ATZMAP2格式解析:`);
+    console.log(`   尺寸: ${width} x ${height} = ${totalTiles} 瓦片`);
+
+    if (width <= 0 || width > 10000 || height <= 0 || height > 10000) {
+      throw new Error(`ATZMAP2: 无效的地图尺寸 ${width} x ${height}`);
+    }
+
+    // 验证文件大小：头部0x2F + 每瓦片12字节
+    const expectedDataSize = 0x2F + totalTiles * 12;
+    if (buffer.byteLength < expectedDataSize - 12) {
+      console.warn(`⚠️ ATZMAP2: 文件大小${buffer.byteLength}与预期${expectedDataSize}不完全匹配，尝试继续解析`);
+    }
+
+    const tiles = [];
+    let offset = 0x2F; // 瓦片数据起始位置（经二进制分析确认）
+
+    for (let y = 0; y < height; y++) {
+      const row = [];
+      for (let x = 0; x < width; x++) {
+        if (offset + 11 >= buffer.byteLength) {
+          throw new Error(`ATZMAP2: 数据不足于读取瓦片(${x},${y})`);
+        }
+        const low = view.getUint8(offset);         offset += 1;
+        // 跳过: 图集引用(2字节) + 保留(1字节)
+        offset += 3;
+        const high = view.getUint8(offset);        offset += 1;
+        // 跳过: 填充(7字节)
+        offset += 7;
+        // attr在ATZMAP2中没有明确字段，默认为0（可在编辑器中手动设置）
+        row.push({ low: low & 0xFF, high: high & 0xFF, attr: 0 });
+      }
+      tiles.push(row);
+    }
+
+    console.log(`   ✅ 成功解析 ${totalTiles} 个瓦片 (low范围待渲染验证)`);
+
+    return { width, height, tiles, source: 'millennium-atzmap2' };
+  }
+
+  /**
+   * 解析 MAPFILE 格式 (本编辑器导出)
+   * 头部结构:
+   *   0x00: "MAPFILE" magic (6字节+填充到128字节)
+   *   0x7C: tilesetCols (uint16 LE, 偏移124)
+   *   0x80: width (uint16 LE)
+   *   0x82: height (uint16 LE)
+   *   0x84: 瓦片数据开始，每瓦片3字节: low(u8) + high(u8) + attr(u8)
+   */
+  _importMapFileFormat(buffer, view) {
+    let offset = 128; // 跳过128字节文件头
+
     const width = view.getUint16(offset, true);
     offset += 2;
     const height = view.getUint16(offset, true);
     offset += 2;
 
     const tiles = [];
-    const collision = [];
 
     for (let y = 0; y < height; y++) {
       const row = [];
@@ -33,20 +118,13 @@ class MillenniumImporter {
         const low = view.getUint8(offset++);
         const high = view.getUint8(offset++);
         const attr = view.getUint8(offset++);
-        
+
         row.push({ low, high, attr });
-        collision.push(attr === 1 ? 1 : 0);
       }
       tiles.push(row);
     }
 
-    return {
-      width,
-      height,
-      tiles,
-      collision,
-      source: 'millennium'
-    };
+    return { width, height, tiles, source: 'mapfile' };
   }
 
   /**

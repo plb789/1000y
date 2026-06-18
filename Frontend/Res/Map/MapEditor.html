@@ -818,10 +818,21 @@
         this.saveHistory();
       }
       
-      // 初始化画布
+      // 初始化画布（带尺寸安全检查）
       initCanvas() {
-        this.canvas.width = this.mapWidth * this.tileSize;
-        this.canvas.height = this.mapHeight * this.tileSize;
+        const w = this.mapWidth * this.tileSize;
+        const h = this.mapHeight * this.tileSize;
+        // 浏览器Canvas最大尺寸通常为16384x16384，超过会导致创建失败
+        const MAX_DIM = 16384;
+        if (w > MAX_DIM || h > MAX_DIM) {
+          console.error(`⚠️ 画布尺寸 ${w}x${h} 超过浏览器限制(${MAX_DIM})，无法创建！`);
+          // 设置一个安全的默认值避免崩溃
+          this.canvas.width = Math.min(w, MAX_DIM);
+          this.canvas.height = Math.min(h, MAX_DIM);
+          return;
+        }
+        this.canvas.width = w;
+        this.canvas.height = h;
       }
       
       // 初始化调色板
@@ -1129,9 +1140,11 @@
               if (this.tilesetMetadata && this.tilesetMetadata.columns > 0) {
                 this.tilesetCols = this.tilesetMetadata.columns;
                 console.log(`📐 使用元数据的图集列数: ${this.tilesetCols}`);
+              // ★ 关键修复：统一使用 Math.floor 与 CreateTileset 保持一致
+              // Math.round 在图片宽度非整数倍时会导致列数多1，造成瓦片错位
               } else if (img.width > 0 && img.height > 0) {
-                this.tilesetCols = Math.round(img.width / this.tileSize);
-                console.log(`⚠️ 无元数据，按图片宽度推断列数: ${this.tilesetCols} (${img.width}px / ${this.tileSize}px)`);
+                this.tilesetCols = Math.floor(img.width / this.tileSize);
+                console.log(`⚠️ 无元数据，按图片宽度推断列数: ${this.tilesetCols} (${img.width}px / ${this.tileSize}px) [使用Math.floor]`);
               }
 
               status.textContent = this.tilesetMetadata ? '已加载(有元数据)' : '已加载';
@@ -1338,22 +1351,68 @@
         const input = document.createElement('input');
         input.type = 'file';
         input.accept = '.map';
-        
+
         input.onchange = async (e) => {
           const file = e.target.files[0];
           if (!file) return;
-          
+
           try {
             const mapData = await this.importer.importMap(file);
             this.loadMapData(mapData);
             this.isModified = true;
             this.updateStatus();
-            alert(`成功导入地图: ${mapData.width} x ${mapData.height}`);
+
+            // 统计导入的瓦片数据
+            let nonEmptyCount = 0, maxLow = 0;
+            for (const row of this.tiles) {
+              for (const t of row) {
+                if (t.low > 0) { nonEmptyCount++; }
+                if (t.low > maxLow) { maxLow = t.low; }
+              }
+            }
+
+            let msg = `成功导入地图: ${mapData.width} x ${mapData.height}\n`;
+            msg += `格式: ${mapData.source || '未知'}\n`;
+            msg += `非空瓦片: ${nonEmptyCount}/${mapData.width * mapData.height}, 最大low值: ${maxLow}\n\n`;
+
+            if (!this.tileset) {
+              msg += `⚠️ 当前未加载瓦片图集PNG！\n地图将以颜色块模式显示。\n请加载对应的瓦片图集(.png)以正常预览瓦片图形。`;
+            } else {
+              msg += `✅ 已加载瓦片图集，可正常预览。`;
+            }
+
+            alert(msg);
+
+            // 如果没有tileTypeIndex，从导入数据自动构建基础索引（确保颜色渲染可用）
+            if (this.tileTypeIndex.size === 0 && nonEmptyCount > 0) {
+              const usedIds = new Set();
+              for (const row of this.tiles) {
+                for (const t of row) {
+                  if (t.low > 0) usedIds.add(t.low);
+                }
+              }
+              // 为每个使用的ID创建默认条目
+              for (const id of usedIds) {
+                if (!this.tileTypeIndex.has(id)) {
+                  this.tileTypeIndex.set(id, {
+                    id,
+                    name: `导入瓦片${id}`,
+                    passable: true,
+                    attr: 0,
+                    layer: 0,
+                    category: 'ground',
+                    color: `hsl(${(id * 37) % 360}, 60%, 50%)`  // 用色相环生成不同颜色
+                  });
+                }
+              }
+              console.log(`✅ 自动构建了${this.tileTypeIndex.size}个瓦片类型索引入口`);
+              this.render();  // 重新渲染以显示颜色
+            }
           } catch (err) {
             alert('导入地图失败: ' + err.message);
           }
         };
-        
+
         input.click();
       }
       
@@ -1405,12 +1464,46 @@
       
       // 加载地图数据
       loadMapData(mapData) {
+        // ★ 尺寸安全检查：防止超大地图导致画布创建失败或浏览器卡死
+        const MAX_CANVAS_DIM = 16384;  // 浏览器Canvas最大安全尺寸
+        const MAX_TOTAL_TILES = 50000; // 最大瓦片数限制（超过此值渲染会非常慢）
+        const canvasW = mapData.width * this.tileSize;
+        const canvasH = mapData.height * this.tileSize;
+        const totalTiles = mapData.width * mapData.height;
+
+        if (canvasW > MAX_CANVAS_DIM || canvasH > MAX_CANVAS_DIM) {
+          alert(`⚠️ 地图尺寸过大，无法显示！\n\n` +
+                `地图: ${mapData.width} x ${mapData.height} 瓦片\n` +
+                `画布: ${canvasW} x ${canvasH} 像素 (最大允许: ${MAX_CANVAS_DIM})\n\n` +
+                `建议：使用更小的地图文件，或在原版客户端中拆分地图后再导入。`);
+          return;  // 不加载数据
+        }
+
+        if (totalTiles > MAX_TOTAL_TILES) {
+          const proceed = confirm(
+            `⚠️ 地图瓦片数较多 (${totalTiles.toLocaleString()} 个)，可能导致编辑器响应缓慢。\n\n` +
+            `地图: ${mapData.width} x ${mapData.height}\n` +
+            `是否继续导入？(点击"取消"放弃)`
+          );
+          if (!proceed) return;
+        }
+
+        console.log(`✅ loadMapData: ${mapData.width}x${mapData.height}, 画布=${canvasW}x${canvasH}, 总瓦片=${totalTiles}`);
+
         this.mapWidth = mapData.width;
         this.mapHeight = mapData.height;
         this.tiles = mapData.tiles;
         this.initCanvas();
         this.render();
         this.updateStatus();
+      }
+
+      // 更新状态栏显示
+      updateStatus() {
+        const sizeEl = document.getElementById('statusSize');
+        const modifiedEl = document.getElementById('statusModified');
+        if (sizeEl) sizeEl.textContent = `${this.mapWidth} x ${this.mapHeight}`;
+        if (modifiedEl) modifiedEl.textContent = this.isModified ? '是' : '否';
       }
       
       // 初始化事件
@@ -1548,7 +1641,7 @@
         }
         
         // 绘制选择区域
-        if (this.selection.active) {
+        if (this.selection && this.selection.active) {
           this.drawSelection();
         }
 
@@ -2145,9 +2238,22 @@
 
         // 写入瓦片图集列数到文件头偏移 124 (uint16 LE)
         // 游戏渲染器需要此值来正确从图集中定位瓦片
-        const actualTilesetCols = this.tileset && this.tileset.width > 0
-          ? Math.floor(this.tileset.width / this.tileSize)
-          : this.tilesetCols;
+        // ★ 优先级：元数据 > 图片宽度计算 > 当前内存值（确保一致性）
+        let actualTilesetCols = 0;
+        if (this.tilesetMetadata && this.tilesetMetadata.columns > 0) {
+          actualTilesetCols = this.tilesetMetadata.columns;
+        } else if (this.tileset && this.tileset.width > 0) {
+          actualTilesetCols = Math.floor(this.tileset.width / this.tileSize);
+        } else {
+          actualTilesetCols = this.tilesetCols || 16;  // 最后兜底默认16
+        }
+
+        // ★ 验证：确保列数在合理范围内
+        if (actualTilesetCols <= 0 || actualTilesetCols > 256) {
+          console.warn(`⚠️ tilesetCols异常值(${actualTilesetCols})，强制修正为16`);
+          actualTilesetCols = 16;
+        }
+
         view[124] = actualTilesetCols & 0xff;
         view[125] = (actualTilesetCols >> 8) & 0xff;
 
@@ -2839,10 +2945,10 @@
       autoFillMapFromTileset() {
         if (!this.tilesetMetadata || !this.tilesetMetadata.tiles) return;
 
-        // ★ 唯一标准：始终使用图集图片的实际列数
+        // ★ 唯一标准：始终使用图集图片的实际列数（统一使用 Math.floor）
         // 这确保：地图数据中的瓦片ID → 游戏渲染器查找图集的位置 → 完全一致
         const atlasCols = this.tileset && this.tileset.width > 0
-          ? Math.round(this.tileset.width / this.tileSize)
+          ? Math.floor(this.tileset.width / this.tileSize)
           : (this.tilesetMetadata.columns || this.tilesetCols);
 
         // 地图尺寸也用 atlasCols（确保地图网格与图集网格对齐）
@@ -2924,16 +3030,20 @@
           return;
         }
 
-        if (!confirm(`确定要清空地图吗？\n将清除全部 ${this.mapWidth}x${this.mapHeight} = ${this.mapWidth * this.mapHeight} 个格子的瓦片数据`)) {
+        const total = this.mapWidth * this.mapHeight;
+        if (!confirm(`确定要清空地图吗？\n将清除全部 ${this.mapWidth}x${this.mapHeight} = ${total.toLocaleString()} 个格子的瓦片数据`)) {
           return;
         }
 
-        // 清空瓦片数据
+        console.log(`🗑️ 开始清空地图: ${this.mapWidth} x ${this.mapHeight} (${total}瓦片)`);
+
+        // ★ 使用更高效的方式清空（避免逐个push的内存开销）
         this.tiles = [];
         for (let y = 0; y < this.mapHeight; y++) {
-          const row = [];
+          // 预分配行数组，填充默认空瓦片
+          const row = new Array(this.mapWidth);
           for (let x = 0; x < this.mapWidth; x++) {
-            row.push({ low: 0, high: 0, attr: 0 });
+            row[x] = { low: 0, high: 0, attr: 0 };
           }
           this.tiles.push(row);
         }
@@ -2942,8 +3052,12 @@
         this.history = [];
         this.historyIndex = -1;
 
-        // 清除选区
-        this.selection = null;
+        // 清除选区（重置为非活跃状态，避免后续render空指针）
+        this.selection.active = false;
+        this.selection.startX = -1;
+        this.selection.startY = -1;
+        this.selection.endX = -1;
+        this.selection.endY = -1;
         this.clipboard = null;
 
         // 重新渲染
@@ -3009,7 +3123,16 @@
         // 重新初始化画布
         this.initCanvas();
         this.render();
-        
+
+        // ★ 关键修复：同步更新 tilesetCols 为图集实际列数
+        // 确保后续导出.map文件时写入正确的列数值到文件头[124]
+        if (this.tilesetMetadata && this.tilesetMetadata.columns > 0) {
+          this.tilesetCols = this.tilesetMetadata.columns;
+        } else if (this.tileset && this.tileset.width > 0) {
+          this.tilesetCols = Math.floor(this.tileset.width / this.tileSize);
+        }
+        console.log(`✅ autoGenerateMap已同步tilesetCols=${this.tilesetCols} (来源: ${this.tilesetMetadata ? '元数据' : '图片宽度计算'})`);
+
         this.isModified = true;
         document.getElementById('statusModified').textContent = '是';
         

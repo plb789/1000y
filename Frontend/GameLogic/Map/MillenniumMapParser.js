@@ -17,6 +17,7 @@ class MillenniumMapParser {
     // 新版地图编辑器会将此值写入文件头，用于游戏渲染器正确定位瓦片
     this.tilesetCols = view.getUint16(124, true);
     if (this.tilesetCols === 0 || this.tilesetCols > 256) {
+      console.warn(`⚠️ 文件头tilesetCols[124]=${this.tilesetCols}无效，将使用图片宽度计算或默认值`);
       this.tilesetCols = 0; // 无效值，标记为未指定
     }
 
