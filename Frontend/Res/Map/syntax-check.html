@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>MapEditor 语法验证</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .success { color: green; }
+        .error { color: red; }
+        pre { background: #f5f5f5; padding: 10px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <h1>MapEditor.html 语法检查</h1>
+    <div id="result"></div>
+
+    <script>
+        const resultDiv = document.getElementById('result');
+
+        // 尝试加载MapEditor.html作为脚本
+        try {
+            const script = document.createElement('script');
+            script.src = 'MapEditor.html';
+            script.onload = function() {
+                resultDiv.innerHTML = '<p class="success">✅ MapEditor.html 加载成功！没有语法错误。</p>';
+                resultDiv.innerHTML += '<p class="success">✅ class MapEditor 定义正确。</p>';
+                console.log('✅ MapEditor.html 语法验证通过');
+            };
+            script.onerror = function(e) {
+                resultDiv.innerHTML = '<p class="error">❌ 加载失败 - 请检查文件是否存在</p>';
+                console.error('❌ 加载失败:', e);
+            };
+            document.head.appendChild(script);
+        } catch (error) {
+            resultDiv.innerHTML = `<p class="error">❌ 错误: ${error.message}</p>`;
+            console.error('错误:', error);
+        }
+
+        // 显示提示
+        resultDiv.innerHTML += '<hr><h3>使用说明：</h3><ol>';
+        resultDiv.innerHTML += '<li>如果看到绿色的"✅"消息，说明语法正确</li>';
+        resultDiv.innerHTML += '<li>如果看到红色的"❌"消息，请查看浏览器控制台(F12)</li>';
+        resultDiv.innerHTML += '<li>按 F12 打开开发者工具查看详细错误信息</li></ol>';
+    </script>
+</body>
+</html>

@@ -409,31 +409,35 @@ class MapEngine {
     this.ctx.save();
     this.ctx.translate(-this.camera.offsetX, -this.camera.offsetY);
 
-    // 只渲染可见区域的瓦片
+    // ★ 新版Z轴排序渲染：传递玩家位置用于深度排序
+    // 这确保了角色在桥梁下面时会被正确遮挡
+    const playerPos = { x: this.player.x, y: this.player.y };
+
     this.mapRenderer.renderMap(
       this.mapParser,
       this.camera.offsetX,
       this.camera.offsetY,
       this.canvas.width,
-      this.canvas.height
+      this.canvas.height,
+      playerPos  // 传递玩家位置给Z排序算法
     );
-    
+
     // 渲染动画效果
     if (this.animationSystem) {
       this.animationSystem.render(this.ctx, this.tileSize, this.tilesetImg);
     }
-    
+
     // 绘制路径
     this.mapRenderer.drawPath(this.player.movePath);
-    
-    // 绘制玩家位置小红点（使用像素坐标实现平滑移动）
+
+    // 绘制玩家（Z排序已经处理了遮挡关系，这里只需要绘制玩家）
     this.mapRenderer.drawPlayerByPixel(this.player.pixelX, this.player.pixelY);
 
     // 绘制角色动画
     if (this.roleAnim) {
       this.roleAnim.draw(this.ctx, this.player.pixelX, this.player.pixelY);
     }
-    
+
     // 渲染完成后调用回调（用于绘制其他玩家）
     // 注意：在 ctx.restore() 之前调用，确保摄像机偏移仍然有效
     if (this.afterRender) {

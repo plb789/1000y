@@ -94,15 +94,39 @@ class MillenniumImporter {
   }
 
   /**
+   * 从 ArrayBuffer 直接导入地图（用于编辑器内部加载）
+   * 支持 ATZMAP2 和 MAPFILE 两种格式
+   */
+  async _importMapFromBuffer(buffer) {
+    const view = new DataView(buffer);
+
+    // 检测文件格式（通过magic）
+    const magic = String.fromCharCode(view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3),
+                                   view.getUint8(4), view.getUint8(5), view.getUint8(6), view.getUint8(7));
+
+    if (magic.startsWith('ATZMAP')) {
+      // ATZMAP2 格式 (千年3原版 .map 文件)
+      return this._importAtzMap(buffer, view);
+    } else {
+      // MAPFILE 格式 (本编辑器导出的 .map 文件)
+      return this._importMapFileFormat(buffer, view);
+    }
+  }
+
+  /**
    * 解析 MAPFILE 格式 (本编辑器导出)
    * 头部结构:
    *   0x00: "MAPFILE" magic (6字节+填充到128字节)
    *   0x7C: tilesetCols (uint16 LE, 偏移124)
    *   0x80: width (uint16 LE)
    *   0x82: height (uint16 LE)
-   *   0x84: 瓦片数据开始，每瓦片3字节: low(u8) + high(u8) + attr(u8)
+   *   0x84: 瓦片数据开始，每瓦片5字节: low(u16) + high(u16) + attr(u8)
+   *   ★ 支持旧格式(3字节/瓦片)和新格式(5字节/瓦片)的自动检测
    */
   _importMapFileFormat(buffer, view) {
+    // ★ 读取文件头中的tilesetCols（偏移124）
+    const tilesetCols = view.getUint16(124, true);
+    
     let offset = 128; // 跳过128字节文件头
 
     const width = view.getUint16(offset, true);
@@ -110,13 +134,37 @@ class MillenniumImporter {
     const height = view.getUint16(offset, true);
     offset += 2;
 
+    // ★ 自动检测瓦片数据格式：通过计算期望文件大小来判断
+    // 新格式: 每瓦片5字节(low:2 + high:2 + attr:1)
+    // 旧格式: 每瓦片3字节(low:1 + high:1 + attr:1)
+    const expectedSizeNewFormat = 128 + 4 + width * height * 5;
+    const expectedSizeOldFormat = 128 + 4 + width * height * 3;
+    const isNewFormat = Math.abs(buffer.byteLength - expectedSizeNewFormat) <= Math.abs(buffer.byteLength - expectedSizeOldFormat);
+    
+    console.log(`📦 MAPFILE格式解析: ${isNewFormat ? '新格式(16位ID)' : '旧格式(8位ID)'}`);
+
     const tiles = [];
+    const tileBytes = isNewFormat ? 5 : 3;
 
     for (let y = 0; y < height; y++) {
       const row = [];
       for (let x = 0; x < width; x++) {
-        const low = view.getUint8(offset++);
-        const high = view.getUint8(offset++);
+        if (offset + tileBytes > buffer.byteLength) {
+          throw new Error(`MAPFILE: 数据不足于读取瓦片(${x},${y})`);
+        }
+        
+        let low, high;
+        if (isNewFormat) {
+          // ★ 新格式：瓦片ID为16位(uint16 LE)，支持0-65535范围
+          low = view.getUint16(offset, true);
+          offset += 2;
+          high = view.getUint16(offset, true);
+          offset += 2;
+        } else {
+          // ★ 旧格式：瓦片ID为8位(uint8)，兼容旧版本导出文件
+          low = view.getUint8(offset++);
+          high = view.getUint8(offset++);
+        }
         const attr = view.getUint8(offset++);
 
         row.push({ low, high, attr });
@@ -124,7 +172,7 @@ class MillenniumImporter {
       tiles.push(row);
     }
 
-    return { width, height, tiles, source: 'mapfile' };
+    return { width, height, tiles, tilesetCols, source: 'mapfile', format: isNewFormat ? 'new' : 'old' };
   }
 
   /**
@@ -348,17 +396,29 @@ class MillenniumImporter {
   }
 
   /**
-   * 导出为原版千年地图格式(.map)
+   * 导出为编辑器MAPFILE格式(.map)
    * 格式：128字节头 + 宽(2) + 高(2) + (low+high+attr)*n
+   * ★ 瓦片ID使用16位(uint16)，支持0-65535范围
    */
   exportToMillenniumFormat(mapData) {
-    const { width, height, tiles } = mapData;
-    const dataSize = 2 + 2 + (width * height * 3); // 宽+高+瓦片数据
+    const { width, height, tiles, tilesetCols = 16 } = mapData;
+    const dataSize = 2 + 2 + (width * height * 5); // ★ 修复：每瓦片5字节(low:2 + high:2 + attr:1)
     const buffer = new ArrayBuffer(128 + dataSize);
     const view = new Uint8Array(buffer);
     
     // 文件头（填充为0）
     view.fill(0);
+    
+    // ★ 写入文件标识 "MAPFILE"（必须写在前6字节）
+    const header = 'MAPFILE';
+    for (let i = 0; i < header.length; i++) {
+      view[i] = header.charCodeAt(i);
+    }
+    
+    // ★ 写入 tilesetCols（偏移124，2字节）
+    // 这确保导出和导入时使用相同的图集列数，避免瓦片排序混乱
+    view[124] = tilesetCols & 0xFF;
+    view[125] = (tilesetCols >> 8) & 0xFF;
     
     // 地图尺寸
     const offset = 128;
@@ -371,10 +431,18 @@ class MillenniumImporter {
     let dataOffset = offset + 4;
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
-        const tile = tiles[y]?.[x] || { low: 1, high: 0, attr: 0 };
-        view[dataOffset++] = tile.low || 1;
-        view[dataOffset++] = tile.high || 0;
+        const tile = tiles[y]?.[x] || { low: 0, high: 0, attr: 0 };
+        // ★ 修复：瓦片ID改为16位(uint16 LE)，支持0-65535范围
+        view[dataOffset++] = tile.low & 0xFF;
+        view[dataOffset++] = (tile.low >> 8) & 0xFF;
+        view[dataOffset++] = (tile.high || 0) & 0xFF;
+        view[dataOffset++] = ((tile.high || 0) >> 8) & 0xFF;
         view[dataOffset++] = tile.attr || 0;
+        
+        // ★ 调试：打印前5个瓦片的导出信息
+        if (y < 2 && x < 5) {
+          console.log(`导出位置(${x},${y}): 瓦片ID=${tile.low}`);
+        }
       }
     }
     

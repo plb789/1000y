@@ -38,7 +38,7 @@
     .form-label { font-size: 13px; color: #a0aec0; min-width: 80px; }
     .form-input { flex: 1; height: 32px; background: #2d3748; border: 1px solid #4a5568; border-radius: 4px; color: #fff; padding: 0 10px; font-size: 13px; }
     .form-input:focus { outline: none; border-color: #e94560; }
-    .form-select { flex: 1; height: 32px; background: #2d3748; border: 1px solid #4a5568; border-radius: 4px; color: #fff; padding: 0 10px; font-size: 13px; }
+    .form-select { flex: 1; height: 32px; background: #2d3748; border: 1px solid #4a5568; border-radius: 4px; color: #fff; padding: 0 10px; font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     
     .info { background: #2d3748; padding: 15px; border-radius: 8px; margin-top: 20px; }
     .info h3 { color: #4ade80; margin-bottom: 10px; }
@@ -117,6 +117,17 @@
     
     @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
     .fade-in { animation: fadeIn 0.3s ease; }
+
+    /* 自定义滚动条样式 */
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: #1a202c; border-radius: 5px; }
+    ::-webkit-scrollbar-thumb { background: linear-gradient(180deg, #4a5568, #2d3748); border-radius: 5px; border: 2px solid #1a202c; }
+    ::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg, #5a6578, #3d4758); }
+    ::-webkit-scrollbar-corner { background: #1a202c; }
+
+    /* 下拉框选项样式 */
+    .form-select option { background: #2d3748; color: #fff; padding: 4px 8px; }
+    .form-select optgroup { background: #1a202c; color: #a0aec0; font-weight: bold; }
   </style>
 </head>
 <body>
@@ -211,6 +222,15 @@
             <span class="form-label">瓦片名称:</span>
             <input type="text" class="form-input" id="editTileName" value="草地" placeholder="输入瓦片名称">
           </div>
+          <!-- ★ 新增：图层选择（支持三层地图系统） -->
+          <div class="form-row">
+            <span class="form-label">所属图层:</span>
+            <select class="form-select" id="editTileLayer">
+              <option value="0">🟩 地面层 (草地/道路/水域)</option>
+              <option value="1">🟧 物体层 (树木/墙壁/装饰)</option>
+              <option value="2">🟨 覆盖层 (桥梁/屋顶遮挡)</option>
+            </select>
+          </div>
           <div class="checkbox-row">
             <input type="checkbox" id="editTilePassable" checked>
             <label for="editTilePassable">可通行</label>
@@ -218,6 +238,10 @@
           <div class="checkbox-row">
             <input type="checkbox" id="editTileBuilding">
             <label for="editTileBuilding">建筑物</label>
+          </div>
+          <div class="checkbox-row">
+            <input type="checkbox" id="editTileOverlay">
+            <label for="editTileOverlay">遮挡下方角色（桥梁/屋顶专用）</label>
           </div>
           <button class="btn small" id="btnApplyTileProps">应用属性</button>
           <button class="btn small secondary" id="btnSelectAll">全选</button>
@@ -415,7 +439,7 @@
         document.getElementById('suggestedMapSize').textContent = `${cols} x ${rows} 瓦片`;
       }
       
-      // 初始化瓦片数据
+      // 初始化瓦片数据（★ 新增：支持三层地图系统属性）
       initTiles(count) {
         this.tiles = [];
         for (let i = 0; i < count; i++) {
@@ -424,6 +448,8 @@
             name: `瓦片${i + 1}`,
             passable: true,
             building: false,
+            layer: 0,        // ★ 新增：所属图层 (0=地面, 1=物体, 2=覆盖)
+            isOverlay: false, // ★ 新增：是否遮挡下方角色（桥梁/屋顶）
             selected: false
           });
         }
@@ -436,12 +462,26 @@
         this.tileHeight = parseInt(document.getElementById('tileHeight').value) || 48;
         this.tilesetCols = parseInt(document.getElementById('tilesetCols').value) || 16;
         this.tilesetName = document.getElementById('tilesetName').value || 'custom_tileset';
-        
+
+        // 验证配置值的有效性
+        if (this.tileWidth < 16 || this.tileWidth > 128) {
+          alert('瓦片宽度必须在 16-128 之间');
+          return;
+        }
+        if (this.tileHeight < 16 || this.tileHeight > 128) {
+          alert('瓦片高度必须在 16-128 之间');
+          return;
+        }
+        if (this.tilesetCols < 1 || this.tilesetCols > 32) {
+          alert('图集列数必须在 1-32 之间');
+          return;
+        }
+
         if (this.sourceImage) {
           this.previewSlices();
         }
       }
-      
+
       // 预览切片
       previewSlices() {
         if (!this.sourceImage) {
@@ -657,6 +697,7 @@
       }
       
       // 应用瓦片属性
+      // ★ 更新：应用瓦片属性（支持三层地图系统）
       applyTileProps() {
         const selectedTiles = this.tiles.filter(t => t.selected);
         if (selectedTiles.length === 0) {
@@ -666,20 +707,32 @@
             this.tiles[index].name = document.getElementById('editTileName').value;
             this.tiles[index].passable = document.getElementById('editTilePassable').checked;
             this.tiles[index].building = document.getElementById('editTileBuilding').checked;
+            // ★ 新增：应用图层属性
+            this.tiles[index].layer = parseInt(document.getElementById('editTileLayer').value) || 0;
+            this.tiles[index].isOverlay = document.getElementById('editTileOverlay').checked;
+
+            console.log(`✅ 瓦片${this.tiles[index].index} 属性已更新: layer=${this.tiles[index].layer}, overlay=${this.tiles[index].isOverlay}`);
           }
         } else {
           // 应用到所有选中的瓦片
           const name = document.getElementById('editTileName').value;
           const passable = document.getElementById('editTilePassable').checked;
           const building = document.getElementById('editTileBuilding').checked;
-          
+          // ★ 新增：读取图层属性
+          const layer = parseInt(document.getElementById('editTileLayer').value) || 0;
+          const isOverlay = document.getElementById('editTileOverlay').checked;
+
           selectedTiles.forEach(tile => {
             tile.name = name;
             tile.passable = passable;
             tile.building = building;
+            tile.layer = layer;       // ★ 新增
+            tile.isOverlay = isOverlay; // ★ 新增
           });
+
+          console.log(`✅ 批量应用属性到 ${selectedTiles.length} 个瓦片: layer=${layer}, overlay=${isOverlay}`);
         }
-        
+
         this.updateTileGrid();
       }
       
@@ -748,6 +801,7 @@
       }
       
       // 生成元数据JSON（供地图编辑器使用）
+      // ★ 更新：生成元数据（支持三层地图系统）
       generateMetadata() {
         // 计算源图的瓦片网格
         const sourceCols = this.sourceImage
@@ -764,41 +818,56 @@
 
         const metadata = {
           name: this.tilesetName,
-          version: '1.0',
-          description: `由瓦片图集生成器导出 - ${new Date().toLocaleString('zh-CN')}`,
+          version: '2.0',  // ★ 更新版本号，标记支持分层系统
+          description: `由瓦片图集生成器导出 - ${new Date().toLocaleString('zh-CN')} [支持三层地图]`,
 
           // 瓦片尺寸（每个瓦片的像素大小）
           tileWidth: this.tileWidth,
           tileHeight: this.tileHeight,
 
           // 图集布局（导出的PNG图片的网格信息）
-          columns: this.tilesetCols,        // 图集每行多少个瓦片
-          rows: tilesetRows,                // 图集总共有多少行
+          columns: this.tilesetCols,
+          rows: tilesetRows,
 
           // 图集图片实际像素尺寸
-          imageWidth: tilesetWidth,         // PNG图片宽度(像素)
-          imageHeight: tilesetHeight,       // PNG图片高度(像素)
+          imageWidth: tilesetWidth,
+          imageHeight: tilesetHeight,
 
-          // 源图片信息（原始大图的信息）
+          // 源图片信息
           sourceWidth: this.sourceImage ? this.sourceImage.width : 0,
           sourceHeight: this.sourceImage ? this.sourceImage.height : 0,
-          sourceTileCols: sourceCols,       // 源图每行多少个瓦片
-          sourceTileRows: sourceRows,       // 源图总共有多少行瓦片
+          sourceTileCols: sourceCols,
+          sourceTileRows: sourceRows,
 
           // 总瓦片数
           totalTiles: totalTiles,
 
-          // 瓦片属性列表（索引从1开始，与千年服务端一致）
+          // ★ 新增：分层系统配置
+          layerSystem: {
+            enabled: true,  // 启用三层地图系统
+            layers: [
+              { id: 0, name: '地面层', description: '草地、道路、水域等基础地形' },
+              { id: 1, name: '物体层', description: '树木、墙壁、装饰物' },
+              { id: 2, name: '覆盖层', description: '桥梁、屋顶等遮挡角色的物体' }
+            ]
+          },
+
+          // 瓦片属性列表（★ 更新：包含完整的三层数据）
           tiles: this.tiles.map(tile => ({
-            id: tile.index,                 // 瓦片ID（从1开始）
+            id: tile.index,
             name: tile.name || `tile_${tile.index}`,
-            passable: tile.passable !== false,  // 是否可通行
-            building: tile.building === true,   // 是否为建筑物
-            category: tile.category || 'ground', // 分类
-            attr: (tile.passable === false || tile.building === true) ? 1 : 0,  // 千年格式: 0=通行 1=阻挡
-            layer: tile.building === true ? 1 : 0    // 图层: 0=地面层 1=物体层
+            passable: tile.passable !== false,
+            building: tile.building === true,
+            category: tile.category || 'ground',
+            attr: (tile.passable === false || tile.building === true) ? 1 : 0,
+            // ★ 新增：完整的层级属性
+            layer: tile.layer || 0,                    // 所属图层 (0/1/2)
+            isOverlay: tile.isOverlay === true,        // 是否为覆盖层（遮挡角色）
+            zIndexOffset: (tile.layer || 0) * 0.33     // Z轴偏移量（用于排序）
           }))
         };
+
+        console.log(`📋 生成元数据: ${totalTiles} 个瓦片, 版本v${metadata.version}, 分层系统=${metadata.layerSystem.enabled}`);
 
         return metadata;
       }

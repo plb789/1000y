@@ -178,7 +178,7 @@
     /* 地图画布区域 */
     #canvas-container {
       flex: 1;
-      background: #0d1117;
+      background: #16213e;
       overflow: auto;
       display: flex;
       align-items: flex-start;
@@ -381,16 +381,106 @@
     .status-value {
       color: #4ade80;
     }
-    
+
     /* 快捷键提示 */
     .shortcut-hint {
       font-size: 10px;
       color: #718096;
       margin-left: 4px;
     }
+
+    /* ★ 新增：物体相关样式 */
+    .object-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 6px;
+      background: #2d3748;
+      border-radius: 3px;
+      margin: 2px 0;
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .object-item:hover {
+      background: #4a5568;
+    }
+
+    .object-item.selected {
+      background: #e94560;
+      border: 1px solid #ff6b8a;
+    }
+
+    .object-item .obj-icon {
+      width: 20px;
+      height: 20px;
+      border: 1px solid #4a5568;
+      border-radius: 2px;
+      image-rendering: pixelated;
+    }
+
+    .object-item .obj-pos {
+      color: #a0aec0;
+      font-size: 10px;
+    }
+
+    .object-item .obj-layer {
+      font-size: 9px;
+      padding: 1px 4px;
+      border-radius: 2px;
+      background: #4a5568;
+    }
+
+    .object-item .obj-layer.layer0 { background: #3a5f0b; }
+    .object-item .obj-layer.layer1 { background: #c53030; }
+    .object-item .obj-layer.layer2 { background: #d69e2e; }
+
+    /* 物体拖拽时的视觉反馈 */
+    .dragging-object {
+      opacity: 0.7;
+      cursor: grabbing !important;
+    }
+
+    .drop-highlight {
+      outline: 3px dashed #e94560 !important;
+      outline-offset: -3px;
+      background: rgba(233, 69, 96, 0.1) !important;
+    }
+
+    /* 物体放置模式指示器 */
+    .object-mode-indicator {
+      position: fixed;
+      top: 60px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(233, 69, 96, 0.9);
+      color: white;
+      padding: 8px 16px;
+      border-radius: 20px;
+      font-size: 12px;
+      z-index: 1000;
+      display: none;
+      box-shadow: 0 4px 12px rgba(233, 69, 96, 0.4);
+    }
+
+    .object-mode-indicator.active {
+      display: block;
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: translateX(-50%) scale(1); }
+      50% { opacity: 0.8; transform: translateX(-50%) scale(1.02); }
+    }
   </style>
 </head>
 <body>
+  <!-- ★ 新增：物体放置模式指示器 -->
+  <div class="object-mode-indicator" id="objectModeIndicator">
+    🎯 物体放置模式 - 点击地图放置物体 | 按 [O] 或 [Esc] 退出
+  </div>
+
   <!-- 顶部工具栏 -->
   <div id="toolbar">
     <div class="toolbar-group">
@@ -511,22 +601,67 @@
         </div>
         <div class="panel-row">
           <span class="panel-label">层级</span>
+          <!-- ★ 更新：支持三层地图系统 -->
           <select class="panel-input" id="tileLayer">
-            <option value="0">地面</option>
-            <option value="1">物体</option>
+            <option value="0">🟩 Layer 0: 地面层</option>
+            <option value="1">🟧 Layer 1: 物体层</option>
+            <option value="2">🟨 Layer 2: 覆盖层(桥/屋顶)</option>
           </select>
         </div>
       </div>
-      
+
+      <!-- ★ 新增：图层管理面板（支持三层地图系统） -->
+      <div class="panel-section">
+        <div class="panel-title">🗂️ 图层管理</div>
+        <div id="layerList" style="margin-bottom: 8px;">
+          <div class="layer-item active" data-layer="0" id="layerItem0">
+            <input type="checkbox" class="layer-checkbox" id="layerVisible0" checked>
+            <span>🟩 地面层</span>
+            <span class="panel-value" id="layerCount0">0</span>
+          </div>
+          <div class="layer-item" data-layer="1" id="layerItem1">
+            <input type="checkbox" class="layer-checkbox" id="layerVisible1" checked>
+            <span>🟧 物体层</span>
+            <span class="panel-value" id="layerCount1">0</span>
+          </div>
+          <div class="layer-item" data-layer="2" id="layerItem2">
+            <input type="checkbox" class="layer-checkbox" id="layerVisible2" checked>
+            <span>🟨 覆盖层</span>
+            <span class="panel-value" id="layerCount2">0</span>
+          </div>
+        </div>
+        <div class="panel-row">
+          <span class="panel-label">当前编辑:</span>
+          <span class="panel-value" id="currentLayerName">地面层</span>
+        </div>
+        <button class="panel-btn secondary" id="btnToggleAllLayers">显示/隐藏全部</button>
+      </div>
+
+      <!-- ★ 新增：物体管理面板 -->
+      <div class="panel-section">
+        <div class="panel-title">🎯 物体列表 (<span id="objectCount">0</span>)</div>
+        <div id="objectList" style="max-height: 150px; overflow-y: auto; margin-bottom: 8px;">
+          <div style="color: #718096; font-size: 11px; padding: 8px; text-align: center;">
+            暂无物体<br><span style="font-size: 10px;">从调色板拖拽瓦片到地图上放置物体
+          </div>
+        </div>
+        <button class="panel-btn secondary" id="btnAddObjectMode" style="font-size: 11px;">🎯 物体放置模式 [O]</button>
+        <button class="panel-btn secondary" id="btnClearObjects" style="font-size: 11px;">🗑️ 清除所有物体</button>
+        <div class="panel-row" style="margin-top: 6px;">
+          <span class="panel-label">选中物体:</span>
+          <span class="panel-value" id="selectedObjectInfo">无</span>
+        </div>
+      </div>
+
       <div class="panel-section">
         <div class="panel-title">瓦片属性编辑器</div>
         <div class="panel-row">
           <span class="panel-label">瓦片ID</span>
-          <input type="number" class="panel-input" id="tileId" value="1" min="0" max="255">
+          <input type="number" class="panel-input" id="tileId" value="1" min="0" max="65535">
         </div>
         <div class="panel-row">
           <span class="panel-label">高层ID</span>
-          <input type="number" class="panel-input" id="tileHigh" value="0" min="0" max="255">
+          <input type="number" class="panel-input" id="tileHigh" value="0" min="0" max="65535">
         </div>
         <div class="panel-row">
           <span class="panel-label">通行</span>
@@ -683,53 +818,66 @@
         this.mapHeight = 15;
         this.tiles = []; // [y][x] = { low, high, attr }
         this.tileSize = 48; // 像素大小（与服务端配置一致）
-        
+
         // 编辑状态
         this.currentTool = 'pen';
         this.currentTile = { low: 1, high: 0, attr: 0 };
         this.zoom = 1;
         this.isModified = false;
-        
+
         // 撤销/重做
         this.history = [];
         this.historyIndex = -1;
         this.maxHistory = 50;
-        
+
         // 瓦片图集
         this.tileset = null;
         this.tilesetCols = 16;
         this.tilesetName = '';  // 当前图集名称（不含扩展名）
         this.tilesetMetadata = null;  // 图集元数据（通行/阻挡等属性）
         this.customTileTypes = [];  // 自定义瓦片类型列表
-        
+
         // 资源管理器
         this.resourceManager = window.ResourceManager;
         this.importer = new MillenniumImporter();
-        
+
         // 动画系统
         this.animationSystem = window.MapAnimationSystem;
         this.mapAnimations = new Map(); // 存储地图上的动画位置信息
         this.isPreviewingAnimation = false;
-        
+
         // 触发器系统
         this.triggerSystem = window.AnimationTriggerSystem;
-        
+
         // 音效系统
         this.audioSystem = window.AnimationAudioSystem;
-        
+
         // 事件系统
         this.eventSystem = window.AnimationEventSystem;
-        
+
         // WebGL渲染器
         this.webglRenderer = null;
         this.useWebGL = false;
-        
+
+        // ★ 调试功能：显示瓦片ID（按 D 键切换）
+        this.debugTileIds = false;
+
         // 当前选中的分类
         this.currentCategory = 'all';
-        
+
+        // ★ 新增：三层地图系统支持
+        this.currentLayer = 0;              // 当前编辑的图层 (0=地面, 1=物体, 2=覆盖)
+        this.layerVisibility = [true, true, true];  // 各图层可见性
+        this.mapObjects = [];               // 地图上的物体对象列表
+        this.selectedObject = null;         // 当前选中的物体
+        this.isObjectMode = false;          // 物体放置模式
+        this.draggedObject = null;          // 正在拖拽的物体
+        this.dragStartPos = null;           // 拖拽起始位置
+        this.lastMousePos = null;           // 鼠标位置（用于预览）
+
         // 预设瓦片类型（从TileDefinitions加载）
         this.initTileTypes();
-        
+
         this.init();
       }
       
@@ -802,6 +950,9 @@
         this.initPalette();
         this.initToolbar();
         this.initEvents();
+        // ★ 新增：初始化图层管理和物体系统
+        this.initLayerSystem();
+        this.initObjectSystem();
         this.render();
       }
       
@@ -815,6 +966,8 @@
           }
           this.tiles.push(row);
         }
+        // ★ 清除地图文件列数标记，允许后续加载图集时重新确定列数
+        this._mapFileTilesetColsSet = false;
         this.saveHistory();
       }
       
@@ -829,10 +982,18 @@
           // 设置一个安全的默认值避免崩溃
           this.canvas.width = Math.min(w, MAX_DIM);
           this.canvas.height = Math.min(h, MAX_DIM);
-          return;
+        } else {
+          this.canvas.width = w;
+          this.canvas.height = h;
         }
-        this.canvas.width = w;
-        this.canvas.height = h;
+        
+        // 设置 canvas 的 CSS 尺寸为地图实际像素尺寸，不应用缩放
+        // 缩放通过 ctx.scale() 在渲染时处理
+        this.canvas.style.width = this.canvas.width + 'px';
+        this.canvas.style.height = this.canvas.height + 'px';
+        
+        // ★ 添加调试信息，检查画布尺寸
+        console.log(`🎨 initCanvas: 画布像素尺寸=${this.canvas.width}x${this.canvas.height}, CSS尺寸=${this.canvas.style.width}x${this.canvas.style.height}, 地图瓦片=${this.mapWidth}x${this.mapHeight}, tileSize=${this.tileSize}`);
       }
       
       // 初始化调色板
@@ -912,6 +1073,18 @@
             // 确保不超出图集范围
             if (sx + ts <= this.tileset.width && sy + ts <= this.tileset.height) {
               ctx.drawImage(this.tileset, sx, sy, ts, ts, 0, 0, 40, 40);
+              
+              // ★ 调试功能：在调色板瓦片上显示ID号
+              if (this.debugTileIds) {
+                // 半透明背景
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+                ctx.fillRect(1, 1, 28, 14);
+                // ID文字
+                ctx.fillStyle = '#ffffff';
+                ctx.font = '10px Arial';
+                ctx.textAlign = 'left';
+                ctx.fillText(`${tileIndex}`, 3, 11);
+              }
             } else {
               // 瓦片超出范围，显示占位符
               ctx.fillStyle = '#2d3748';
@@ -1026,7 +1199,13 @@
         document.getElementById('btnClearMap').addEventListener('click', () => this.clearAllTiles());
         document.getElementById('btnExportMinimap').addEventListener('click', () => this.exportMinimap());
         document.getElementById('btnExportAnim').addEventListener('click', () => this.exportAnimationFile());
-        
+
+        // ★ 新增：图层管理事件
+        this.initLayerEvents();
+
+        // ★ 新增：物体管理事件
+        this.initObjectEvents();
+
         // 分类筛选
         document.querySelectorAll('.category-btn').forEach(btn => {
           btn.addEventListener('click', (e) => {
@@ -1137,14 +1316,26 @@
               }
 
               // 最终确定图集列数
+              // ★ 关键修复：如果地图文件已经设置了tilesetCols，保留它（优先级最高）
+              // 这确保导入地图后再加载图集时不会覆盖正确的列数设置
               if (this.tilesetMetadata && this.tilesetMetadata.columns > 0) {
-                this.tilesetCols = this.tilesetMetadata.columns;
-                console.log(`📐 使用元数据的图集列数: ${this.tilesetCols}`);
+                // 只有当未从地图文件读取过列数时，才使用元数据
+                if (!this._mapFileTilesetColsSet) {
+                  this.tilesetCols = this.tilesetMetadata.columns;
+                  console.log(`📐 使用元数据的图集列数: ${this.tilesetCols}`);
+                } else {
+                  console.log(`📐 保留地图文件的tilesetCols=${this.tilesetCols}，忽略元数据`);
+                }
               // ★ 关键修复：统一使用 Math.floor 与 CreateTileset 保持一致
               // Math.round 在图片宽度非整数倍时会导致列数多1，造成瓦片错位
               } else if (img.width > 0 && img.height > 0) {
-                this.tilesetCols = Math.floor(img.width / this.tileSize);
-                console.log(`⚠️ 无元数据，按图片宽度推断列数: ${this.tilesetCols} (${img.width}px / ${this.tileSize}px) [使用Math.floor]`);
+                // 只有当未从地图文件读取过列数时，才按图片宽度计算
+                if (!this._mapFileTilesetColsSet) {
+                  this.tilesetCols = Math.floor(img.width / this.tileSize);
+                  console.log(`⚠️ 无元数据，按图片宽度推断列数: ${this.tilesetCols} (${img.width}px / ${this.tileSize}px) [使用Math.floor]`);
+                } else {
+                  console.log(`📐 保留地图文件的tilesetCols=${this.tilesetCols}，忽略图片计算`);
+                }
               }
 
               status.textContent = this.tilesetMetadata ? '已加载(有元数据)' : '已加载';
@@ -1278,9 +1469,14 @@
         if (!this.tilesetMetadata || !this.tilesetMetadata.tiles) return;
 
         // 从元数据读取图集列数（关键：确保瓦片正确定位）
+        // ★ 关键修复：如果已经从地图文件读取过列数，保留它
         if (this.tilesetMetadata.columns && this.tilesetMetadata.columns > 0) {
-          this.tilesetCols = this.tilesetMetadata.columns;
-          console.log(`✅ 从元数据更新图集列数为: ${this.tilesetCols}`);
+          if (!this._mapFileTilesetColsSet) {
+            this.tilesetCols = this.tilesetMetadata.columns;
+            console.log(`✅ 从元数据更新图集列数为: ${this.tilesetCols}`);
+          } else {
+            console.log(`✅ 保留地图文件的tilesetCols=${this.tilesetCols}，忽略元数据`);
+          }
         }
 
         this.customTileTypes = this.tilesetMetadata.tiles.map(tile => ({
@@ -1493,6 +1689,16 @@
         this.mapWidth = mapData.width;
         this.mapHeight = mapData.height;
         this.tiles = mapData.tiles;
+        
+        // ★ 关键修复：如果地图文件中包含tilesetCols，使用它来保持一致性
+        // 这确保导入后渲染时使用与导出时相同的图集列数
+        if (mapData.tilesetCols && mapData.tilesetCols > 0) {
+          console.log(`📐 从地图文件读取tilesetCols=${mapData.tilesetCols}`);
+          this.tilesetCols = mapData.tilesetCols;
+          // 设置标记，表示tilesetCols是从地图文件读取的，后续加载图集时不应覆盖
+          this._mapFileTilesetColsSet = true;
+        }
+        
         this.initCanvas();
         this.render();
         this.updateStatus();
@@ -1532,46 +1738,42 @@
         
         ctx.save();
         
+        // 清空整个画布（使用画布实际像素尺寸）
+        ctx.fillStyle = '#16213e';
+        ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+        
         // 应用缩放
         ctx.scale(this.zoom, this.zoom);
-        
-        // 清空画布
-        const displayWidth = ctx.canvas.width / this.zoom;
-        const displayHeight = ctx.canvas.height / this.zoom;
-        ctx.fillStyle = '#16213e';
-        ctx.fillRect(0, 0, displayWidth, displayHeight);
-        
-        // 批量绘制网格
-        ctx.strokeStyle = '#2d3748';
-        ctx.lineWidth = 0.5;
-        
-        ctx.beginPath();
-        for (let x = 0; x <= mw; x++) {
-          ctx.moveTo(x * ts, 0);
-          ctx.lineTo(x * ts, mh * ts);
-        }
-        for (let y = 0; y <= mh; y++) {
-          ctx.moveTo(0, y * ts);
-          ctx.lineTo(mw * ts, y * ts);
-        }
-        ctx.stroke();
         
         // 绘制瓦片（优化：减少函数调用）
         if (this.tileset) {
           // 使用图集渲染
-          const cols = this.tilesetCols;
-          const maxTileX = this.tileset.width - ts;  // 图集最大有效x坐标
-          const maxTileY = this.tileset.height - ts;  // 图集最大有效y坐标
+          // ★ 关键修复：强制使用图集的实际列数（从图片尺寸计算）
+          // 避免tilesetCols被错误修改导致渲染错位
+          const actualCols = Math.floor(this.tileset.width / ts);
+          const cols = actualCols > 0 ? actualCols : this.tilesetCols;
+          // ★ 关键修复：边界检查应该允许等于图集尺寸（瓦片右边界）
+          const maxTileX = this.tileset.width - ts;  // 图集最大有效x坐标（左上角）
+          const maxTileY = this.tileset.height - ts;  // 图集最大有效y坐标（左上角）
+          
+          // ★ 调试：检查渲染时的列数
+          console.log(`🎨 渲染时: tilesetCols=${this.tilesetCols}, 实际列数=${actualCols}, 使用列数=${cols}, 图集宽度=${this.tileset.width}, tileSize=${ts}`);
 
           for (let y = 0; y < mh; y++) {
             for (let x = 0; x < mw; x++) {
               const tile = this.tiles[y] && this.tiles[y][x] ? this.tiles[y][x] : { low: 0, high: 0, attr: 0 };
+
+              // ★ 调试：打印关键瓦片的渲染信息（特别是ID=256附近）
+              if ((y === 7 && x >= 24) || (y === 8 && x < 3)) {
+                console.log(`🔍 关键位置(${x},${y}): 瓦片ID=${tile.low}, cols=${cols}, UV计算: sx=${((tile.low - 1) % cols) * ts}, sy=${Math.floor((tile.low - 1) / cols) * ts}, 预期行=${Math.floor((tile.low - 1) / cols)}, 预期列=${(tile.low - 1) % cols}`);
+              }
 
               // 空瓦片(low=0)跳过绘制，显示透明/背景色
               if (!tile.low) {
                 continue;
               }
 
+              // 计算瓦片在图集中的UV坐标
               const tileIdx = tile.low - 1;
               const sx = (tileIdx % cols) * ts;
               const sy = Math.floor(tileIdx / cols) * ts;
@@ -1581,8 +1783,21 @@
               // 边界检查：确保源坐标在图集范围内
               if (sx >= 0 && sy >= 0 && sx <= maxTileX && sy <= maxTileY) {
                 ctx.drawImage(this.tileset, sx, sy, ts, ts, px, py, ts, ts);
+                
+                // ★ 调试功能：在瓦片上显示ID号（当DEBUG_TILE_IDS开启时）
+                if (this.debugTileIds) {
+                  // 半透明背景
+                  ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+                  ctx.fillRect(px + 1, py + 1, Math.min(28, ts - 2), Math.min(16, ts / 3));
+                  // ID文字
+                  ctx.fillStyle = '#ffffff';
+                  ctx.font = `${Math.max(9, ts / 5)}px Arial`;
+                  ctx.textAlign = 'left';
+                  ctx.fillText(`${tile.low}`, px + 3, py + 12);
+                }
               } else {
-                // 瓦片索引超出图集范围，绘制占位符
+                // 瓦片索引超出图集范围，绘制占位符并记录错误
+                console.warn(`⚠️ 瓦片(${x},${y})索引${tile.low}超出图集范围: sx=${sx}, sy=${sy}, maxTileX=${maxTileX}, maxTileY=${maxTileY}`);
                 ctx.fillStyle = '#2d3748';
                 ctx.fillRect(px + 1, py + 1, ts - 2, ts - 2);
                 ctx.fillStyle = '#718096';
@@ -1596,7 +1811,7 @@
                 ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
                 ctx.fillRect(px + 1, py + 1, ts - 2, ts - 2);
                 ctx.strokeStyle = '#ff0000';
-                ctx.lineWidth = 2;
+                ctx.lineWidth = 2 / this.zoom;
                 ctx.beginPath();
                 ctx.moveTo(px + 6, py + 6);
                 ctx.lineTo(px + ts - 6, py + ts - 6);
@@ -1628,7 +1843,7 @@
                 ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
                 ctx.fillRect(px + 1, py + 1, ts - 2, ts - 2);
                 ctx.strokeStyle = '#ff0000';
-                ctx.lineWidth = 2;
+                ctx.lineWidth = 2 / this.zoom;
                 ctx.beginPath();
                 ctx.moveTo(px + 6, py + 6);
                 ctx.lineTo(px + ts - 6, py + ts - 6);
@@ -1639,6 +1854,21 @@
             }
           }
         }
+        
+        // 绘制网格（线宽除以缩放比例，确保网格线粗细一致）
+        ctx.strokeStyle = '#2d3748';
+        ctx.lineWidth = 0.5 / this.zoom;
+        
+        ctx.beginPath();
+        for (let x = 0; x <= mw; x++) {
+          ctx.moveTo(x * ts, 0);
+          ctx.lineTo(x * ts, mh * ts);
+        }
+        for (let y = 0; y <= mh; y++) {
+          ctx.moveTo(0, y * ts);
+          ctx.lineTo(mw * ts, y * ts);
+        }
+        ctx.stroke();
         
         // 绘制选择区域
         if (this.selection && this.selection.active) {
@@ -1665,13 +1895,21 @@
         if (this.isPreviewingAnimation) {
           this.animationSystem.render(ctx, ts, this.tileset);
         }
-        
+
+        // ★ 新增：分层渲染物体对象
+        this.renderLayeredObjects(ctx, ts);
+
         ctx.restore();
       }
       
       // 绘制选择区域
       drawSelection() {
         const { startX, startY, endX, endY } = this.normalizeSelection();
+        
+        this.ctx.save();
+        
+        // 应用缩放（与 render 函数一致）
+        this.ctx.scale(this.zoom, this.zoom);
         
         // 半透明蓝色填充
         this.ctx.fillStyle = 'rgba(66, 153, 225, 0.3)';
@@ -1694,10 +1932,156 @@
         );
         this.ctx.setLineDash([]);
         
+        this.ctx.restore();
+        
         // 更新选区大小显示
         this.updateSelectionDisplay();
       }
-      
+
+      // ★ 新增：分层渲染物体对象（在原有render方法中调用）
+      renderLayeredObjects(ctx, ts) {
+        // 按图层顺序绘制物体对象
+        for (let layer = 1; layer <= 2; layer++) {
+          // 检查该图层是否可见
+          if (!this.layerVisibility[layer]) continue;
+
+          // 绘制该图层的独立物体对象
+          this.mapObjects.filter(obj => obj.layer === layer).forEach(obj => {
+            // 使用原有的drawTile方法绘制物体瓦片
+            this.drawTile(obj.x, obj.y, { low: obj.tileId, high: 0, attr: 0 });
+
+            // 绘制物体边框（选中高亮）
+            if (this.selectedObject && this.selectedObject.id === obj.id) {
+              ctx.strokeStyle = '#e94560';
+              ctx.lineWidth = 2;
+              ctx.strokeRect(
+                obj.x * ts + 1,
+                obj.y * ts + 1,
+                ts - 2,
+                ts - 2
+              );
+
+              // 绘制选中标记
+              ctx.fillStyle = '#e94560';
+              ctx.font = 'bold 10px monospace';
+              ctx.fillText('●', obj.x * ts + ts - 10, obj.y * ts + 12);
+            }
+          });
+        }
+      }
+
+      // ★ 新增：绘制物体放置预览（在鼠标移动时调用）
+      drawObjectPreview() {
+        if (!this.lastMousePos || !this.currentTile || !this.isObjectMode) return;
+
+        const ctx = this.ctx;
+        const ts = this.tileSize;
+        const { x, y } = this.lastMousePos;
+
+        // 边界检查
+        if (x < 0 || x >= this.mapWidth || y < 0 || y >= this.mapHeight) return;
+
+        // 半透明预览
+        ctx.save();
+        
+        // 应用缩放（与 render 函数一致）
+        ctx.scale(this.zoom, this.zoom);
+        
+        ctx.globalAlpha = 0.5;
+        this.drawTile(x, y, { low: this.currentTile.low, high: 0, attr: 0 });
+        ctx.globalAlpha = 1.0;
+
+        // 绘制预览边框
+        ctx.strokeStyle = '#e94560';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 4]);
+        ctx.strokeRect(x * ts, y * ts, ts, ts);
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
+
+      // ★ 新增：在鼠标移动事件中调用物体预览
+      updateMousePosition(e) {
+        const rect = this.canvas.getBoundingClientRect();
+        const x = Math.floor((e.clientX - rect.left) / this.tileSize / this.zoom);
+        const y = Math.floor((e.clientY - rect.top) / this.tileSize / this.zoom);
+
+        // 边界检查
+        if (x >= 0 && x < this.mapWidth && y >= 0 && y < this.mapHeight) {
+          this.lastMousePos = { x, y };
+
+          // 如果是物体模式，绘制预览
+          if (this.isObjectMode) {
+            this.drawObjectPreview();
+          } else {
+            // 原有的悬停预览逻辑（绘制半透明瓦片预览）
+            this.drawHoverPreview();
+          }
+        }
+      }
+
+      // ★ 新增：绘制鼠标悬停时的瓦片预览
+      drawHoverPreview() {
+        if (!this.lastMousePos || !this.currentTile || this.isObjectMode) return;
+        if (!this.ctx || this.isDrawing) return;  // 绘制中不显示预览
+
+        const ctx = this.ctx;
+        const ts = this.tileSize;
+        const { x, y } = this.lastMousePos;
+
+        // 边界检查
+        if (x < 0 || x >= this.mapWidth || y < 0 || y >= this.mapHeight) return;
+
+        ctx.save();
+
+        // 应用缩放（与 render 函数一致）
+        ctx.scale(this.zoom, this.zoom);
+
+        // 半透明预览
+        ctx.globalAlpha = 0.3;
+        
+        // 使用直接绘制方法，不修改瓦片数据
+        this.drawTileToCanvas(ctx, x, y, { low: this.currentTile.low, high: 0, attr: 0 });
+        
+        ctx.globalAlpha = 1.0;
+
+        // 绘制预览边框
+        ctx.strokeStyle = '#4299e1';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 2]);
+        ctx.strokeRect(x * ts, y * ts, ts, ts);
+        ctx.setLineDash([]);
+
+        ctx.restore();
+      }
+
+      // 直接绘制瓦片到画布（不修改数据，用于预览）
+      drawTileToCanvas(ctx, x, y, tile) {
+        const ts = this.tileSize;
+        const px = x * ts;
+        const py = y * ts;
+
+        if (!tile || tile.low <= 0) return;
+
+        if (this.tileset) {
+          const cols = this.tilesetCols;
+          const tileIdx = tile.low - 1;
+          const sx = (tileIdx % cols) * ts;
+          const sy = Math.floor(tileIdx / cols) * ts;
+
+          // 边界检查
+          if (sx >= 0 && sy >= 0 && sx + ts <= this.tileset.width && sy + ts <= this.tileset.height) {
+            ctx.drawImage(this.tileset, sx, sy, ts, ts, px, py, ts, ts);
+          }
+        } else {
+          // 使用颜色块渲染
+          const tileType = this.tileTypeIndex.get(tile.low);
+          const color = tileType ? tileType.color : '#ff00ff';
+          ctx.fillStyle = color;
+          ctx.fillRect(px + 1, py + 1, ts - 2, ts - 2);
+        }
+      }
+
       // 绘制单个瓦片（优化版本）
       drawTile(x, y, tile) {
         // 使用索引表快速查找瓦片类型
@@ -1715,8 +2099,15 @@
         // 如果有瓦片图集，使用图集渲染
         if (this.tileset) {
           const ts = this.tileSize;
-          const sx = ((tile.low - 1) % this.tilesetCols) * ts;
-          const sy = Math.floor((tile.low - 1) / this.tilesetCols) * ts;
+          // ★ 添加调试信息，检查 tilesetCols 是否正确
+          if (x === 0 && y === 0 && !this._renderDebugLogged) {
+            console.log(`📐 渲染调试: tilesetCols=${this.tilesetCols}, tileSize=${ts}, 图集宽度=${this.tileset.width}`);
+            this._renderDebugLogged = true;
+          }
+          // ★ 关键修复：处理空瓦片(low=0)，使用默认瓦片(low=1)避免UV计算错误
+          const tileIndex = tile.low || 1;
+          const sx = ((tileIndex - 1) % this.tilesetCols) * ts;
+          const sy = Math.floor((tileIndex - 1) / this.tilesetCols) * ts;
           this.ctx.drawImage(
             this.tileset,
             sx, sy, ts, ts,
@@ -1748,8 +2139,15 @@
       // 获取鼠标位置对应的瓦片坐标
       getTilePos(e) {
         const rect = this.canvas.getBoundingClientRect();
-        const x = Math.floor((e.clientX - rect.left) / this.tileSize / this.zoom);
-        const y = Math.floor((e.clientY - rect.top) / this.tileSize / this.zoom);
+        // 计算鼠标相对于 canvas 的位置（CSS 尺寸 = 像素尺寸）
+        const canvasX = e.clientX - rect.left;
+        const canvasY = e.clientY - rect.top;
+        
+        // 由于 render 中使用了 ctx.scale(this.zoom, this.zoom)，绘制内容被放大
+        // 所以需要除以 zoom 得到逻辑坐标，再除以 tileSize 得到瓦片坐标
+        const x = Math.floor(canvasX / this.zoom / this.tileSize);
+        const y = Math.floor(canvasY / this.zoom / this.tileSize);
+        
         return { x, y };
       }
       
@@ -1791,13 +2189,25 @@
       // 鼠标移动
       onMouseMove(e) {
         const { x, y } = this.getTilePos(e);
-        
+
         // 更新状态栏
         document.getElementById('statusPos').textContent = `${x}, ${y}`;
-        
+
+        // ★ 新增：更新鼠标位置并绘制预览
+        this.lastMousePos = { x, y };
+        if (!this.isDrawing) {
+          // 先重绘地图清除之前的预览痕迹，再绘制新的预览
+          this.render();
+          if (this.isObjectMode) {
+            this.drawObjectPreview();
+          } else {
+            this.drawHoverPreview();
+          }
+        }
+
         if (!this.isDrawing) return;
         if (x < 0 || y < 0 || x >= this.mapWidth || y >= this.mapHeight) return;
-        
+
         if (this.currentTool === 'pen' && (x !== this.lastX || y !== this.lastY)) {
           // 绘制线段
           this.drawLine(this.lastX, this.lastY, x, y, { ...this.currentTile });
@@ -1835,6 +2245,9 @@
       // 鼠标离开
       onMouseLeave() {
         this.onMouseUp();
+        // 清除悬停预览痕迹
+        this.lastMousePos = null;
+        this.render();
       }
       
       // 键盘按下
@@ -1855,6 +2268,16 @@
           this.setTool('select');
         } else if (e.key === 'i') {
           this.setTool('picker');
+        } else if (e.key === 'd' && !e.ctrlKey && !e.altKey) {
+          // 检查是否在输入框中
+          if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+          // ★ 调试功能：切换显示瓦片ID
+          this.debugTileIds = !this.debugTileIds;
+          this.render();
+          console.log(`🔍 调试瓦片ID: ${this.debugTileIds ? '开启' : '关闭'}`);
+          if (this.debugTileIds) {
+            alert('瓦片ID显示已开启！\n按 D 键可关闭。');
+          }
         }
       }
       
@@ -1981,6 +2404,8 @@
       setZoom(z) {
         this.zoom = Math.max(0.25, Math.min(4, z));
         document.getElementById('zoomValue').textContent = Math.round(this.zoom * 100) + '%';
+        
+        // 缩放通过 ctx.scale() 在渲染时处理，不修改 CSS 尺寸
         this.render();
       }
       
@@ -2085,8 +2510,8 @@
         document.getElementById('mapHeight').value = this.mapHeight;
         
         this.initMap();
-        this.canvas.width = this.mapWidth * this.tileSize;
-        this.canvas.height = this.mapHeight * this.tileSize;
+        // 使用 initCanvas 确保像素尺寸和 CSS 尺寸都正确设置
+        this.initCanvas();
         
         this.isModified = false;
         document.getElementById('statusModified').textContent = '否';
@@ -2122,40 +2547,21 @@
         input.click();
       }
       
-      // 从二进制加载
-      loadFromBinary(buffer) {
-        const view = new DataView(buffer);
-        let offset = 128;
+      // 从二进制加载（使用 importer 的 importMap 方法进行正确的格式检测）
+      async loadFromBinary(buffer) {
+        // ★ 关键修复：使用 importer 的 importMap 方法，它能正确检测文件格式
+        // 无论是 ATZMAP2 格式还是 MAPFILE 格式都能正确解析
+        const mapData = await this.importer._importMapFromBuffer(buffer);
         
-        if (offset >= buffer.byteLength) throw new Error('文件太小');
+        // 使用统一的 loadMapData 加载，确保 tilesetCols 和尺寸都被正确处理
+        this.loadMapData(mapData);
         
-        this.mapWidth = view.getUint16(offset, true);
-        offset += 2;
-        this.mapHeight = view.getUint16(offset, true);
-        offset += 2;
-        
-        document.getElementById('mapWidth').value = this.mapWidth;
-        document.getElementById('mapHeight').value = this.mapHeight;
-        
-        this.tiles = [];
-        for (let y = 0; y < this.mapHeight; y++) {
-          const row = [];
-          for (let x = 0; x < this.mapWidth; x++) {
-            if (offset + 3 > buffer.byteLength) break;
-            const low = view.getUint8(offset++);
-            const high = view.getUint8(offset++);
-            const attr = view.getUint8(offset++);
-            row.push({ low, high, attr });
-          }
-          this.tiles.push(row);
-        }
-        
-        this.canvas.width = this.mapWidth * this.tileSize;
-        this.canvas.height = this.mapHeight * this.tileSize;
+        document.getElementById('mapWidth').value = mapData.width;
+        document.getElementById('mapHeight').value = mapData.height;
         
         this.isModified = false;
         document.getElementById('statusModified').textContent = '否';
-        document.getElementById('statusSize').textContent = `${this.mapWidth} x ${this.mapHeight}`;
+        document.getElementById('statusSize').textContent = `${mapData.width} x ${mapData.height}`;
         this.saveHistory();
         this.render();
       }
@@ -2164,17 +2570,14 @@
       loadFromJson(jsonStr) {
         const data = JSON.parse(jsonStr);
         
-        this.mapWidth = data.width || 20;
-        this.mapHeight = data.height || 15;
-        document.getElementById('mapWidth').value = this.mapWidth;
-        document.getElementById('mapHeight').value = this.mapHeight;
-        document.getElementById('mapId').value = data.id || 1;
-        document.getElementById('mapName').value = data.name || '';
+        const width = data.width || 20;
+        const height = data.height || 15;
+        const tilesetCols = data.tilesetCols || 0;
         
-        this.tiles = [];
-        for (let y = 0; y < this.mapHeight; y++) {
+        const tiles = [];
+        for (let y = 0; y < height; y++) {
           const row = [];
-          for (let x = 0; x < this.mapWidth; x++) {
+          for (let x = 0; x < width; x++) {
             const tile = data.tiles ? data.tiles[y] ? data.tiles[y][x] : null : null;
             if (tile) {
               row.push({ low: tile.low || 0, high: tile.high || 0, attr: tile.attr || 0 });
@@ -2182,15 +2585,20 @@
               row.push({ low: 0, high: 0, attr: 0 });
             }
           }
-          this.tiles.push(row);
+          tiles.push(row);
         }
         
-        this.canvas.width = this.mapWidth * this.tileSize;
-        this.canvas.height = this.mapHeight * this.tileSize;
+        // ★ 关键修复：使用统一的 loadMapData 加载，确保 tilesetCols 被正确处理
+        this.loadMapData({ width, height, tiles, tilesetCols });
+        
+        document.getElementById('mapWidth').value = width;
+        document.getElementById('mapHeight').value = height;
+        document.getElementById('mapId').value = data.id || 1;
+        document.getElementById('mapName').value = data.name || '';
         
         this.isModified = false;
         document.getElementById('statusModified').textContent = '否';
-        document.getElementById('statusSize').textContent = `${this.mapWidth} x ${this.mapHeight}`;
+        document.getElementById('statusSize').textContent = `${width} x ${height}`;
         this.saveHistory();
         this.render();
       }
@@ -2226,7 +2634,7 @@
       // 导出二进制格式
       exportBinary() {
         const headerSize = 128;
-        const tileSize = 3;
+        const tileSize = 5; // ★ 修复：瓦片ID改为16位，每个瓦片占用5字节(low:2 + high:2 + attr:1)
         const buffer = new ArrayBuffer(headerSize + 2 + 2 + this.mapWidth * this.mapHeight * tileSize);
         const view = new Uint8Array(buffer);
 
@@ -2274,8 +2682,11 @@
         for (let y = 0; y < this.mapHeight; y++) {
           for (let x = 0; x < this.mapWidth; x++) {
             const tile = this.tiles[y][x];
-            view[offset++] = tile.low;
-            view[offset++] = tile.high;
+            // ★ 修复：瓦片ID改为16位(uint16 LE)，支持0-65535范围
+            view[offset++] = tile.low & 0xff;
+            view[offset++] = (tile.low >> 8) & 0xff;
+            view[offset++] = tile.high & 0xff;
+            view[offset++] = (tile.high >> 8) & 0xff;
             view[offset++] = tile.attr;
           }
         }
@@ -2421,6 +2832,7 @@
           width: this.mapWidth,
           height: this.mapHeight,
           tiles: this.tiles,
+          tilesetCols: this.tilesetCols,
           id: parseInt(document.getElementById('mapId').value) || 1
         };
         
@@ -2945,11 +3357,34 @@
       autoFillMapFromTileset() {
         if (!this.tilesetMetadata || !this.tilesetMetadata.tiles) return;
 
-        // ★ 唯一标准：始终使用图集图片的实际列数（统一使用 Math.floor）
-        // 这确保：地图数据中的瓦片ID → 游戏渲染器查找图集的位置 → 完全一致
-        const atlasCols = this.tileset && this.tileset.width > 0
-          ? Math.floor(this.tileset.width / this.tileSize)
-          : (this.tilesetMetadata.columns || this.tilesetCols);
+        // ★ 关键修复：使用统一的图集列数标准
+        // 优先级：元数据列数 > 图片宽度计算 > 当前tilesetCols
+        // 确保与渲染器使用的列数完全一致
+        let atlasCols = this.tilesetCols;  // 默认使用当前列数
+
+        // 如果有元数据且包含列数，优先使用元数据列数
+        if (this.tilesetMetadata.columns && this.tilesetMetadata.columns > 0) {
+          atlasCols = this.tilesetMetadata.columns;
+        }
+        // 如果有图集图片，计算图片实际列数
+        else if (this.tileset && this.tileset.width > 0) {
+          atlasCols = Math.floor(this.tileset.width / this.tileSize);
+        }
+
+        // 确保列数有效
+        if (atlasCols <= 0) {
+          console.log('⚠️ 无法确定图集列数，跳过自动填充');
+          return;
+        }
+
+        // 同步更新 tilesetCols，确保一致性
+        // ★ 关键修复：如果已经从地图文件读取过列数，保留它
+        if (!this._mapFileTilesetColsSet) {
+          this.tilesetCols = atlasCols;
+          console.log(`✅ autoFillMapFromTileset同步tilesetCols=${atlasCols}`);
+        } else {
+          console.log(`✅ autoFillMapFromTileset保留地图文件的tilesetCols=${this.tilesetCols}`);
+        }
 
         // 地图尺寸也用 atlasCols（确保地图网格与图集网格对齐）
         const totalTiles = this.tilesetMetadata.tiles.length;
@@ -3007,9 +3442,6 @@
           }
           this.tiles.push(row);
         }
-
-        // 同步更新 tilesetCols
-        this.tilesetCols = atlasCols;
 
         // 重新初始化画布并渲染
         this.initCanvas();
@@ -3076,41 +3508,62 @@
           return;
         }
         
-        // 从元数据获取原图的瓦片网格尺寸
-        const sourceCols = this.tilesetMetadata.sourceTileCols || this.tilesetCols;
-        const sourceRows = this.tilesetMetadata.sourceTileRows || Math.ceil(this.customTileTypes.length / this.tilesetCols);
+        // ★ 关键修复：强制使用图集的实际列数（从图片尺寸计算）
+        // 避免tilesetCols被错误修改导致生成错位的地图
+        const actualCols = this.tileset ? Math.floor(this.tileset.width / this.tileSize) : this.tilesetCols;
+        const mapCols = actualCols > 0 ? actualCols : this.tilesetCols;
         
-        if (sourceCols <= 0 || sourceRows <= 0) {
-          alert('元数据中没有原图尺寸信息，请使用新版CreateTileset.html生成图集');
+        console.log(`🔄 autoGenerateMap: 使用列数=${mapCols}, tilesetCols=${this.tilesetCols}, 图集宽度=${this.tileset?.width || '?'}, tileSize=${this.tileSize}`);
+        console.log(`📊 自定义瓦片类型数量: ${this.customTileTypes.length}, tileTypeIndex大小: ${this.tileTypeIndex.size}, maxTileId: ${Math.max(...Array.from(this.tileTypeIndex.keys()))}`);
+        const mapRows = Math.ceil(this.customTileTypes.length / mapCols);
+        
+        if (mapCols <= 0 || mapRows <= 0) {
+          alert('无法确定图集列数，请确保已正确加载图集');
           return;
         }
         
         // 确认是否要重新生成地图
-        const confirmMsg = `将根据图集原图布局自动生成 ${sourceCols} x ${sourceRows} 的地图，是否继续？`;
+        const confirmMsg = `将根据图集布局自动生成 ${mapCols} x ${mapRows} 的地图，是否继续？`;
         if (!confirm(confirmMsg)) return;
         
         // 保存历史
         this.saveHistory();
         
-        // 设置地图尺寸
-        this.mapWidth = sourceCols;
-        this.mapHeight = sourceRows;
+        // 设置地图尺寸（使用图集列数，确保瓦片ID定位正确）
+        this.mapWidth = mapCols;
+        this.mapHeight = mapRows;
         
         // 更新UI
-        document.getElementById('mapWidth').value = sourceCols;
-        document.getElementById('mapHeight').value = sourceRows;
+        document.getElementById('mapWidth').value = mapCols;
+        document.getElementById('mapHeight').value = mapRows;
         
-        // 初始化瓦片数组（按原图顺序自动填充）
+        // 初始化瓦片数组（按图集顺序自动填充，跳过空瓦片）
         this.tiles = [];
-        for (let y = 0; y < sourceRows; y++) {
+        const maxTileId = Math.max(...Array.from(this.tileTypeIndex.keys()));
+        let currentTileId = 1;
+        let lastValidTileId = 1; // 记录最后一个有效瓦片ID
+        
+        for (let y = 0; y < mapRows; y++) {
           const row = [];
-          for (let x = 0; x < sourceCols; x++) {
-            // 计算原图中的瓦片索引
-            const sourceIndex = y * sourceCols + x;
+          for (let x = 0; x < mapCols; x++) {
+            // ★ 跳过空瓦片（ID不在索引中）
+            while (currentTileId <= maxTileId && !this.tileTypeIndex.has(currentTileId)) {
+              currentTileId++;
+            }
             
             // 获取瓦片属性
-            const tileInfo = this.tileTypeIndex.get(sourceIndex + 1);
-            const low = sourceIndex + 1;
+            const tileInfo = this.tileTypeIndex.get(currentTileId);
+            
+            // ★ 如果遍历完毕，使用最后一个有效瓦片ID填充剩余格子
+            const tileIdToUse = currentTileId > maxTileId ? lastValidTileId : currentTileId;
+            
+            // 更新最后一个有效ID（只在有效范围内更新）
+            if (currentTileId <= maxTileId) {
+              lastValidTileId = currentTileId;
+              currentTileId++; // 准备下一个瓦片
+            }
+            
+            const low = tileIdToUse;
             const high = tileInfo && tileInfo.layer === 1 ? 1 : 0;
             // attr字段有最高优先级，这是千年游戏的标准格式
             const attr = tileInfo && tileInfo.attr === 1 ? 1 : 0;
@@ -3126,18 +3579,23 @@
 
         // ★ 关键修复：同步更新 tilesetCols 为图集实际列数
         // 确保后续导出.map文件时写入正确的列数值到文件头[124]
-        if (this.tilesetMetadata && this.tilesetMetadata.columns > 0) {
-          this.tilesetCols = this.tilesetMetadata.columns;
-        } else if (this.tileset && this.tileset.width > 0) {
-          this.tilesetCols = Math.floor(this.tileset.width / this.tileSize);
+        // ★ 关键修复：如果已经从地图文件读取过列数，保留它
+        if (!this._mapFileTilesetColsSet) {
+          if (this.tilesetMetadata && this.tilesetMetadata.columns > 0) {
+            this.tilesetCols = this.tilesetMetadata.columns;
+          } else if (this.tileset && this.tileset.width > 0) {
+            this.tilesetCols = Math.floor(this.tileset.width / this.tileSize);
+          }
+          console.log(`✅ autoGenerateMap已同步tilesetCols=${this.tilesetCols} (来源: ${this.tilesetMetadata ? '元数据' : '图片宽度计算'})`);
+        } else {
+          console.log(`✅ autoGenerateMap保留地图文件的tilesetCols=${this.tilesetCols}`);
         }
-        console.log(`✅ autoGenerateMap已同步tilesetCols=${this.tilesetCols} (来源: ${this.tilesetMetadata ? '元数据' : '图片宽度计算'})`);
 
         this.isModified = true;
         document.getElementById('statusModified').textContent = '是';
         
-        console.log(`自动生成地图完成: ${sourceCols} x ${sourceRows} 瓦片`);
-        alert(`地图自动生成完成！\n尺寸: ${sourceCols} x ${sourceRows} 瓦片\n您可以在此基础上进行微调编辑。`);
+        console.log(`自动生成地图完成: ${mapCols} x ${mapRows} 瓦片`);
+        alert(`地图自动生成完成！\n尺寸: ${mapCols} x ${mapRows} 瓦片\n您可以在此基础上进行微调编辑。`);
       }
       
       // 导出小地图PNG
@@ -3178,8 +3636,543 @@
         
         console.log(`小地图导出完成: ${this.mapWidth} x ${this.mapHeight}`);
       }
+
+      // ================================================
+      // ★ 新增：三层地图系统 - 图层管理功能
+      // ================================================
+
+      /**
+       * 初始化图层系统UI和状态
+       */
+      initLayerSystem() {
+      console.log('🗂️ 初始化三层地图图层系统');
+
+      // 更新图层计数显示
+      this.updateLayerCounts();
+
+      // 设置初始图层名称显示
+      document.getElementById('currentLayerName').textContent = this.getLayerName(0);
     }
-    
+
+    /**
+     * 初始化图层相关事件绑定
+     */
+    initLayerEvents() {
+      // 图层选择事件（点击切换当前编辑图层）
+      document.querySelectorAll('.layer-item').forEach(item => {
+        item.addEventListener('click', (e) => {
+          // 如果点击的是checkbox，不切换图层
+          if (e.target.type === 'checkbox') return;
+
+          const layer = parseInt(item.dataset.layer);
+          this.setLayer(layer);
+        });
+      });
+
+      // 图层可见性切换
+      for (let i = 0; i < 3; i++) {
+        const checkbox = document.getElementById(`layerVisible${i}`);
+        if (checkbox) {
+          checkbox.addEventListener('change', (e) => {
+            this.toggleLayerVisibility(i, e.target.checked);
+          });
+        }
+      }
+
+      // 显示/隐藏全部图层按钮
+      document.getElementById('btnToggleAllLayers')?.addEventListener('click', () => {
+        const allVisible = this.layerVisibility.every(v => v);
+        const newState = !allVisible;
+
+        for (let i = 0; i < 3; i++) {
+          this.layerVisibility[i] = newState;
+          const checkbox = document.getElementById(`layerVisible${i}`);
+          if (checkbox) checkbox.checked = newState;
+        }
+
+        console.log(`🗂️ ${newState ? '显示' : '隐藏'}全部图层`);
+        this.render();
+      });
+
+      // 图层下拉框变化时更新当前编辑图层
+      document.getElementById('tileLayer')?.addEventListener('change', (e) => {
+        this.setLayer(parseInt(e.target.value));
+      });
+    }
+
+    /**
+     * 设置当前编辑的图层
+     */
+    setLayer(layer) {
+      if (layer < 0 || layer > 2) return;
+
+      this.currentLayer = layer;
+
+      // 更新UI状态
+      document.querySelectorAll('.layer-item').forEach(item => {
+        item.classList.remove('active');
+        if (parseInt(item.dataset.layer) === layer) {
+          item.classList.add('active');
+        }
+      });
+
+      // 更新下拉框
+      const layerSelect = document.getElementById('tileLayer');
+      if (layerSelect) layerSelect.value = layer;
+
+      // 更新显示名称
+      document.getElementById('currentLayerName').textContent = this.getLayerName(layer);
+
+      console.log(`🗂️ 切换到图层: ${this.getLayerName(layer)} (${layer})`);
+      this.render();
+    }
+
+    /**
+     * 切换图层可见性
+     */
+    toggleLayerVisibility(layer, visible) {
+      this.layerVisibility[layer] = visible;
+      console.log(`🗂️ 图层${layer} (${this.getLayerName(layer)}) 可见性: ${visible ? '显示' : '隐藏'}`);
+      this.render();
+    }
+
+    /**
+     * 获取图层名称
+     */
+    getLayerName(layer) {
+      const names = ['地面层', '物体层', '覆盖层'];
+      return names[layer] || `未知(${layer})`;
+    }
+
+    /**
+     * 更新各图层的瓦片/物体计数显示
+     */
+    updateLayerCounts() {
+      let counts = [0, 0, 0];
+
+      // 统计瓦片数据中的各层数量
+      this.tiles.forEach(row => {
+        row.forEach(tile => {
+          if (tile.low > 0) counts[0]++;
+          if (tile.high > 0 && tile.high <= 128) counts[1]++;
+          if (tile.attr === 2 || tile.high > 128) counts[2]++;
+        });
+      });
+
+      // 加上独立物体的数量
+      counts[1] += this.mapObjects.filter(o => o.layer === 1).length;
+      counts[2] += this.mapObjects.filter(o => o.layer === 2).length;
+
+      // 更新UI显示
+      for (let i = 0; i < 3; i++) {
+        const el = document.getElementById(`layerCount${i}`);
+        if (el) el.textContent = counts[i];
+      }
+    }
+
+    // ================================================
+    // ★ 新增：物体管理系统
+    // ================================================
+
+    /**
+     * 初始化物体系统
+     */
+    initObjectSystem() {
+      console.log('🎯 初始化物体管理系统');
+      this.updateObjectList();
+    }
+
+    /**
+     * 初始化物体相关事件绑定
+     */
+    initObjectEvents() {
+      // 物体放置模式切换按钮
+      document.getElementById('btnAddObjectMode')?.addEventListener('click', () => {
+        this.toggleObjectMode();
+      });
+
+      // 清除所有物体按钮
+      document.getElementById('btnClearObjects')?.addEventListener('click', () => {
+        if (this.mapObjects.length === 0) {
+          alert('当前没有物体');
+          return;
+        }
+        if (confirm(`确定要清除所有 ${this.mapObjects.length} 个物体吗？`)) {
+          this.clearAllObjects();
+        }
+      });
+
+      // 键盘快捷键：O键切换物体模式
+      document.addEventListener('keydown', (e) => {
+        if (e.key.toLowerCase() === 'o' && !e.ctrlKey && !e.altKey) {
+          // 检查是否在输入框中
+          if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+          this.toggleObjectMode();
+        }
+        // Esc键退出物体模式
+        if (e.key === 'Escape' && this.isObjectMode) {
+          this.toggleObjectMode();
+        }
+        // Delete键删除选中物体
+        if ((e.key === 'Delete' || e.key === 'Backspace') && this.selectedObject) {
+          if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+          this.removeSelectedObject();
+        }
+      });
+
+      // ★ 关键：画布拖拽事件（用于放置和移动物体）
+      this.initCanvasDragEvents();
+    }
+
+    /**
+     * 初始化画布拖拽事件（支持物体放置和移动）
+     */
+    initCanvasDragEvents() {
+      const canvas = document.getElementById('mapCanvas');
+      if (!canvas) return;
+
+      let isDragging = false;
+      let dragTarget = null;  // 'new' | 'existing' | null
+      let dragStartTileX = 0;
+      let dragStartTileY = 0;
+
+      // 鼠标按下
+      canvas.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;  // 只响应左键
+
+        const rect = canvas.getBoundingClientRect();
+        const x = Math.floor((e.clientX - rect.left) / this.tileSize / this.zoom);
+        const y = Math.floor((e.clientY - rect.top) / this.tileSize / this.zoom);
+
+        // 边界检查
+        if (x < 0 || x >= this.mapWidth || y < 0 || y >= this.mapHeight) return;
+
+        // 物体放置模式下：点击放置新物体
+        if (this.isObjectMode && this.currentTile) {
+          isDragging = true;
+          dragTarget = 'new';
+          dragStartTileX = x;
+          dragStartTileY = y;
+          return;
+        }
+
+        // 非物体模式下：检查是否点击了已有物体（用于拖拽移动）
+        const clickedObj = this.getObjectAt(x, y);
+        if (clickedObj) {
+          isDragging = true;
+          dragTarget = 'existing';
+          this.selectObject(clickedObj);
+          dragStartTileX = x;
+          dragStartTileY = y;
+          canvas.style.cursor = 'grabbing';
+          return;
+        }
+
+        // 否则取消选中
+        this.selectObject(null);
+      });
+
+      // 鼠标移动
+      canvas.addEventListener('mousemove', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const x = Math.floor((e.clientX - rect.left) / this.tileSize / this.zoom);
+        const y = Math.floor((e.clientY - rect.top) / this.tileSize / this.zoom);
+
+        // 边界检查
+        if (x < 0 || x >= this.mapWidth || y < 0 || y >= this.mapHeight) return;
+
+        // 拖拽中
+        if (isDragging && dragTarget === 'existing' && this.selectedObject) {
+          // 实时移动物体（视觉反馈）
+          this.moveObject(this.selectedObject.id, x, y);
+          this.render();
+        }
+
+        // 更新鼠标样式（悬停在物体上时显示抓取手势）
+        if (!isDragging) {
+          const hoverObj = this.getObjectAt(x, y);
+          canvas.style.cursor = hoverObj ? 'grab' : 'crosshair';
+        }
+      });
+
+      // 鼠标释放
+      canvas.addEventListener('mouseup', (e) => {
+        if (!isDragging) return;
+
+        const rect = canvas.getBoundingClientRect();
+        const x = Math.floor((e.clientX - rect.left) / this.tileSize / this.zoom);
+        const y = Math.floor((e.clientY - rect.top) / this.tileSize / this.zoom);
+
+        // 边界检查
+        if (x < 0 || x >= this.mapWidth || y < 0 || y >= this.mapHeight) {
+          isDragging = false;
+          canvas.style.cursor = 'crosshair';
+          return;
+        }
+
+        if (dragTarget === 'new' && this.isObjectMode) {
+          // 放置新物体
+          this.addObject({
+            x: x,
+            y: y,
+            tileId: this.currentTile.low,
+            layer: this.currentLayer,
+            animType: ''
+          });
+        } else if (dragTarget === 'existing' && this.selectedObject) {
+          // 确认移动物体位置
+          console.log(`🎯 物体移动到 (${x}, ${y})`);
+        }
+
+        isDragging = false;
+        dragTarget = null;
+        canvas.style.cursor = 'crosshair';
+        this.saveHistory();  // 保存历史记录
+      });
+
+      // 鼠标离开画布
+      canvas.addEventListener('mouseleave', () => {
+        if (isDragging) {
+          isDragging = false;
+          dragTarget = null;
+          canvas.style.cursor = 'crosshair';
+        }
+      });
+    }
+
+    /**
+     * 切换物体放置模式
+     */
+    toggleObjectMode() {
+      this.isObjectMode = !this.isObjectMode;
+
+      const indicator = document.getElementById('objectModeIndicator');
+      const btn = document.getElementById('btnAddObjectMode');
+
+      if (this.isObjectMode) {
+        indicator?.classList.add('active');
+        btn?.classList.add('active');
+        btn.textContent = '❌ 退出物体模式 [O]';
+        console.log('🎯 进入物体放置模式 - 点击地图放置物体');
+      } else {
+        indicator?.classList.remove('active');
+        btn?.classList.remove('active');
+        btn.textContent = '🎯 物体放置模式 [O]';
+        console.log('退出物体放置模式');
+      }
+
+      // 更新鼠标样式
+      const canvas = document.getElementById('mapCanvas');
+      if (canvas) {
+        canvas.style.cursor = this.isObjectMode ? 'copy' : 'crosshair';
+      }
+    }
+
+    /**
+     * 添加物体到地图
+     */
+    addObject(objData) {
+      const newObj = {
+        id: Date.now() + Math.random(),  // 唯一ID
+        x: objData.x,
+        y: objData.y,
+        tileId: objData.tileId || this.currentTile.low,
+        layer: objData.layer ?? this.currentLayer,
+        zIndex: this.calculateZIndex(objData.x, objData.y, objData.layer ?? this.currentLayer),
+        animType: objData.animType || '',
+        properties: objData.properties || {},
+        name: `物体#${this.mapObjects.length + 1}`
+      };
+
+      this.mapObjects.push(newObj);
+      this.isModified = true;
+
+      console.log(`✅ 添加物体: ${newObj.name} @ (${newObj.x}, ${newObj.y}), 图层=${this.getLayerName(newObj.layer)}, 瓦片ID=${newObj.tileId}`);
+
+      // 更新UI
+      this.updateObjectList();
+      this.updateLayerCounts();
+      this.render();
+
+      return newObj;
+    }
+
+    /**
+     * 移除物体
+     */
+    removeObject(objectId) {
+      const idx = this.mapObjects.findIndex(o => o.id === objectId);
+      if (idx >= 0) {
+        const removed = this.mapObjects.splice(idx, 1)[0];
+        console.log(`🗑️ 移除物体: ${removed.name}`);
+
+        if (this.selectedObject && this.selectedObject.id === objectId) {
+          this.selectedObject = null;
+        }
+
+        this.updateObjectList();
+        this.updateLayerCounts();
+        this.render();
+        return true;
+      }
+      return false;
+    }
+
+    /**
+     * 移除当前选中的物体
+     */
+    removeSelectedObject() {
+      if (this.selectedObject) {
+        this.removeObject(this.selectedObject.id);
+        this.saveHistory();
+      }
+    }
+
+    /**
+     * 移动物体位置
+     */
+    moveObject(objectId, newX, newY) {
+      const obj = this.mapObjects.find(o => o.id === objectId);
+      if (obj) {
+        // 边界限制
+        newX = Math.max(0, Math.min(newX, this.mapWidth - 1));
+        newY = Math.max(0, Math.min(newY, this.mapHeight - 1));
+
+        obj.x = newX;
+        obj.y = newY;
+        obj.zIndex = this.calculateZIndex(newX, newY, obj.layer);
+        return true;
+      }
+      return false;
+    }
+
+    /**
+     * 选中物体
+     */
+    selectObject(obj) {
+      this.selectedObject = obj;
+
+      // 更新UI
+      document.querySelectorAll('.object-item').forEach(el => {
+        el.classList.remove('selected');
+        if (obj && el.dataset.objId == obj.id) {
+          el.classList.add('selected');
+        }
+      });
+
+      // 更新信息显示
+      const infoEl = document.getElementById('selectedObjectInfo');
+      if (infoEl) {
+        infoEl.textContent = obj ? `${obj.name} (${obj.x}, ${obj.y})` : '无';
+      }
+
+      if (obj) {
+        console.log(`🎯 选中物体: ${obj.name} @ (${obj.x}, ${obj.y})`);
+      }
+
+      this.render();
+    }
+
+    /**
+     * 获取指定位置的物体（从上到下搜索）
+     */
+    getObjectAt(x, y) {
+      // 从后往前找（后添加的在上面）
+      for (let i = this.mapObjects.length - 1; i >= 0; i--) {
+        const obj = this.mapObjects[i];
+        if (obj.x === x && obj.y === y) {
+          return obj;
+        }
+      }
+      return null;
+    }
+
+    /**
+     * 清除所有物体
+     */
+    clearAllObjects() {
+      this.mapObjects = [];
+      this.selectedObject = null;
+      this.updateObjectList();
+      this.updateLayerCounts();
+      this.render();
+      console.log('🗑️ 已清除所有物体');
+    }
+
+    /**
+     * 计算Z轴索引（用于排序）
+     */
+    calculateZIndex(x, y, layer = 0) {
+      return y * this.mapWidth + x + layer * 0.33;
+    }
+
+    /**
+     * 更新物体列表UI
+     */
+    updateObjectList() {
+      const listEl = document.getElementById('objectList');
+      const countEl = document.getElementById('objectCount');
+
+      if (!listEl) return;
+
+      countEl.textContent = this.mapObjects.length;
+
+      if (this.mapObjects.length === 0) {
+        listEl.innerHTML = `
+          <div style="color: #718096; font-size: 11px; padding: 8px; text-align: center;">
+            暂无物体<br><span style="font-size: 10px;">从调色板拖拽瓦片到地图上放置物体</span>
+          </div>`;
+        return;
+      }
+
+      listEl.innerHTML = this.mapObjects.map(obj => `
+        <div class="object-item ${this.selectedObject && this.selectedObject.id === obj.id ? 'selected' : ''}"
+             data-obj-id="${obj.id}"
+             title="${obj.name} | 位置: (${obj.x}, ${obj.y}) | 图层: ${this.getLayerName(obj.layer)}">
+          <canvas class="obj-icon" width="20" height="20" id="objIcon_${obj.id}"></canvas>
+          <span style="flex:1;">${obj.name}</span>
+          <span class="obj-pos">(${obj.x}, ${obj.y})</span>
+          <span class="obj-icon layer${obj.layer}">${obj.layer}</span>
+        </div>
+      `).join('');
+
+      // 绑定点击事件
+      listEl.querySelectorAll('.object-item').forEach(el => {
+        el.addEventListener('click', () => {
+          const objId = parseFloat(el.dataset.objId);
+          const obj = this.mapObjects.find(o => o.id === objId);
+          if (obj) this.selectObject(obj);
+        });
+
+        // 双击删除
+        el.addEventListener('dblclick', () => {
+          const objId = parseFloat(el.dataset.objId);
+          if (confirm('确定要删除这个物体吗？')) {
+            this.removeObject(objId);
+            this.saveHistory();
+          }
+        });
+      });
+
+      // 绘制物体缩略图
+      this.mapObjects.forEach(obj => {
+        const iconCanvas = document.getElementById(`objIcon_${obj.id}`);
+        if (iconCanvas && this.tileset) {
+          const ctx = iconCanvas.getContext('2d');
+          const ts = this.tileSize;
+          const tileIndex = obj.tileId - 1;
+          const sx = (tileIndex % this.tilesetCols) * ts;
+          const sy = Math.floor(tileIndex / this.tilesetCols) * ts;
+
+          if (sx + ts <= this.tileset.width && sy + ts <= this.tileset.height) {
+            ctx.drawImage(this.tileset, sx, sy, ts, ts, 0, 0, 20, 20);
+          }
+        }
+      });
+    }
+
+    }  // ★ 关闭 class MapEditor
+
     // 启动编辑器
     window.addEventListener('DOMContentLoaded', () => {
       window.mapEditor = new MapEditor();
