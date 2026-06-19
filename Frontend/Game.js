@@ -29,10 +29,10 @@ class Game {
       dodge: 10,
       crit: 5,
       mapId: 1,
-      x: 5,
-      y: 5
+      x: 0,
+      y: 0
     };
-    
+
     // 角色列表
     this.roles = [];
     
@@ -790,8 +790,8 @@ class Game {
       this.player.speed = data.speed || 10;
       this.player.gold = data.gold || 0;
       this.player.mapId = data.map_id || 1;
-      this.player.x = data.x || 5;
-      this.player.y = data.y || 5;
+      this.player.x = data.x || 0;
+      this.player.y = data.y || 0;
       
       // 进入游戏
       this.enterGame();
@@ -1318,8 +1318,8 @@ class Game {
   handleMoveMessage(data) {
     if (data.role_id === this.player.id) {
       // 自己的移动 - 服务器广播回来的当前位置
-      this.player.x = data.x;
-      this.player.y = data.y;
+      this.player.x = data.x || 0;
+      this.player.y = data.y || 0;
       // 同步位置到地图引擎
       this.syncPlayerPosition();
     } else {
@@ -1343,8 +1343,8 @@ class Game {
         // 否则继续从当前位置插值到新目标
         
         // 更新到新位置
-        player.x = data.x;
-        player.y = data.y;
+        player.x = data.x || 0;
+        player.y = data.y || 0;
       } else {
         console.log('未找到玩家:', data.role_id);
       }
@@ -1836,7 +1836,16 @@ class Game {
   }
   
   handleEnterMap(data) {
-    if (data.role_id === this.player.id) return; // 忽略自己
+    // 如果是自己的进入地图响应，使用服务端返回的坐标更新位置
+    if (data.role_id === this.player.id) {
+      console.log(`进入地图响应: 服务端返回位置 (${data.x}, ${data.y})，客户端当前位置 (${this.player.x}, ${this.player.y})`);
+      // 使用服务端返回的坐标更新玩家位置
+      if (data.x !== undefined) this.player.x = data.x;
+      if (data.y !== undefined) this.player.y = data.y;
+      // 同步到地图引擎
+      this.syncPlayerPosition();
+      return;
+    }
     
     console.log('玩家进入地图:', data);
     
@@ -1887,7 +1896,15 @@ class Game {
     if (data.exp !== undefined) this.player.exp = data.exp;
     if (data.level !== undefined) this.player.level = data.level;
     if (data.gold !== undefined) this.player.gold = data.gold;
-    
+
+    // 同步位置（服务器纠正客户端位置）
+    if (data.x !== undefined && data.y !== undefined) {
+      console.log(`位置同步: ${this.player.x},${this.player.y} -> ${data.x},${data.y}`);
+      this.player.x = data.x;
+      this.player.y = data.y;
+      this.syncPlayerPosition();
+    }
+
     this.updatePlayerUI();
   }
   
@@ -2316,10 +2333,10 @@ class Game {
       dodge: 10,
       crit: 5,
       mapId: 1,
-      x: 5,
-      y: 5
+      x: 0,
+      y: 0
     };
-    
+
     // 清空其他玩家列表
     this.players.clear();
     

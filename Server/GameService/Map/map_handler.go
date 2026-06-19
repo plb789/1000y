@@ -1,21 +1,33 @@
 package gamemap
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"strconv"
+	"time"
+
+	common "game-server/Common"
 
 	"github.com/gin-gonic/gin"
 )
 
 // Handler HTTP请求处理
 type Handler struct {
-	service *Service
+	service    *Service
+	instanceID uint32
+	httpClient *http.Client
 }
 
 // NewHandler 创建Handler实例
-func NewHandler() *Handler {
+func NewHandler(instanceID uint32) *Handler {
 	return &Handler{
-		service: NewService(),
+		service:    GetService(), // 使用全局单例
+		instanceID: instanceID,
+		httpClient: &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
@@ -35,6 +47,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 		mapGroup.POST("/enter", h.EnterMap)             // 进入地图
 		mapGroup.POST("/leave", h.LeaveMap)             // 离开地图
 		mapGroup.POST("/teleport", h.Teleport)          // 传送
+		mapGroup.POST("/move", h.Move)                  // 移动
 
 		// 位置验证
 		mapGroup.GET("/:id/can_move/:x/:y", h.CanMove) // 检查移动是否允许
@@ -171,19 +184,54 @@ func (h *Handler) EnterMap(c *gin.Context) {
 	var req struct {
 		RoleID uint64 `json:"role_id" binding:"required"`
 		MapID  uint32 `json:"map_id" binding:"required"`
-		X      int    `json:"x" binding:"required"`
-		Y      int    `json:"y" binding:"required"`
+		X      int    `json:"x"` // 可选，为0时从数据库获取
+		Y      int    `json:"y"` // 可选，为0时从数据库获取
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
+		// 读取body用于调试
+		body, _ := io.ReadAll(c.Request.Body)
+		log.Printf("EnterMap: 参数绑定失败 - %v, body=%s", err, string(body))
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "请求参数错误"})
 		return
 	}
 
-	if err := h.service.EnterMap(req.RoleID, req.MapID, req.X, req.Y); err != nil {
+	log.Printf("EnterMap请求: roleID=%d, mapID=%d, x=%d, y=%d", req.RoleID, req.MapID, req.X, req.Y)
+
+	// 如果X或Y为0，从数据库获取位置
+	tileX, tileY := req.X, req.Y
+
+	if err := h.service.EnterMap(req.RoleID, req.MapID, tileX, tileY); err != nil {
+		log.Printf("EnterMap: 玩家 %d 进入地图 %d 失败 - %v", req.RoleID, req.MapID, err)
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "进入成功"})
+
+	// 返回实际的坐标（可能是从数据库读取的）
+	actualX, actualY := tileX, tileY
+	if tileX == 0 && tileY == 0 {
+		// 从数据库读取了位置
+		position, err := common.DBGetRolePosition(req.RoleID)
+		if err == nil && position != nil {
+			actualX, actualY = position.X, position.Y
+		}
+	}
+
+	// 获取玩家信息用于广播
+	lm, _ := h.service.GetLoadedMap(req.MapID)
+	if lm != nil {
+		lm.mu.RLock()
+		if player, ok := lm.Players[req.RoleID]; ok {
+			actualX, actualY = player.X, player.Y
+		}
+		lm.mu.RUnlock()
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code": 200,
+		"msg":  "进入成功",
+		"x":    actualX,
+		"y":    actualY,
+	})
 }
 
 // LeaveMap 离开地图
@@ -204,6 +252,91 @@ func (h *Handler) LeaveMap(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "离开成功"})
 }
 
+// Move 处理玩家移动
+func (h *Handler) Move(c *gin.Context) {
+	var req struct {
+		RoleID uint64 `json:"role_id" binding:"required"`
+		MapID  uint32 `json:"map_id" binding:"required"`
+		X      int    `json:"x" binding:"required"`
+		Y      int    `json:"y" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Printf("Move: 参数绑定失败 - %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "请求参数错误"})
+		return
+	}
+
+	// 移动玩家
+	result, err := h.service.MovePlayer(req.RoleID, req.MapID, req.X, req.Y)
+	if err != nil {
+		log.Printf("Move: 移动失败 - roleID=%d, mapID=%d, x=%d, y=%d, error=%v",
+			req.RoleID, req.MapID, req.X, req.Y, err)
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": err.Error()})
+		return
+	}
+
+	// 如果移动成功，广播给同地图玩家
+	if result.Success {
+		log.Printf("Move: 移动成功 - roleID=%d, mapID=%d, x=%d, y=%d",
+			req.RoleID, req.MapID, req.X, req.Y)
+		go h.broadcastMove(req.MapID, req.RoleID, req.X, req.Y)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"msg":     "success",
+		"success": result.Success,
+		"x":       result.X,
+		"y":       result.Y,
+	})
+}
+
+// broadcastMove 广播移动消息给同地图玩家
+func (h *Handler) broadcastMove(mapID uint32, roleID uint64, x, y int) {
+	moveData := map[string]interface{}{
+		"role_id": roleID,
+		"x":       x,
+		"y":       y,
+		"map_id":  mapID,
+	}
+
+	// 使用消息总线广播
+	if common.GlobalMessageBus != nil && common.GlobalMessageBus.IsAvailable() {
+		go func() {
+			if err := common.GlobalMessageBus.Publish("map_move", moveData); err != nil {
+				log.Printf("消息总线广播失败，降级到HTTP: %v", err)
+				h.fallbackBroadcastMove(moveData)
+			}
+		}()
+	} else {
+		h.fallbackBroadcastMove(moveData)
+	}
+}
+
+// fallbackBroadcastMove 降级到HTTP广播
+func (h *Handler) fallbackBroadcastMove(moveData map[string]interface{}) {
+	gatewayURL := common.GetGatewayServiceURL()
+	if gatewayURL == "" {
+		log.Printf("Gateway URL未配置，跳过移动广播")
+		return
+	}
+
+	jsonData, err := json.Marshal(moveData)
+	if err != nil {
+		log.Printf("序列化移动数据失败: %v", err)
+		return
+	}
+
+	go func() {
+		resp, err := h.httpClient.Post(gatewayURL+"/internal/broadcast_map", "application/json", bytes.NewReader(jsonData))
+		if err != nil {
+			log.Printf("广播移动消息失败: %v", err)
+			return
+		}
+		defer resp.Body.Close()
+	}()
+}
+
 // Teleport 传送
 func (h *Handler) Teleport(c *gin.Context) {
 	var req struct {
@@ -218,11 +351,90 @@ func (h *Handler) Teleport(c *gin.Context) {
 		return
 	}
 
-	if err := h.service.TeleportPlayer(req.RoleID, req.FromMapID, req.ToMapID, req.X, req.Y); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": err.Error()})
-		return
+	// 检查目标地图是否由当前服务处理
+	if h.isMapHandledLocally(req.ToMapID) {
+		// 本地传送
+		if err := h.service.TeleportPlayer(req.RoleID, req.FromMapID, req.ToMapID, req.X, req.Y); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "传送成功"})
+	} else {
+		// 跨服务传送
+		err := h.teleportToRemoteService(req.RoleID, req.FromMapID, req.ToMapID, req.X, req.Y)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "跨服传送成功"})
 	}
-	c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "传送成功"})
+}
+
+// isMapHandledLocally 检查地图是否由当前服务处理
+func (h *Handler) isMapHandledLocally(mapID uint32) bool {
+	return common.HandleMapInRegistry(h.instanceID, mapID)
+}
+
+// teleportToRemoteService 跨服务传送
+func (h *Handler) teleportToRemoteService(roleID uint64, fromMapID, toMapID uint32, x, y int) error {
+	// 1. 查询目标地图所在的服务实例
+	targetInst := common.GetInstanceByMapID(toMapID)
+	if targetInst == nil {
+		return fmt.Errorf("目标地图 %d 未找到处理服务", toMapID)
+	}
+
+	log.Printf("跨服传送: 玩家 %d 从地图 %d 传送至地图 %d(服务: %s)", roleID, fromMapID, toMapID, targetInst.URL)
+
+	// 2. 获取玩家数据
+	role, err := common.DBRoleGet(roleID)
+	if err != nil || role == nil {
+		return fmt.Errorf("获取玩家数据失败: %v", err)
+	}
+
+	// 3. 离开原地图
+	if err := h.service.LeaveMap(roleID, fromMapID); err != nil {
+		return fmt.Errorf("离开原地图失败: %v", err)
+	}
+
+	// 4. 构造传送请求数据
+	teleportReq := map[string]interface{}{
+		"role_id":     roleID,
+		"from_map_id": fromMapID,
+		"to_map_id":   toMapID,
+		"x":           x,
+		"y":           y,
+		"player_data": map[string]interface{}{
+			"id":     role.ID,
+			"name":   role.Name,
+			"level":  role.Level,
+			"hp":     role.Hp,
+			"max_hp": role.MaxHp,
+			"mp":     role.Mp,
+			"max_mp": role.MaxMp,
+			"x":      role.MapX,
+			"y":      role.MapY,
+			"map_id": role.MapID,
+		},
+	}
+
+	// 5. 调用目标服务的传送接口
+	jsonData, err := json.Marshal(teleportReq)
+	if err != nil {
+		return fmt.Errorf("序列化传送数据失败: %v", err)
+	}
+
+	resp, err := h.httpClient.Post(targetInst.URL+"/api/map/teleport", "application/json", bytes.NewReader(jsonData))
+	if err != nil {
+		return fmt.Errorf("调用目标服务传送接口失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("目标服务传送失败，状态码: %d", resp.StatusCode)
+	}
+
+	log.Printf("跨服传送成功: 玩家 %d 已传送到地图 %d", roleID, toMapID)
+	return nil
 }
 
 // CanMove 检查移动是否允许

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"time"
@@ -212,11 +213,10 @@ func (c *GameServiceClient) ValidateMove(roleID uint64, mapID uint32, x, y int) 
 var (
 	DBServiceURL    string
 	LoginServiceURL string
-	GameServiceURL  string
 )
 
-// GameClient 游戏服务客户端(全局单例)
-var GameClient *GameServiceClient
+// GameClient 游戏服务客户端(全局单例) - 已废弃，使用分片的ShardedGameClient
+// var GameClient *GameServiceClient
 
 // LoginClient 登录服务客户端
 var LoginClient *GameServiceClient
@@ -228,7 +228,6 @@ var DBClient *GameServiceClient
 func InitServiceClients() {
 	DBServiceURL = AppConfig.Services.DBService
 	LoginServiceURL = AppConfig.Services.LoginService
-	GameServiceURL = AppConfig.Services.GameService
 
 	// 如果配置为空，使用默认值
 	if DBServiceURL == "" {
@@ -237,12 +236,8 @@ func InitServiceClients() {
 	if LoginServiceURL == "" {
 		LoginServiceURL = "http://localhost:8084"
 	}
-	if GameServiceURL == "" {
-		GameServiceURL = "http://localhost:8082"
-	}
 
 	DBClient = NewGameServiceClient(DBServiceURL)
-	GameClient = NewGameServiceClient(GameServiceURL)
 	LoginClient = NewGameServiceClient(LoginServiceURL)
 }
 
@@ -1076,6 +1071,73 @@ func DBRoleChangeMap(roleID uint64, mapID int, x, y int) error {
 	}
 
 	return nil
+}
+
+// DBRoleChangePosition 更新玩家位置（不切换地图）
+func DBRoleChangePosition(roleID uint64, mapID uint32, x, y int) error {
+	resp, err := DBPost("/api/role/update_position", map[string]interface{}{
+		"id":     roleID,
+		"map_id": mapID,
+		"map_x":  x,
+		"map_y":  y,
+	})
+	if err != nil {
+		log.Printf("DBRoleChangePosition: 角色 %d 位置更新失败 - err=%v", roleID, err)
+		return err
+	}
+
+	if resp["code"].(float64) != 0 {
+		log.Printf("DBRoleChangePosition: 角色 %d 位置更新失败 - code=%v, msg=%v", roleID, resp["code"], resp["msg"])
+		return fmt.Errorf("更新位置失败: %v", resp["msg"])
+	}
+
+	log.Printf("DBRoleChangePosition: 角色 %d 位置更新成功 - mapID=%d, x=%d, y=%d", roleID, mapID, x, y)
+	return nil
+}
+
+// RolePosition 角色位置信息
+type RolePosition struct {
+	RoleID uint64
+	MapID  uint32
+	X      int
+	Y      int
+}
+
+// DBGetRolePosition 获取角色当前位置信息
+func DBGetRolePosition(roleID uint64) (*RolePosition, error) {
+	resp, err := DBPost("/api/role/get", map[string]interface{}{
+		"id": roleID,
+	})
+	if err != nil {
+		log.Printf("DBGetRolePosition: 角色 %d 获取位置失败 - err=%v", roleID, err)
+		return nil, err
+	}
+
+	// DBService 返回的字段是 data，而不是 role
+	data, ok := resp["data"].(map[string]interface{})
+	if !ok {
+		log.Printf("DBGetRolePosition: 角色 %d data字段解析失败 - resp=%v", roleID, resp)
+		return nil, fmt.Errorf("角色不存在")
+	}
+
+	mapX, _ := data["map_x"].(float64)
+	mapY, _ := data["map_y"].(float64)
+	mapID, _ := data["map_id"].(float64)
+
+	position := &RolePosition{
+		RoleID: roleID,
+		MapID:  uint32(mapID),
+		X:      int(mapX),
+		Y:      int(mapY),
+	}
+
+	log.Printf("DBGetRolePosition: 角色 %d 位置 - mapID=%d, x=%d, y=%d", roleID, position.MapID, position.X, position.Y)
+	return position, nil
+}
+
+// GetGatewayServiceURL 获取Gateway服务地址
+func GetGatewayServiceURL() string {
+	return AppConfig.Services.GatewayService
 }
 
 // DBSkillGetAllBase 获取所有武学基础信息

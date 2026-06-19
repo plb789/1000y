@@ -6,13 +6,18 @@ http_port: 8082
 
 # GameService实例配置
 instance_id: 1                    # 实例ID，每个实例必须唯一
-handled_maps: [1, 2, 3]            # 该实例处理的地图ID列表
+handled_maps: [1, 2, 3]           # 该实例处理的地图ID列表
 register_to_registry: true        # 是否注册到服务发现中心
 
 # 服务地址配置
 services:
-  db_service: "http://localhost:8083"
-  login_service: "http://localhost:8084"
-  game_service: "http://localhost:8082"
+  db_service: "http://localhost:8083"   # 数据库服务地址
   gateway_service: "http://localhost:8080"   # Gateway服务地址（用于推送消息）
   registry_service: "http://localhost:8081"  # 服务注册中心地址（独立服务）
+
+# 消息总线配置
+message_bus:
+  type: "rabbitmq"                # 消息总线类型: rabbitmq, kafka, http
+  rabbitmq_url: "amqp://guest:guest@localhost:5672/"
+  kafka_brokers:
+    - "localhost:9092"

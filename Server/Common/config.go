@@ -34,9 +34,9 @@ type GlobalConfig struct {
 	} `yaml:"services"`
 	HTTPPort int `yaml:"http_port"` // HTTP服务端口
 	// GameService实例配置
-	InstanceID       uint32  `yaml:"instance_id"`        // 实例ID
-	HandledMaps      []uint32 `yaml:"handled_maps"`      // 处理的地图列表
-	RegisterToRegistry bool   `yaml:"register_to_registry"` // 是否注册到服务发现
+	InstanceID         uint32   `yaml:"instance_id"`          // 实例ID
+	HandledMaps        []uint32 `yaml:"handled_maps"`         // 处理的地图列表
+	RegisterToRegistry bool     `yaml:"register_to_registry"` // 是否注册到服务发现
 	// HTTP客户端超时配置
 	HTTPClient struct {
 		Timeout int `yaml:"timeout"` // 超时时间(秒)，默认10秒
@@ -61,6 +61,12 @@ type GlobalConfig struct {
 	WSPort int `yaml:"ws_port"`
 	// IP白名单
 	IPWhite []string `yaml:"ip_white"`
+	// 消息总线配置
+	MessageBus struct {
+		Type         string   `yaml:"type"`          // 消息总线类型: rabbitmq, kafka, http
+		RabbitMQURL  string   `yaml:"rabbitmq_url"`  // RabbitMQ连接地址
+		KafkaBrokers []string `yaml:"kafka_brokers"` // Kafka broker列表
+	} `yaml:"message_bus"`
 }
 
 var AppConfig GlobalConfig

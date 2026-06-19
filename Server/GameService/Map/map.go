@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"sync"
 )
 
 // Tile 瓦片结构（支持16位瓦片ID）
@@ -20,12 +21,25 @@ type GameMap struct {
 	Collision [][]bool
 }
 
-var GlobalMap *GameMap
+// 全局地图数据（支持多地图）
+var (
+	globalMaps = make(map[string]*GameMap) // key=map_file
+	mapMutex   sync.RWMutex
+	GlobalMap  *GameMap // 保留旧变量兼容性
+)
+
+// GetGameMap 获取指定地图文件的碰撞数据
+func GetGameMap(mapFile string) *GameMap {
+	mapMutex.RLock()
+	defer mapMutex.RUnlock()
+	return globalMaps[mapFile]
+}
 
 // LoadMapFile 加载千年 .map 文件
 // 支持两种格式：
-//   旧格式：每瓦片3字节(Low/u8 + High/u8 + Attr/u8)
-//   新格式：每瓦片5字节(Low/u16 + High/u16 + Attr/u8)
+//
+//	旧格式：每瓦片3字节(Low/u8 + High/u8 + Attr/u8)
+//	新格式：每瓦片5字节(Low/u16 + High/u16 + Attr/u8)
 func LoadMapFile(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -85,12 +99,32 @@ func LoadMapFile(path string) error {
 		}
 	}
 
-	GlobalMap = &GameMap{
+	// 提取地图文件名作为 key
+	mapFile := extractFileName(path)
+
+	gameMap := &GameMap{
 		Width:     w,
 		Height:    h,
 		Collision: coll,
 	}
+
+	mapMutex.Lock()
+	globalMaps[mapFile] = gameMap
+	mapMutex.Unlock()
+
+	// 保留旧的 GlobalMap 变量兼容性
+	GlobalMap = gameMap
 	return nil
+}
+
+// extractFileName 从路径提取文件名
+func extractFileName(path string) string {
+	for i := len(path) - 1; i >= 0; i-- {
+		if path[i] == '/' || path[i] == '\\' {
+			return path[i+1:]
+		}
+	}
+	return path
 }
 
 // abs 返回绝对值

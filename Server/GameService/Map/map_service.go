@@ -3,8 +3,20 @@ package gamemap
 import (
 	"errors"
 	common "game-server/Common"
+	"log"
 	"sync"
 )
+
+// 全局地图服务实例
+var globalService *Service
+
+// GetService 获取全局地图服务实例
+func GetService() *Service {
+	if globalService == nil {
+		globalService = NewService()
+	}
+	return globalService
+}
 
 // LoadedMap 已加载的地图
 type LoadedMap struct {
@@ -117,27 +129,54 @@ func (s *Service) LoadMap(mapID uint32) (*LoadedMap, error) {
 		return nil, errors.New("地图不存在")
 	}
 
+	// 从全局地图数据获取碰撞数据
+	var collision [][]bool
+	gameMap := GetGameMap(mapBase.MapFile)
+	if gameMap != nil && gameMap.Collision != nil {
+		collision = gameMap.Collision
+		log.Printf("LoadMap: 使用地图文件 %s 的碰撞数据，尺寸=%dx%d",
+			mapBase.MapFile, len(collision[0]), len(collision))
+	} else {
+		// 如果地图文件未加载，创建默认碰撞表
+		tileWidth := mapBase.TileWidth
+		tileHeight := mapBase.TileHeight
+		if tileWidth <= 0 {
+			tileWidth = 48
+		}
+		if tileHeight <= 0 {
+			tileHeight = 48
+		}
+
+		tileCountX := mapBase.Width / tileWidth
+		tileCountY := mapBase.Height / tileHeight
+		if tileCountX <= 0 {
+			tileCountX = 100
+		}
+		if tileCountY <= 0 {
+			tileCountY = 100
+		}
+
+		collision = make([][]bool, tileCountY)
+		for y := 0; y < tileCountY; y++ {
+			collision[y] = make([]bool, tileCountX)
+			for x := 0; x < tileCountX; x++ {
+				collision[y][x] = false
+			}
+		}
+		log.Printf("LoadMap: 地图文件 %s 未加载，创建默认碰撞数据，尺寸=%dx%d",
+			mapBase.MapFile, tileCountX, tileCountY)
+	}
+
 	// 创建地图实例
 	lm := &LoadedMap{
 		MapData:    mapBase,
 		TileWidth:  mapBase.TileWidth,
 		TileHeight: mapBase.TileHeight,
-		Collision:  make([][]bool, mapBase.Height/mapBase.TileHeight),
+		Collision:  collision,
 		Monsters:   make(map[uint64]*MonsterInstance),
 		NPCs:       make(map[uint64]*NPCInstance),
 		Players:    make(map[uint64]*PlayerInstance),
 	}
-
-	// 初始化碰撞表(默认全部可通过)
-	for y := 0; y < len(lm.Collision); y++ {
-		lm.Collision[y] = make([]bool, mapBase.Width/mapBase.TileWidth)
-		for x := 0; x < len(lm.Collision[y]); x++ {
-			lm.Collision[y][x] = false // false=可通过
-		}
-	}
-
-	// 加载地图文件(如果存在)
-	// 实际项目中应该调用gameMap.LoadMapFile
 
 	s.loadedMaps[mapID] = lm
 	return lm, nil
@@ -242,7 +281,8 @@ func (s *Service) GetMonstersByMap(mapID uint32) ([]MonsterBase, error) {
 }
 
 // EnterMap 角色进入地图
-func (s *Service) EnterMap(roleID uint64, mapID uint32, x, y int) error {
+// 注意：客户端发送的是瓦片坐标，直接使用即可
+func (s *Service) EnterMap(roleID uint64, mapID uint32, tileX, tileY int) error {
 	lm, err := s.LoadMap(mapID)
 	if err != nil {
 		return err
@@ -251,23 +291,79 @@ func (s *Service) EnterMap(roleID uint64, mapID uint32, x, y int) error {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
 
-	// 检查位置是否可通过
-	tileX := x / lm.TileWidth
-	tileY := y / lm.TileHeight
-	if tileY >= 0 && tileY < len(lm.Collision) && tileX >= 0 && tileX < len(lm.Collision[0]) {
-		if lm.Collision[tileY][tileX] {
-			return errors.New("该位置不可通过")
+	// 优先使用数据库中的位置
+	actualX, actualY := tileX, tileY
+	position, err := common.DBGetRolePosition(roleID)
+	if err == nil && position != nil {
+		log.Printf("EnterMap: 从数据库读取角色 %d 位置: mapID=%d, x=%d, y=%d", roleID, position.MapID, position.X, position.Y)
+
+		if position.MapID == mapID {
+			if !s.isPositionBlockedLocked(lm, position.X, position.Y) {
+				// 数据库位置可通行
+				actualX, actualY = position.X, position.Y
+			} else {
+				// 数据库位置被阻挡，找附近可通行位置
+				found := false
+				for dx := -3; dx <= 3 && !found; dx++ {
+					for dy := -3; dy <= 3 && !found; dy++ {
+						if !s.isPositionBlockedLocked(lm, position.X+dx, position.Y+dy) {
+							actualX, actualY = position.X+dx, position.Y+dy
+							found = true
+						}
+					}
+				}
+				if !found {
+					actualX, actualY = tileX, tileY
+				}
+				log.Printf("EnterMap: 数据库位置被阻挡，调整到 (%d, %d)", actualX, actualY)
+			}
+		} else {
+			log.Printf("EnterMap: 数据库地图ID(%d)与请求地图ID(%d)不匹配，使用客户端坐标", position.MapID, mapID)
+		}
+	} else {
+		log.Printf("EnterMap: 无法获取角色 %d 数据库位置，使用客户端坐标", roleID)
+	}
+
+	// 安全检查：确保 Collision 数组已初始化
+	if len(lm.Collision) == 0 || len(lm.Collision[0]) == 0 {
+		log.Printf("EnterMap: 地图 %d 的 Collision 数组未初始化，使用默认碰撞", mapID)
+	} else {
+		collisionWidth := len(lm.Collision[0])
+		collisionHeight := len(lm.Collision)
+
+		// 检查位置是否可通过
+		if actualY >= 0 && actualY < collisionHeight && actualX >= 0 && actualX < collisionWidth {
+			if lm.Collision[actualY][actualX] {
+				return errors.New("该位置不可通过")
+			}
 		}
 	}
 
 	// 添加玩家到地图
 	lm.Players[roleID] = &PlayerInstance{
 		RoleID: roleID,
-		X:      x,
-		Y:      y,
+		X:      actualX,
+		Y:      actualY,
 	}
 
+	log.Printf("EnterMap: 玩家 %d 进入地图 %d (tileX=%d, tileY=%d)", roleID, mapID, actualX, actualY)
 	return nil
+}
+
+// isPositionBlockedLocked 在已持有锁的情况下检查位置是否阻挡
+func (s *Service) isPositionBlockedLocked(lm *LoadedMap, x, y int) bool {
+	if len(lm.Collision) == 0 || len(lm.Collision[0]) == 0 {
+		return false // 未初始化时默认允许通过
+	}
+
+	collisionWidth := len(lm.Collision[0])
+	collisionHeight := len(lm.Collision)
+
+	if y < 0 || y >= collisionHeight || x < 0 || x >= collisionWidth {
+		return true // 超出边界视为阻挡
+	}
+
+	return lm.Collision[y][x]
 }
 
 // LeaveMap 角色离开地图
@@ -279,6 +375,14 @@ func (s *Service) LeaveMap(roleID uint64, mapID uint32) error {
 
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
+
+	// 获取玩家离开前的位置
+	player, exists := lm.Players[roleID]
+	if exists {
+		// 离开地图时保存玩家位置到数据库
+		common.DBRoleChangePosition(roleID, mapID, player.X, player.Y)
+		log.Printf("LeaveMap: 玩家 %d 离开地图 %d，保存位置 (%d, %d)", roleID, mapID, player.X, player.Y)
+	}
 
 	delete(lm.Players, roleID)
 	return nil
@@ -301,6 +405,37 @@ func (s *Service) UpdatePlayerPosition(roleID uint64, mapID uint32, x, y int) er
 	}
 
 	return errors.New("玩家不在此地图")
+}
+
+// MovePlayerResult 移动结果
+type MovePlayerResult struct {
+	Success bool
+	X       int
+	Y       int
+}
+
+// MovePlayer 移动玩家
+func (s *Service) MovePlayer(roleID uint64, mapID uint32, x, y int) (*MovePlayerResult, error) {
+	// 检查位置是否合法
+	if s.IsPositionBlocked(mapID, x, y) {
+		return &MovePlayerResult{Success: false, X: x, Y: y}, errors.New("位置被阻挡")
+	}
+
+	// 更新玩家位置
+	if err := s.UpdatePlayerPosition(roleID, mapID, x, y); err != nil {
+		// 如果玩家不在地图中，尝试先进入地图
+		if err.Error() == "玩家不在此地图" {
+			if enterErr := s.EnterMap(roleID, mapID, x, y); enterErr != nil {
+				return &MovePlayerResult{Success: false, X: x, Y: y}, enterErr
+			}
+		} else {
+			return &MovePlayerResult{Success: false, X: x, Y: y}, err
+		}
+	}
+
+	// 注意：不再每次移动都写数据库，只在离开地图时保存
+
+	return &MovePlayerResult{Success: true, X: x, Y: y}, nil
 }
 
 // GetPlayersInView 获取视野范围内的玩家
@@ -353,23 +488,41 @@ func (s *Service) TeleportPlayer(roleID uint64, fromMapID, toMapID uint32, x, y 
 }
 
 // IsPositionBlocked 检查位置是否阻挡
-func (s *Service) IsPositionBlocked(mapID uint32, pixelX, pixelY int) bool {
+// 注意：客户端发送的是瓦片坐标，直接使用即可
+func (s *Service) IsPositionBlocked(mapID uint32, tileX, tileY int) bool {
 	lm, ok := s.GetLoadedMap(mapID)
 	if !ok {
+		log.Printf("IsPositionBlocked: 地图 %d 未加载", mapID)
 		return true
 	}
 
 	lm.mu.RLock()
 	defer lm.mu.RUnlock()
 
-	tileX := pixelX / lm.TileWidth
-	tileY := pixelY / lm.TileHeight
+	// 安全检查：确保 Collision 数组已初始化
+	if len(lm.Collision) == 0 || len(lm.Collision[0]) == 0 {
+		log.Printf("IsPositionBlocked: 地图 %d 的 Collision 数组未初始化", mapID)
+		return false // 未初始化时默认允许通过
+	}
 
-	if tileY < 0 || tileY >= len(lm.Collision) || tileX < 0 || tileX >= len(lm.Collision[0]) {
+	collisionWidth := len(lm.Collision[0])
+	collisionHeight := len(lm.Collision)
+
+	log.Printf("IsPositionBlocked: mapID=%d, tile=(%d,%d), collisionSize=%dx%d",
+		mapID, tileX, tileY, collisionWidth, collisionHeight)
+
+	if tileY < 0 || tileY >= collisionHeight || tileX < 0 || tileX >= collisionWidth {
+		log.Printf("IsPositionBlocked: 坐标超出范围, tileX=%d, tileY=%d, collisionSize=%dx%d",
+			tileX, tileY, collisionWidth, collisionHeight)
 		return true
 	}
 
-	return lm.Collision[tileY][tileX]
+	blocked := lm.Collision[tileY][tileX]
+	if blocked {
+		log.Printf("IsPositionBlocked: 位置(%d,%d)被阻挡", tileX, tileY)
+	}
+
+	return blocked
 }
 
 // GetPlayerCountOnMap 获取地图上的玩家数量

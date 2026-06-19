@@ -156,18 +156,7 @@ func startHTTPServer() {
 		itemGroup.POST("/get_empty_count", handleItemGetEmptyCount)
 	}
 
-	// 服务注册中心接口
-	registryGroup := r.Group("/api/registry")
-	{
-		registryGroup.POST("/register", handleRegistryRegister)
-		registryGroup.POST("/unregister", handleRegistryUnregister)
-		registryGroup.POST("/heartbeat", handleRegistryHeartbeat)
-		registryGroup.POST("/list", handleRegistryList)
-		registryGroup.POST("/get_by_map", handleRegistryGetByMap)
-	}
-
-	// 初始化注册中心
-	initRegistry()
+	// 注意：服务注册中心已独立为RegistryService，DBService不再处理注册逻辑
 
 	port := common.AppConfig.HTTPPort
 	if port == 0 {
@@ -356,8 +345,8 @@ func handleRoleCreate(c *gin.Context) {
 		Appearance:   req.Appearance,
 		Level:        1,
 		MapID:        1,
-		MapX:         400,
-		MapY:         300,
+		MapX:         10,
+		MapY:         10,
 		Hp:           100,
 		MaxHp:        100,
 		Mp:           100,
@@ -400,6 +389,8 @@ func handleRoleGet(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "角色不存在"})
 		return
 	}
+
+	log.Printf("handleRoleGet: 角色 %d 位置 - mapID=%d, mapX=%d, mapY=%d", req.ID, role.MapID, role.MapX, role.MapY)
 
 	// 返回小写字段名格式
 	c.JSON(http.StatusOK, gin.H{

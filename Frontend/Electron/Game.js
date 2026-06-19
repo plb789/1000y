@@ -29,10 +29,10 @@ class Game {
       dodge: 10,
       crit: 5,
       mapId: 1,
-      x: 5,
-      y: 5
+      x: 0,
+      y: 0
     };
-    
+
     // 角色列表
     this.roles = [];
     
@@ -90,6 +90,9 @@ class Game {
   async init() {
     console.log('游戏初始化...');
     
+    // 初始化UI、特效、音效系统
+    this.initSystems();
+    
     // 绑定事件
     this.bindEvents();
     
@@ -106,6 +109,46 @@ class Game {
     this.state = 'login';
     this.ui.loadingOverlay.classList.add('hidden');
     this.ui.loginPanel.classList.remove('hidden');
+  }
+  
+  /**
+   * 初始化UI、特效、音效系统
+   */
+  initSystems() {
+    // 初始化粒子系统
+    if (window.ParticleSystem) {
+      this.particleSystem = new window.ParticleSystem(this.ui.canvas);
+    }
+    
+    // 初始化特效管理器
+    if (window.EffectManager) {
+      this.effectManager = window.EffectManager;
+      if (this.particleSystem) {
+        this.effectManager.setParticleSystem(this.particleSystem);
+      }
+    }
+    
+    // 初始化音效系统
+    if (window.SoundManager) {
+      this.soundManager = window.SoundManager;
+    }
+    
+    // UI管理器已自动初始化
+    if (window.UIManager) {
+      this.uiManager = window.UIManager;
+    }
+    
+    // 特效设置
+    this.effectSettings = {
+      enableParticles: true,
+      enableSkillEffects: true,
+      enableScreenShake: true
+    };
+    
+    // 事件监听器存储（用于销毁时移除）
+    this.eventListeners = [];
+    
+    console.log('UI、特效、音效系统初始化完成');
   }
   
   async loadMapConfigs() {
@@ -192,7 +235,158 @@ class Game {
       this.destroy();
     });
     
+    // 设置面板事件
+    this.bindSettingsEvents();
+    
     // 鼠标点击移动由MapEngine处理，这里不再绑定
+  }
+  
+  /**
+   * 绑定设置面板事件
+   */
+  bindSettingsEvents() {
+    const settingsBtn = document.getElementById('settingsBtn');
+    const settingsPanel = document.getElementById('settingsPanel');
+    const closeSettingsBtn = document.getElementById('closeSettingsBtn');
+    const bgmVolume = document.getElementById('bgmVolume');
+    const sfxVolume = document.getElementById('sfxVolume');
+    const muteAll = document.getElementById('muteAll');
+    const enableParticles = document.getElementById('enableParticles');
+    const enableSkillEffects = document.getElementById('enableSkillEffects');
+    const enableScreenShake = document.getElementById('enableScreenShake');
+    
+    // 打开设置面板
+    if (settingsBtn) {
+      this.addEventListener(settingsBtn, 'click', () => {
+        if (settingsPanel) {
+          settingsPanel.style.display = 'block';
+        }
+      });
+    }
+    
+    // 关闭设置面板
+    if (closeSettingsBtn) {
+      this.addEventListener(closeSettingsBtn, 'click', () => {
+        if (settingsPanel) {
+          settingsPanel.style.display = 'none';
+        }
+      });
+    }
+    
+    // BGM音量
+    if (bgmVolume) {
+      this.addEventListener(bgmVolume, 'input', (e) => {
+        const volume = parseInt(e.target.value) / 100;
+        if (this.soundManager) {
+          this.soundManager.setBGMVolume(volume);
+        }
+      });
+    }
+    
+    // 音效音量
+    if (sfxVolume) {
+      this.addEventListener(sfxVolume, 'input', (e) => {
+        const volume = parseInt(e.target.value) / 100;
+        if (this.soundManager) {
+          this.soundManager.setSFXVolume(volume);
+        }
+      });
+    }
+    
+    // 静音
+    if (muteAll) {
+      this.addEventListener(muteAll, 'change', (e) => {
+        const muted = e.target.checked;
+        if (this.soundManager) {
+          this.soundManager.setBGMMute(muted);
+          this.soundManager.setSFXMute(muted);
+        }
+      });
+    }
+    
+    // 粒子特效
+    if (enableParticles) {
+      this.addEventListener(enableParticles, 'change', (e) => {
+        this.effectSettings.enableParticles = e.target.checked;
+      });
+    }
+    
+    // 技能特效
+    if (enableSkillEffects) {
+      this.addEventListener(enableSkillEffects, 'change', (e) => {
+        this.effectSettings.enableSkillEffects = e.target.checked;
+      });
+    }
+    
+    // 屏幕震动
+    if (enableScreenShake) {
+      this.addEventListener(enableScreenShake, 'change', (e) => {
+        this.effectSettings.enableScreenShake = e.target.checked;
+      });
+    }
+
+    // 同步当前状态到UI控件
+    this.syncSettingsToUI();
+  }
+
+  /**
+   * 添加事件监听器并保存引用（用于销毁时移除）
+   * @param {Element} element - DOM元素
+   * @param {string} event - 事件类型
+   * @param {Function} handler - 事件处理函数
+   */
+  addEventListener(element, event, handler) {
+    element.addEventListener(event, handler);
+    this.eventListeners.push({ element, event, handler });
+  }
+
+  /**
+   * 移除所有事件监听器
+   */
+  removeAllEventListeners() {
+    for (const listener of this.eventListeners) {
+      listener.element.removeEventListener(listener.event, listener.handler);
+    }
+    this.eventListeners = [];
+  }
+
+  /**
+   * 将当前设置状态同步到UI控件
+   */
+  syncSettingsToUI() {
+    const bgmVolume = document.getElementById('bgmVolume');
+    const sfxVolume = document.getElementById('sfxVolume');
+    const muteAll = document.getElementById('muteAll');
+    const enableParticles = document.getElementById('enableParticles');
+    const enableSkillEffects = document.getElementById('enableSkillEffects');
+    const enableScreenShake = document.getElementById('enableScreenShake');
+
+    // 同步音量设置
+    if (bgmVolume && this.soundManager) {
+      bgmVolume.value = Math.round(this.soundManager.getBGMVolume() * 100);
+    }
+
+    if (sfxVolume && this.soundManager) {
+      sfxVolume.value = Math.round(this.soundManager.getSFXVolume() * 100);
+    }
+
+    // 同步静音状态（只有两者都静音时才勾选）
+    if (muteAll && this.soundManager) {
+      muteAll.checked = this.soundManager.isBGMMuted() && this.soundManager.isSFXMuted();
+    }
+
+    // 同步特效设置
+    if (enableParticles) {
+      enableParticles.checked = this.effectSettings.enableParticles;
+    }
+
+    if (enableSkillEffects) {
+      enableSkillEffects.checked = this.effectSettings.enableSkillEffects;
+    }
+
+    if (enableScreenShake) {
+      enableScreenShake.checked = this.effectSettings.enableScreenShake;
+    }
   }
   
   initMapEngine() {
@@ -596,8 +790,8 @@ class Game {
       this.player.speed = data.speed || 10;
       this.player.gold = data.gold || 0;
       this.player.mapId = data.map_id || 1;
-      this.player.x = data.x || 5;
-      this.player.y = data.y || 5;
+      this.player.x = data.x || 0;
+      this.player.y = data.y || 0;
       
       // 进入游戏
       this.enterGame();
@@ -658,6 +852,11 @@ class Game {
     // 游戏面板显示后，调整画布大小
     this.mapEngine.resizeCanvas();
     
+    // 初始化音效系统（需要用户交互后才能启动）
+    if (this.soundManager) {
+      this.soundManager.ensureContext();
+    }
+    
     // 加载地图
     this.loadMap(this.player.mapId);
     
@@ -668,6 +867,11 @@ class Game {
     this.updateOnlineCount();
     
     this.addChatMessage('系统', '欢迎来到千年江湖！', 'system');
+    
+    // 显示欢迎提示
+    if (this.uiManager) {
+      this.uiManager.toast('欢迎来到千年江湖！', 'success', 3000);
+    }
     
     // 开始游戏循环
     this.startGameLoop();
@@ -1078,6 +1282,34 @@ class Game {
         this.handleMoveMessage(data);
         break;
         
+      case Protocol.CMD_DAMAGE:
+        this.handleDamage(data);
+        break;
+        
+      case Protocol.CMD_DEATH:
+        this.handleDeath(data);
+        break;
+        
+      case Protocol.CMD_RESPAWN:
+        this.handleRespawn(data);
+        break;
+        
+      case Protocol.CMD_LEVEL_UP:
+        this.handleLevelUp(data);
+        break;
+        
+      case Protocol.CMD_BUFF:
+        this.handleBuff(data);
+        break;
+        
+      case Protocol.CMD_DEBUFF:
+        this.handleDebuff(data);
+        break;
+        
+      case Protocol.CMD_MAP_EVENT:
+        this.handleMapEvent(data);
+        break;
+        
       default:
         console.log('未知消息:', cmd, data);
     }
@@ -1086,8 +1318,8 @@ class Game {
   handleMoveMessage(data) {
     if (data.role_id === this.player.id) {
       // 自己的移动 - 服务器广播回来的当前位置
-      this.player.x = data.x;
-      this.player.y = data.y;
+      this.player.x = data.x || 0;
+      this.player.y = data.y || 0;
       // 同步位置到地图引擎
       this.syncPlayerPosition();
     } else {
@@ -1111,8 +1343,8 @@ class Game {
         // 否则继续从当前位置插值到新目标
         
         // 更新到新位置
-        player.x = data.x;
-        player.y = data.y;
+        player.x = data.x || 0;
+        player.y = data.y || 0;
       } else {
         console.log('未找到玩家:', data.role_id);
       }
@@ -1125,6 +1357,455 @@ class Game {
   handleChatMessage(data) {
     const channelNames = { 0: '世界', 1: '地图', 2: '门派', 3: '私聊' };
     this.addChatMessage(`[${channelNames[data.channel] || '系统'}]${data.from_name}`, data.content, data.channel === 0 ? 'world' : 'map');
+  }
+  
+  /**
+   * 处理伤害消息
+   */
+  handleDamage(data) {
+    const targetId = data.target_id;
+    const damage = data.damage || 0;
+    const isCritical = data.is_critical || false;
+    const isBlocked = data.is_blocked || false;
+    const isDodged = data.is_dodged || false;
+    
+    // 获取目标玩家
+    let target = null;
+    let isSelf = false;
+    
+    if (targetId === this.player.id) {
+      target = this.player;
+      isSelf = true;
+    } else {
+      target = this.players.get(targetId);
+    }
+    
+    if (!target) return;
+    
+    // 更新血量
+    if (target.hp !== undefined) {
+      target.hp = Math.max(0, target.hp - damage);
+    }
+    
+    // 更新UI
+    if (isSelf) {
+      this.updatePlayerUI();
+    }
+    
+    // 获取目标位置
+    const tileSize = this.mapEngine?.tileSize || 48;
+    const x = target.x * tileSize + tileSize / 2;
+    const y = target.y * tileSize + tileSize / 2;
+    
+    // 触发受击特效
+    this.triggerHitEffect(isCritical, isBlocked, isDodged, x, y);
+    
+    // 播放受击音效
+    this.playHitSound(isCritical, isBlocked, isDodged);
+    
+    // 显示伤害数字
+    this.showDamageNumber(x, y, damage, isCritical);
+  }
+  
+  /**
+   * 触发受击特效
+   */
+  triggerHitEffect(isCritical, isBlocked, isDodged, x, y) {
+    if (!this.effectSettings.enableSkillEffects) return;
+    if (!this.effectManager) return;
+    
+    let effectName = 'hit_normal';
+    
+    if (isDodged) {
+      effectName = 'dodge';
+    } else if (isBlocked) {
+      effectName = 'block';
+    } else if (isCritical) {
+      effectName = 'hit_critical';
+    }
+    
+    this.effectManager.triggerInteractionEffect(effectName, x, y);
+  }
+  
+  /**
+   * 播放受击音效
+   */
+  playHitSound(isCritical, isBlocked, isDodged) {
+    if (!this.soundManager) return;
+    
+    let soundId = 'hit_normal';
+    
+    if (isDodged) {
+      soundId = 'dodge';
+    } else if (isBlocked) {
+      soundId = 'block';
+    } else if (isCritical) {
+      soundId = 'hit_critical';
+    }
+    
+    this.soundManager.play(soundId, { volume: 0.5 });
+  }
+  
+  /**
+   * 显示伤害数字
+   */
+  showDamageNumber(x, y, damage, isCritical) {
+    if (!this.uiManager) return;
+    
+    this.uiManager.showDamageNumber({
+      x: x,
+      y: y - 30,
+      damage: damage,
+      isCritical: isCritical,
+      duration: 1000
+    });
+  }
+  
+  /**
+   * 处理死亡消息
+   */
+  handleDeath(data) {
+    const targetId = data.target_id;
+    
+    // 获取目标玩家
+    let target = null;
+    let isSelf = false;
+    
+    if (targetId === this.player.id) {
+      target = this.player;
+      isSelf = true;
+    } else {
+      target = this.players.get(targetId);
+    }
+    
+    if (!target) return;
+    
+    // 获取目标位置
+    const tileSize = this.mapEngine?.tileSize || 48;
+    const x = target.x * tileSize + tileSize / 2;
+    const y = target.y * tileSize + tileSize / 2;
+    
+    // 触发死亡特效
+    this.triggerDeathEffect(x, y);
+    
+    // 如果是自己死亡，显示死亡提示
+    if (isSelf) {
+      this.onPlayerDeath();
+    }
+  }
+  
+  /**
+   * 触发死亡特效
+   */
+  triggerDeathEffect(x, y) {
+    if (!this.effectSettings.enableSkillEffects) return;
+    if (!this.effectManager) return;
+    
+    this.effectManager.triggerInteractionEffect('death', x, y);
+  }
+  
+  /**
+   * 玩家死亡处理
+   */
+  onPlayerDeath() {
+    // 显示死亡UI
+    if (this.uiManager) {
+      this.uiManager.showDialog({
+        title: '你已死亡',
+        message: '是否选择复活？',
+        buttons: [
+          { text: '原地复活', onClick: () => this.respawn() },
+          { text: '回城复活', onClick: () => this.respawnToTown() }
+        ],
+        closeable: false
+      });
+    }
+    
+    // 停止玩家移动
+    if (this.mapEngine && this.mapEngine.player) {
+      this.mapEngine.player.stopMoving();
+    }
+  }
+  
+  /**
+   * 原地复活
+   */
+  respawn() {
+    // 关闭对话框
+    this.uiManager.hideDialog();
+    
+    // 触发复活特效
+    const tileSize = this.mapEngine?.tileSize || 48;
+    const x = this.player.x * tileSize + tileSize / 2;
+    const y = this.player.y * tileSize + tileSize / 2;
+    
+    if (this.effectManager) {
+      this.effectManager.triggerInteractionEffect('respawn', x, y);
+    }
+    
+    // 发送复活请求
+    window.GameWS.send(Protocol.CMD_RESPAWN, {
+      type: 'here',
+      role_id: this.player.id
+    });
+  }
+  
+  /**
+   * 回城复活
+   */
+  respawnToTown() {
+    // 关闭对话框
+    this.uiManager.hideDialog();
+    
+    // 发送回城复活请求
+    window.GameWS.send(Protocol.CMD_RESPAWN, {
+      type: 'town',
+      role_id: this.player.id
+    });
+  }
+  
+  /**
+   * 处理复活消息
+   */
+  handleRespawn(data) {
+    const targetId = data.target_id;
+    
+    if (targetId === this.player.id) {
+      // 自己复活
+      this.player.x = data.x || this.player.x;
+      this.player.y = data.y || this.player.y;
+      this.player.hp = data.hp || this.player.maxHp;
+      this.player.mp = data.mp || this.player.maxMp;
+      
+      // 更新位置到地图引擎
+      this.syncPlayerPosition();
+      
+      // 更新UI
+      this.updatePlayerUI();
+      
+      // 显示复活提示
+      if (this.uiManager) {
+        this.uiManager.toast('已复活！', 'success', 2000);
+      }
+    } else {
+      // 其他玩家复活
+      const player = this.players.get(targetId);
+      if (player) {
+        player.x = data.x || player.x;
+        player.y = data.y || player.y;
+        player.hp = data.hp || player.maxHp;
+      }
+    }
+    
+    // 触发复活特效
+    const tileSize = this.mapEngine?.tileSize || 48;
+    const x = (data.x || 0) * tileSize + tileSize / 2;
+    const y = (data.y || 0) * tileSize + tileSize / 2;
+    
+    if (this.effectManager) {
+      this.effectManager.triggerInteractionEffect('respawn', x, y);
+    }
+  }
+  
+  /**
+   * 处理升级消息
+   */
+  handleLevelUp(data) {
+    const targetId = data.target_id;
+    
+    if (targetId === this.player.id) {
+      // 自己升级
+      const oldLevel = this.player.level;
+      this.player.level = data.level || this.player.level;
+      this.player.maxHp = data.max_hp || this.player.maxHp;
+      this.player.maxMp = data.max_mp || this.player.maxMp;
+      this.player.attack = data.attack || this.player.attack;
+      this.player.defense = data.defense || this.player.defense;
+      this.player.speed = data.speed || this.player.speed;
+      
+      // 回满血蓝
+      this.player.hp = this.player.maxHp;
+      this.player.mp = this.player.maxMp;
+      
+      // 更新UI
+      this.updatePlayerUI();
+      
+      // 显示升级提示
+      if (this.uiManager) {
+        this.uiManager.toast(`恭喜升级！Lv.${oldLevel} → Lv.${this.player.level}`, 'success', 3000);
+      }
+    }
+    
+    // 获取目标位置
+    const tileSize = this.mapEngine?.tileSize || 48;
+    const x = (data.x || this.player.x) * tileSize + tileSize / 2;
+    const y = (data.y || this.player.y) * tileSize + tileSize / 2;
+    
+    // 触发升级特效
+    this.triggerLevelUpEffect(x, y);
+  }
+  
+  /**
+   * 触发升级特效
+   */
+  triggerLevelUpEffect(x, y) {
+    if (!this.effectSettings.enableSkillEffects) return;
+    if (!this.effectManager) return;
+    
+    this.effectManager.triggerInteractionEffect('level_up', x, y);
+  }
+  
+  /**
+   * 处理增益效果
+   */
+  handleBuff(data) {
+    const targetId = data.target_id;
+    const buffType = data.buff_type;
+    
+    // 获取目标玩家
+    let target = null;
+    
+    if (targetId === this.player.id) {
+      target = this.player;
+    } else {
+      target = this.players.get(targetId);
+    }
+    
+    if (!target) return;
+    
+    // 获取目标位置
+    const tileSize = this.mapEngine?.tileSize || 48;
+    const x = target.x * tileSize + tileSize / 2;
+    const y = target.y * tileSize + tileSize / 2;
+    
+    // 触发增益特效
+    this.triggerBuffEffect(buffType, x, y);
+    
+    // 如果是自己，显示提示
+    if (targetId === this.player.id && this.uiManager) {
+      const buffNames = {
+        attack: '攻击增益',
+        defense: '防御增益',
+        speed: '速度增益',
+        heal: '持续治疗'
+      };
+      this.uiManager.toast(`获得${buffNames[buffType] || buffType}效果！`, 'success', 2000);
+    }
+  }
+  
+  /**
+   * 触发增益特效
+   */
+  triggerBuffEffect(buffType, x, y) {
+    if (!this.effectSettings.enableSkillEffects) return;
+    if (!this.effectManager) return;
+    
+    const buffMap = {
+      attack: 'buff_attack',
+      defense: 'buff_defense',
+      speed: 'buff_speed',
+      heal: 'buff_heal'
+    };
+    
+    const effectName = buffMap[buffType] || 'buff_attack';
+    this.effectManager.triggerStatusEffect(effectName, { x, y });
+  }
+  
+  /**
+   * 处理减益效果
+   */
+  handleDebuff(data) {
+    const targetId = data.target_id;
+    const debuffType = data.debuff_type;
+    
+    // 获取目标玩家
+    let target = null;
+    
+    if (targetId === this.player.id) {
+      target = this.player;
+    } else {
+      target = this.players.get(targetId);
+    }
+    
+    if (!target) return;
+    
+    // 获取目标位置
+    const tileSize = this.mapEngine?.tileSize || 48;
+    const x = target.x * tileSize + tileSize / 2;
+    const y = target.y * tileSize + tileSize / 2;
+    
+    // 触发减益特效
+    this.triggerDebuffEffect(debuffType, x, y);
+    
+    // 如果是自己，显示提示
+    if (targetId === this.player.id && this.uiManager) {
+      const debuffNames = {
+        poison: '中毒',
+        burn: '灼烧',
+        freeze: '冰冻',
+        stun: '眩晕',
+        bleed: '流血',
+        silence: '沉默',
+        fear: '恐惧'
+      };
+      this.uiManager.toast(`受到${debuffNames[debuffType] || debuffType}效果！`, 'warning', 2000);
+    }
+  }
+  
+  /**
+   * 触发减益特效
+   */
+  triggerDebuffEffect(debuffType, x, y) {
+    if (!this.effectSettings.enableSkillEffects) return;
+    if (!this.effectManager) return;
+    
+    const debuffMap = {
+      poison: 'poison',
+      burn: 'burn',
+      freeze: 'freeze',
+      stun: 'stun',
+      bleed: 'bleed',
+      silence: 'silence',
+      fear: 'fear'
+    };
+    
+    const effectName = debuffMap[debuffType] || 'poison';
+    this.effectManager.triggerStatusEffect(effectName, { x, y });
+  }
+  
+  /**
+   * 处理地图事件
+   */
+  handleMapEvent(data) {
+    const eventType = data.event_type;
+    const x = data.x || 0;
+    const y = data.y || 0;
+    
+    // 获取位置
+    const tileSize = this.mapEngine?.tileSize || 48;
+    const screenX = x * tileSize + tileSize / 2;
+    const screenY = y * tileSize + tileSize / 2;
+    
+    // 触发地图事件特效
+    this.triggerMapEventEffect(eventType, screenX, screenY);
+  }
+  
+  /**
+   * 触发地图事件特效
+   */
+  triggerMapEventEffect(eventType, x, y) {
+    if (!this.effectSettings.enableSkillEffects) return;
+    if (!this.effectManager) return;
+    
+    const eventMap = {
+      spawn: 'map_event_spawn',
+      end: 'map_event_end',
+      portal_open: 'portal_open',
+      chest_open: 'chest_open'
+    };
+    
+    const effectName = eventMap[eventType] || 'map_event_spawn';
+    this.effectManager.triggerInteractionEffect(effectName, x, y);
   }
   
   // 处理地图玩家列表（服务器主动推送）
@@ -1155,7 +1836,16 @@ class Game {
   }
   
   handleEnterMap(data) {
-    if (data.role_id === this.player.id) return; // 忽略自己
+    // 如果是自己的进入地图响应，使用服务端返回的坐标更新位置
+    if (data.role_id === this.player.id) {
+      console.log(`进入地图响应: 服务端返回位置 (${data.x}, ${data.y})，客户端当前位置 (${this.player.x}, ${this.player.y})`);
+      // 使用服务端返回的坐标更新玩家位置
+      if (data.x !== undefined) this.player.x = data.x;
+      if (data.y !== undefined) this.player.y = data.y;
+      // 同步到地图引擎
+      this.syncPlayerPosition();
+      return;
+    }
     
     console.log('玩家进入地图:', data);
     
@@ -1206,7 +1896,15 @@ class Game {
     if (data.exp !== undefined) this.player.exp = data.exp;
     if (data.level !== undefined) this.player.level = data.level;
     if (data.gold !== undefined) this.player.gold = data.gold;
-    
+
+    // 同步位置（服务器纠正客户端位置）
+    if (data.x !== undefined && data.y !== undefined) {
+      console.log(`位置同步: ${this.player.x},${this.player.y} -> ${data.x},${data.y}`);
+      this.player.x = data.x;
+      this.player.y = data.y;
+      this.syncPlayerPosition();
+    }
+
     this.updatePlayerUI();
   }
   
@@ -1327,6 +2025,10 @@ class Game {
     // 检查冷却
     const cooldownEnd = this.skillCooldowns.get(skillId) || 0;
     if (Date.now() < cooldownEnd) {
+      // 显示冷却提示
+      if (this.uiManager) {
+        this.uiManager.toast('技能冷却中', 'warning', 1000);
+      }
       return;
     }
     
@@ -1338,12 +2040,74 @@ class Game {
       y: this.player.y
     });
     
+    // 触发技能特效
+    this.triggerSkillEffect(skillId);
+    
+    // 播放技能音效
+    this.playSkillSound(skillId);
+    
     // 设置冷却
     const cooldown = skillId === 0 ? 1000 : 3000;
     this.skillCooldowns.set(skillId, Date.now() + cooldown);
     
     // 更新UI
     this.updateSkillUI();
+  }
+  
+  /**
+   * 触发技能特效
+   */
+  triggerSkillEffect(skillId) {
+    if (!this.effectSettings.enableSkillEffects) return;
+    if (!this.effectManager || !this.particleSystem) return;
+    
+    const tileSize = this.mapEngine?.tileSize || 48;
+    const x = this.player.x * tileSize + tileSize / 2;
+    const y = this.player.y * tileSize + tileSize / 2;
+    
+    // 根据技能ID选择特效
+    const effectMap = {
+      0: 'sword_slash',   // 普通攻击
+      1: 'fire_burst',    // 技能1 - 火焰
+      2: 'ice_burst',     // 技能2 - 冰霜
+      3: 'magic_circle',  // 技能3 - 魔法阵
+      4: 'thunder_strike' // 技能4 - 雷霆
+    };
+    
+    const effectName = effectMap[skillId] || 'hit_spark';
+    
+    if (this.effectSettings.enableScreenShake && skillId >= 2) {
+      // 高级技能触发屏幕震动
+      this.effectManager.triggerSkillEffect(effectName, { x, y }, { x, y }, {
+        shake: skillId >= 3,
+        shakeIntensity: skillId === 4 ? 8 : 3
+      });
+    } else {
+      this.effectManager.triggerSkillEffect(effectName, { x, y }, { x, y }, {
+        shake: false
+      });
+    }
+  }
+  
+  /**
+   * 播放技能音效
+   */
+  playSkillSound(skillId) {
+    if (!this.soundManager) return;
+    
+    const soundMap = {
+      0: 'sword_swing',
+      1: 'fire_cast',
+      2: 'ice_cast',
+      3: 'heal',
+      4: 'thunder'
+    };
+    
+    const soundId = soundMap[skillId] || 'punch';
+    this.soundManager.play(soundId, {
+      volume: 0.6,
+      pan: 0
+    });
   }
   
   updateSkillUI() {
@@ -1378,16 +2142,26 @@ class Game {
   }
   
   startGameLoop() {
-    const loop = () => {
+    let lastTime = performance.now();
+    
+    const loop = (currentTime) => {
+      const deltaTime = currentTime - lastTime;
+      lastTime = currentTime;
+      
       if (this.state === 'playing') {
         // 更新技能冷却UI
         this.updateSkillUI();
+        
+        // 更新特效系统
+        if (this.effectSettings.enableParticles && this.effectManager) {
+          this.effectManager.update(deltaTime);
+        }
       }
       
       requestAnimationFrame(loop);
     };
     
-    loop();
+    loop(performance.now());
   }
   
   // 更新其他玩家的平滑移动（基于时间）
@@ -1470,6 +2244,11 @@ class Game {
     const canvas = this.mapEngine?.canvas;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
+    
+    // 渲染特效系统
+    if (this.effectSettings.enableParticles && this.effectManager) {
+      this.effectManager.render(ctx);
+    }
     
     // 获取当前玩家位置和视野范围（用于视野裁剪）
     const tileSize = this.mapEngine.tileSize || 48;
@@ -1554,10 +2333,10 @@ class Game {
       dodge: 10,
       crit: 5,
       mapId: 1,
-      x: 5,
-      y: 5
+      x: 0,
+      y: 0
     };
-    
+
     // 清空其他玩家列表
     this.players.clear();
     
@@ -1580,10 +2359,33 @@ class Game {
       this.fpsUpdateTimer = null;
     }
     
+    // 清理特效系统
+    if (this.effectManager) {
+      this.effectManager.clearAll();
+    }
+    
+    if (this.particleSystem) {
+      this.particleSystem.clearAll();
+    }
+    
+    // 清理音效系统
+    if (this.soundManager) {
+      this.soundManager.stopAll();
+      this.soundManager.stopBGM(0);
+    }
+    
+    // 清理UI系统
+    if (this.uiManager) {
+      this.uiManager.clearAll();
+    }
+    
     // 清理地图引擎
     if (this.mapEngine && typeof this.mapEngine.destroy === 'function') {
       this.mapEngine.destroy();
     }
+    
+    // 移除所有事件监听器
+    this.removeAllEventListeners();
     
     // 清理 WebSocket 连接
     if (window.GameWS) {
@@ -1611,6 +2413,12 @@ const Protocol = window.Protocol = {
   CMD_USE_ITEM: 2006,
   CMD_EQUIP: 2007,
   CMD_TRADE: 2008,
+  CMD_DAMAGE: 2009,
+  CMD_DEATH: 2010,
+  CMD_RESPAWN: 2011,
+  CMD_LEVEL_UP: 2012,
+  CMD_BUFF: 2013,
+  CMD_DEBUFF: 2014,
   
   // 地图相关 3001-3050
   CMD_ENTER_MAP: 3001,
@@ -1619,6 +2427,7 @@ const Protocol = window.Protocol = {
   CMD_ONLINE_COUNT: 3004,
   CMD_NPC_TALK: 3005,
   CMD_NPC_TRADE: 3006,
+  CMD_MAP_EVENT: 3007,
   
   // 武学相关 4001-4020
   CMD_SKILL_LEARN: 4001,

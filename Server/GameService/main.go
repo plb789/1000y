@@ -54,6 +54,9 @@ func main() {
 	// 初始化服务客户端(连接DBService)
 	common.InitServiceClients()
 
+	// 初始化消息总线
+	initMessageBus()
+
 	// 初始化注册中心
 	registryURL := common.AppConfig.Services.RegistryService
 	if registryURL == "" {
@@ -92,15 +95,49 @@ func loadManagedMaps() {
 	// 加载本实例负责的地图
 	for _, m := range common.GameConfig.Maps {
 		if mapSet[m.ID] {
+			// 先加载地图文件
 			mapPath := "./Res/Map/" + m.MapFile
 			err := gamemap.LoadMapFile(mapPath)
 			if err != nil {
-				log.Printf("地图[%s]加载失败: %v", m.Name, err)
+				log.Printf("地图[%s]文件加载失败: %v", m.Name, err)
 			} else {
-				log.Printf("地图[%s]加载成功 (instance=%d)", m.Name, instanceID)
+				log.Printf("地图[%s]文件加载成功 (instance=%d)", m.Name, instanceID)
+			}
+
+			// 再加载地图数据到内存（初始化Collision数组等）
+			_, err = gamemap.GetService().LoadMap(m.ID)
+			if err != nil {
+				log.Printf("地图[%s]内存加载失败: %v", m.Name, err)
+			} else {
+				log.Printf("地图[%s]内存加载成功 (instance=%d)", m.Name, instanceID)
 			}
 		}
 	}
+}
+
+// initMessageBus 初始化消息总线
+func initMessageBus() {
+	busConfig := common.AppConfig.MessageBus
+
+	if busConfig.Type == "" {
+		busConfig.Type = "http" // 默认使用HTTP
+	}
+
+	gatewayURL := common.AppConfig.Services.GatewayService
+	if gatewayURL == "" {
+		gatewayURL = "http://localhost:8080"
+	}
+
+	log.Printf("消息总线配置: type=%s, gateway=%s", busConfig.Type, gatewayURL)
+
+	config := common.MessageBusConfig{
+		Type:         busConfig.Type,
+		RabbitMQURL:  busConfig.RabbitMQURL,
+		KafkaBrokers: busConfig.KafkaBrokers,
+		HTTPURL:      gatewayURL,
+	}
+
+	common.InitMessageBus(config)
 }
 
 func startHeartbeat() {
@@ -148,7 +185,7 @@ func startHTTPServer() {
 	})
 
 	// 注册地图路由
-	mapHandler := gamemap.NewHandler()
+	mapHandler := gamemap.NewHandler(instanceID)
 	mapHandler.RegisterRoutes(r)
 
 	// 注册战斗路由

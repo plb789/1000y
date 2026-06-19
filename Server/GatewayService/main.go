@@ -227,6 +227,32 @@ func (cm *ClientManager) Start() {
 			cm.removeClient(client)
 			log.Printf("客户端断开: roleID=%d", client.ID)
 
+			// 通知GameService保存玩家位置并离开地图
+			go func(c *Client) {
+				roleID := c.ID
+				mapID := c.MapID
+				if mapID > 0 {
+					// 获取处理该地图的GameService实例
+					instance := common.GetInstanceByMapID(mapID)
+					if instance == nil {
+						log.Printf("未找到处理地图 %d 的GameService实例", mapID)
+						return
+					}
+					gatewayURL := instance.URL
+
+					// 调用GameService保存位置
+					body, _ := json.Marshal(map[string]interface{}{
+						"role_id": roleID,
+						"map_id":  mapID,
+					})
+					resp, err := http.Post(gatewayURL+"/api/map/leave", "application/json", bytes.NewReader(body))
+					if err == nil {
+						resp.Body.Close()
+						log.Printf("通知GameService保存位置: roleID=%d, mapID=%d", roleID, mapID)
+					}
+				}
+			}(client)
+
 			// 广播玩家离开
 			cm.BroadcastToMap(client.MapID, &Message{
 				From: client.ID,
@@ -786,10 +812,9 @@ func (c *Client) handleEnterMap(body []byte) {
 		})
 	}
 
-	// 更新玩家地图和位置
+	// 更新玩家地图（位置由notifyGameServiceEnterMap已设置，不要用客户端坐标覆盖）
 	c.MapID = req.MapID
-	c.X = req.X
-	c.Y = req.Y
+	// 注意：c.X 和 c.Y 保持不变，因为 notifyGameServiceEnterMap 已经设置了正确的数据库位置
 
 	// 如果还未注册，现在注册（直接调用addClient，确保同步）
 	if !c.Registered {
@@ -801,6 +826,13 @@ func (c *Client) handleEnterMap(body []byte) {
 			saveSession(c.Token, c.AccountID, c.ID, c.Name, c.MapID, c.X, c.Y)
 			log.Printf("保存会话: token=%s, accountID=%d, roleID=%d", c.Token[:min(10, len(c.Token))]+"...", c.AccountID, c.ID)
 		}
+
+		// 向客户端发送当前位置同步（纠正客户端坐标）
+		log.Printf("发送位置同步给玩家 %d: x=%d, y=%d", c.ID, c.X, c.Y)
+		c.sendPacket(CmdSync, mustMarshal(map[string]interface{}{
+			"x": c.X,
+			"y": c.Y,
+		}))
 
 		// 先获取当前在线人数（注册后的值）
 		currentCount := GlobalManager.GetOnlineCount()
@@ -899,18 +931,51 @@ func (c *Client) handleMove(body []byte) {
 		moveData.Y = int(binary.LittleEndian.Uint16(body[2:4]))
 	}
 
+	// 更新本地缓存位置
 	c.X = moveData.X
 	c.Y = moveData.Y
 
-	log.Printf("玩家移动: roleID=%d, x=%d, y=%d", c.ID, c.X, c.Y)
+	log.Printf("玩家移动: roleID=%d, x=%d, y=%d, mapID=%d", c.ID, c.X, c.Y, c.MapID)
 
-	// 使用消息合并和并发广播（同一玩家短时间内多次移动会合并成一条消息）
-	data := mustMarshal(map[string]interface{}{
+	// 转发到GameService处理移动逻辑
+	go c.forwardMoveToGameService(moveData.X, moveData.Y)
+}
+
+// forwardMoveToGameService 将移动请求转发到GameService
+func (c *Client) forwardMoveToGameService(x, y int) {
+	// 获取处理该地图的GameService实例
+	instance := common.GetInstanceByMapID(c.MapID)
+	if instance == nil {
+		log.Printf("未找到处理地图 %d 的GameService实例", c.MapID)
+		return
+	}
+
+	// 构建移动请求
+	moveReq := map[string]interface{}{
 		"role_id": c.ID,
-		"x":       c.X,
-		"y":       c.Y,
-	})
-	GlobalManager.MergeAndBroadcastMove(c.MapID, c.ID, c.X, c.Y, data)
+		"map_id":  c.MapID,
+		"x":       x,
+		"y":       y,
+	}
+
+	jsonData, err := json.Marshal(moveReq)
+	if err != nil {
+		log.Printf("序列化移动数据失败: %v", err)
+		return
+	}
+
+	// 调用GameService的移动接口
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Post(instance.URL+"/api/map/move", "application/json", bytes.NewReader(jsonData))
+	if err != nil {
+		log.Printf("调用GameService移动接口失败: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("GameService移动处理失败，状态码: %d", resp.StatusCode)
+	}
 }
 
 func (c *Client) handleChat(body []byte) {
@@ -1109,12 +1174,35 @@ func (c *Client) handleLevelUp(body []byte) {
 	}
 
 	// 调用GameService处理升级逻辑
-	go func() {
-		// TODO: 调用GameService的HTTP接口
-		// 简化处理：直接广播给目标玩家
-		msg := mustMarshal(levelUp)
-		GlobalManager.broadcast <- &Message{To: levelUp.TargetID, Type: CmdLevelUp, Data: msg}
-	}()
+	go c.forwardLevelUpToGameService(levelUp.TargetID, levelUp.Level)
+}
+
+// forwardLevelUpToGameService 将升级请求转发到GameService
+func (c *Client) forwardLevelUpToGameService(targetID uint64, level int) {
+	instances := common.GetAllInstances()
+	if len(instances) == 0 {
+		log.Printf("没有可用的GameService实例")
+		return
+	}
+
+	reqData := map[string]interface{}{
+		"target_id": targetID,
+		"level":     level,
+	}
+
+	jsonData, err := json.Marshal(reqData)
+	if err != nil {
+		log.Printf("序列化升级数据失败: %v", err)
+		return
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Post(instances[0].URL+"/api/battle/level_up", "application/json", bytes.NewReader(jsonData))
+	if err != nil {
+		log.Printf("调用GameService升级接口失败: %v", err)
+		return
+	}
+	defer resp.Body.Close()
 }
 
 // handleBuff 处理增益效果消息（转发到GameService）
@@ -1128,12 +1216,35 @@ func (c *Client) handleBuff(body []byte) {
 	}
 
 	// 调用GameService处理增益逻辑
-	go func() {
-		// TODO: 调用GameService的HTTP接口
-		// 简化处理：直接广播给目标玩家
-		msg := mustMarshal(buff)
-		GlobalManager.broadcast <- &Message{To: buff.TargetID, Type: CmdBuff, Data: msg}
-	}()
+	go c.forwardBuffToGameService(buff.TargetID, buff.BuffType)
+}
+
+// forwardBuffToGameService 将增益请求转发到GameService
+func (c *Client) forwardBuffToGameService(targetID uint64, buffType string) {
+	instances := common.GetAllInstances()
+	if len(instances) == 0 {
+		log.Printf("没有可用的GameService实例")
+		return
+	}
+
+	reqData := map[string]interface{}{
+		"target_id": targetID,
+		"buff_type": buffType,
+	}
+
+	jsonData, err := json.Marshal(reqData)
+	if err != nil {
+		log.Printf("序列化增益数据失败: %v", err)
+		return
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Post(instances[0].URL+"/api/battle/buff", "application/json", bytes.NewReader(jsonData))
+	if err != nil {
+		log.Printf("调用GameService增益接口失败: %v", err)
+		return
+	}
+	defer resp.Body.Close()
 }
 
 // handleDeBuff 处理减益效果消息（转发到GameService）
@@ -1147,12 +1258,35 @@ func (c *Client) handleDeBuff(body []byte) {
 	}
 
 	// 调用GameService处理减益逻辑
-	go func() {
-		// TODO: 调用GameService的HTTP接口
-		// 简化处理：直接广播给目标玩家
-		msg := mustMarshal(debuff)
-		GlobalManager.broadcast <- &Message{To: debuff.TargetID, Type: CmdDeBuff, Data: msg}
-	}()
+	go c.forwardDeBuffToGameService(debuff.TargetID, debuff.DeBuffType)
+}
+
+// forwardDeBuffToGameService 将减益请求转发到GameService
+func (c *Client) forwardDeBuffToGameService(targetID uint64, debuffType string) {
+	instances := common.GetAllInstances()
+	if len(instances) == 0 {
+		log.Printf("没有可用的GameService实例")
+		return
+	}
+
+	reqData := map[string]interface{}{
+		"target_id":   targetID,
+		"debuff_type": debuffType,
+	}
+
+	jsonData, err := json.Marshal(reqData)
+	if err != nil {
+		log.Printf("序列化减益数据失败: %v", err)
+		return
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Post(instances[0].URL+"/api/battle/debuff", "application/json", bytes.NewReader(jsonData))
+	if err != nil {
+		log.Printf("调用GameService减益接口失败: %v", err)
+		return
+	}
+	defer resp.Body.Close()
 }
 
 // handleMapEvent 处理地图事件消息（转发到GameService）
@@ -1167,12 +1301,37 @@ func (c *Client) handleMapEvent(body []byte) {
 	}
 
 	// 调用GameService处理地图事件逻辑
-	go func() {
-		// TODO: 调用GameService的HTTP接口
-		// 简化处理：直接广播给当前地图所有玩家
-		msg := mustMarshal(event)
-		GlobalManager.BroadcastToMap(c.MapID, &Message{From: c.ID, Type: CmdMapEvent, Data: msg})
-	}()
+	go c.forwardMapEventToGameService(event.EventType, c.MapID, event.X, event.Y)
+}
+
+// forwardMapEventToGameService 将地图事件转发到GameService
+func (c *Client) forwardMapEventToGameService(eventType string, mapID uint32, x, y int) {
+	instance := common.GetInstanceByMapID(mapID)
+	if instance == nil {
+		log.Printf("没有找到处理地图 %d 的GameService实例", mapID)
+		return
+	}
+
+	reqData := map[string]interface{}{
+		"event_type": eventType,
+		"map_id":     mapID,
+		"x":          x,
+		"y":          y,
+	}
+
+	jsonData, err := json.Marshal(reqData)
+	if err != nil {
+		log.Printf("序列化地图事件数据失败: %v", err)
+		return
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Post(instance.URL+"/api/battle/map_event", "application/json", bytes.NewReader(jsonData))
+	if err != nil {
+		log.Printf("调用GameService地图事件接口失败: %v", err)
+		return
+	}
+	defer resp.Body.Close()
 }
 
 func (c *Client) sendPacket(cmd uint16, data []byte) {
@@ -1502,6 +1661,58 @@ func (c *Client) handleRoleSelect(body []byte) {
 		"speed":   role.Speed,
 		"gold":    role.Gold,
 	}))
+
+	// 通知 GameService 进入地图
+	go c.notifyGameServiceEnterMap()
+}
+
+// notifyGameServiceEnterMap 通知 GameService 玩家进入地图
+func (c *Client) notifyGameServiceEnterMap() {
+	instance := common.GetInstanceByMapID(c.MapID)
+	if instance == nil {
+		log.Printf("未找到处理地图 %d 的GameService实例，跳过进入地图通知", c.MapID)
+		return
+	}
+
+	enterReq := map[string]interface{}{
+		"role_id": c.ID,
+		"map_id":  c.MapID,
+		"x":       c.X,
+		"y":       c.Y,
+	}
+
+	jsonData, err := json.Marshal(enterReq)
+	if err != nil {
+		log.Printf("序列化进入地图数据失败: %v", err)
+		return
+	}
+
+	log.Printf("通知GameService进入地图: roleID=%d, mapID=%d, x=%d, y=%d, body=%s",
+		c.ID, c.MapID, c.X, c.Y, string(jsonData))
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Post(instance.URL+"/api/map/enter", "application/json", bytes.NewReader(jsonData))
+	if err != nil {
+		log.Printf("通知GameService进入地图失败: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	// 解析响应，获取实际的坐标
+	if resp.StatusCode == http.StatusOK {
+		var result map[string]interface{}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err == nil {
+			if x, ok := result["x"].(float64); ok {
+				c.X = int(x)
+			}
+			if y, ok := result["y"].(float64); ok {
+				c.Y = int(y)
+			}
+			log.Printf("玩家 %d 进入地图 %d，实际坐标: x=%d, y=%d", c.ID, c.MapID, c.X, c.Y)
+		}
+	}
+
+	log.Printf("玩家 %d 进入地图 %d 成功，GameService状态码: %d", c.ID, c.MapID, resp.StatusCode)
 }
 
 func init() {
@@ -1530,6 +1741,55 @@ func heartbeatCheck() {
 // GlobalManager 全局客户端管理器
 var GlobalManager = NewClientManager()
 
+// initMessageBus 初始化消息总线
+func initMessageBus() {
+	busConfig := common.AppConfig.MessageBus
+
+	if busConfig.Type == "" {
+		busConfig.Type = "http" // 默认使用HTTP
+	}
+
+	config := common.MessageBusConfig{
+		Type:         busConfig.Type,
+		RabbitMQURL:  busConfig.RabbitMQURL,
+		KafkaBrokers: busConfig.KafkaBrokers,
+		HTTPURL:      "", // Gateway不需要HTTPURL
+	}
+
+	common.InitMessageBus(config)
+
+	// 如果消息总线可用，订阅消息
+	if common.GlobalMessageBus != nil && common.GlobalMessageBus.IsAvailable() {
+		go subscribeMessages()
+	}
+}
+
+// subscribeMessages 订阅消息总线消息
+func subscribeMessages() {
+	// 订阅移动消息
+	common.GlobalMessageBus.Subscribe("map_move", func(data []byte) {
+		var moveData struct {
+			RoleID uint64 `json:"role_id"`
+			MapID  uint32 `json:"map_id"`
+			X      int    `json:"x"`
+			Y      int    `json:"y"`
+		}
+		if err := json.Unmarshal(data, &moveData); err != nil {
+			log.Printf("解析移动消息失败: %v", err)
+			return
+		}
+
+		// 广播给同地图玩家
+		GlobalManager.BroadcastToMap(moveData.MapID, &Message{
+			From: moveData.RoleID,
+			Type: CmdMove,
+			Data: data,
+		})
+	})
+
+	log.Printf("消息总线订阅完成")
+}
+
 func main() {
 	log.Println("===== 网关服务启动 =====")
 
@@ -1549,6 +1809,9 @@ func main() {
 
 	// 初始化分片游戏客户端
 	InitShardedGameClient()
+
+	// 初始化消息总线
+	initMessageBus()
 
 	// 初始化 Redis（从配置读取）
 	redisAddr := common.AppConfig.Redis.Addr
@@ -1579,6 +1842,8 @@ func main() {
 	http.HandleFunc("/internal/push", handleInternalPush)
 	// 内部API：GameService调用广播消息给地图玩家
 	http.HandleFunc("/internal/broadcast", handleInternalBroadcast)
+	// 内部API：GameService调用广播移动消息给同地图玩家
+	http.HandleFunc("/internal/broadcast_map", handleInternalBroadcastMap)
 
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", wsPort), nil))
 }
@@ -1663,6 +1928,50 @@ func handleInternalBroadcast(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("广播消息到地图: mapID=%d, msgType=%s, cmd=%d", req.MapID, req.MsgType, cmd)
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"ok"}`))
+}
+
+// handleInternalBroadcastMap 处理GameService的移动广播请求
+func handleInternalBroadcastMap(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		RoleID uint64 `json:"role_id"`
+		MapID  uint32 `json:"map_id"`
+		X      int    `json:"x"`
+		Y      int    `json:"y"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("解析移动广播请求失败: %v", err)
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	// 构建移动消息
+	msgData, err := json.Marshal(map[string]interface{}{
+		"role_id": req.RoleID,
+		"x":       req.X,
+		"y":       req.Y,
+	})
+	if err != nil {
+		log.Printf("序列化移动数据失败: %v", err)
+		http.Error(w, "Invalid data", http.StatusBadRequest)
+		return
+	}
+
+	// 使用 BroadcastToMap 只广播给同地图玩家（排除自己）
+	GlobalManager.BroadcastToMap(req.MapID, &Message{
+		From: req.RoleID,
+		Type: CmdMove,
+		Data: msgData,
+	})
+
+	log.Printf("广播移动消息: roleID=%d, mapID=%d, x=%d, y=%d", req.RoleID, req.MapID, req.X, req.Y)
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"status":"ok"}`))
 }

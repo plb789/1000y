@@ -2,10 +2,8 @@ ws_port: 8080
 ip_white: []
 
 services:
-  db_service: "http://localhost:8083"
-  login_service: "http://localhost:8084"
-  game_service: "http://localhost:8082"
-  registry_service: "http://localhost:8081"  # 服务注册中心地址（独立服务）
+  login_service: "http://localhost:8084"  # 登录服务地址
+  registry_service: "http://localhost:8081"  # 服务注册中心地址
 
 redis:
   addr: "127.0.0.1:6379"
@@ -28,4 +26,11 @@ gateway:
   broadcast_channel_size: 5000    # 广播消息队列大小
   max_connections_per_ip: 10      # 同一IP最大连接数(防攻击)
   view_range: 500                 # 视野范围(像素)
-  move_merge_delay: 0             # 移动消息合并延迟(毫秒)，设为0禁用合并
+  move_merge_delay: 50             # 移动消息合并延迟(毫秒)，设为0禁用合并
+
+# 消息总线配置
+message_bus:
+  type: "rabbitmq"                # 消息总线类型: rabbitmq, kafka, http
+  rabbitmq_url: "amqp://guest:guest@localhost:5672/"
+  kafka_brokers:
+    - "localhost:9092"
