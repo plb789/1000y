@@ -12,6 +12,7 @@ register_to_registry: true        # 是否注册到服务发现中心
 # 服务地址配置
 services:
   db_service: "http://localhost:8083"
-  login_service: "http://localhost:8081"
+  login_service: "http://localhost:8084"
   game_service: "http://localhost:8082"
-  registry_service: "http://localhost:8083"  # 服务注册中心地址
+  gateway_service: "http://localhost:8080"   # Gateway服务地址（用于推送消息）
+  registry_service: "http://localhost:8081"  # 服务注册中心地址（独立服务）

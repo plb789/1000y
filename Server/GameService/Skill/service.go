@@ -3,7 +3,7 @@ package skill
 import (
 	"encoding/json"
 	"errors"
-	"game-server/Common"
+	common "game-server/Common"
 	"math"
 )
 
@@ -18,17 +18,17 @@ func NewService() *Service {
 // LearnSkill 学习武学
 // 返回: 错误信息
 func (s *Service) LearnSkill(roleID uint64, skillID uint32) error {
-	return Common.DBSkillLearn(roleID, skillID)
+	return common.DBSkillLearn(roleID, skillID)
 }
 
 // GetRoleSkills 获取角色所有武学
 func (s *Service) GetRoleSkills(roleID uint64) ([]map[string]interface{}, error) {
-	return Common.DBSkillGetList(roleID)
+	return common.DBSkillGetList(roleID)
 }
 
 // GetRoleSkillsByType 获取角色指定类型的武学
 func (s *Service) GetRoleSkillsByType(roleID uint64, skillType uint8) ([]map[string]interface{}, error) {
-	allSkills, err := Common.DBSkillGetList(roleID)
+	allSkills, err := common.DBSkillGetList(roleID)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +45,7 @@ func (s *Service) GetRoleSkillsByType(roleID uint64, skillType uint8) ([]map[str
 
 // GetSkillBase 获取武学基础信息
 func (s *Service) GetSkillBase(skillID uint32) (map[string]interface{}, error) {
-	config := Common.GetSkillConfig(skillID)
+	config := common.GetSkillConfig(skillID)
 	if config == nil {
 		return nil, errors.New("武学不存在")
 	}
@@ -75,7 +75,7 @@ func (s *Service) GetSkillBase(skillID uint32) (map[string]interface{}, error) {
 // GetAllSkillBase 获取所有武学基础信息
 func (s *Service) GetAllSkillBase() ([]map[string]interface{}, error) {
 	var result []map[string]interface{}
-	for _, config := range Common.GetAllSkillConfig() {
+	for _, config := range common.GetAllSkillConfig() {
 		result = append(result, map[string]interface{}{
 			"id":            config.ID,
 			"name":          config.Name,
@@ -104,7 +104,7 @@ func (s *Service) GetAllSkillBase() ([]map[string]interface{}, error) {
 // GetSkillBaseByType 获取指定类型的所有武学
 func (s *Service) GetSkillBaseByType(skillType uint8) ([]map[string]interface{}, error) {
 	var result []map[string]interface{}
-	for _, config := range Common.GetAllSkillConfig() {
+	for _, config := range common.GetAllSkillConfig() {
 		if config.Type == skillType {
 			result = append(result, map[string]interface{}{
 				"id":            config.ID,
@@ -138,7 +138,7 @@ func (s *Service) GetSkillBaseByType(skillType uint8) ([]map[string]interface{},
 // exp: 增加的熟练度
 // 返回: 是否升级及错误信息
 func (s *Service) AddExp(roleID uint64, skillID uint32, exp int64) (bool, uint32, error) {
-	leveledUp, level, _, err := Common.DBSkillAddExp(roleID, skillID, exp)
+	leveledUp, level, _, err := common.DBSkillAddExp(roleID, skillID, exp)
 	return leveledUp, uint32(level), err
 }
 
@@ -146,13 +146,13 @@ func (s *Service) AddExp(roleID uint64, skillID uint32, exp int64) (bool, uint32
 // 返回: 新等级及错误信息
 func (s *Service) UpgradeSkill(roleID uint64, skillID uint32) (uint32, error) {
 	// 获取武学信息
-	skillInfo, err := Common.DBSkillGetBase(skillID)
+	skillInfo, err := common.DBSkillGetBase(skillID)
 	if err != nil {
 		return 0, errors.New("武学不存在")
 	}
 
 	// 检查是否已达最高等级
-	skills, err := Common.DBSkillGetList(roleID)
+	skills, err := common.DBSkillGetList(roleID)
 	if err != nil {
 		return 0, err
 	}
@@ -180,17 +180,17 @@ func (s *Service) UpgradeSkill(roleID uint64, skillID uint32) (uint32, error) {
 // 千年游戏中,外功/拳法/剑法/刀法/枪法/斧法只能装备一个
 // 内功/身法/护体可以各装备一个
 func (s *Service) EquipSkill(roleID uint64, skillID uint32) error {
-	return Common.DBSkillEquip(roleID, skillID)
+	return common.DBSkillEquip(roleID, skillID)
 }
 
 // UnequipSkill 卸下武学
 func (s *Service) UnequipSkill(roleID uint64, skillID uint32) error {
-	return Common.DBSkillUnequip(roleID, skillID)
+	return common.DBSkillUnequip(roleID, skillID)
 }
 
 // GetEquippedSkills 获取角色已装备的武学
 func (s *Service) GetEquippedSkills(roleID uint64) ([]map[string]interface{}, error) {
-	return Common.DBSkillGetEquipped(roleID)
+	return common.DBSkillGetEquipped(roleID)
 }
 
 // CalculateSkillBonus 计算武学加成
@@ -272,12 +272,12 @@ func (s *Service) CalculateSkillBonus(roleID uint64) (map[string]int, error) {
 
 // ForgetSkill 遗忘武学（需谨慎使用）
 func (s *Service) ForgetSkill(roleID uint64, skillID uint32) error {
-	return Common.DBSkillForget(roleID, skillID)
+	return common.DBSkillForget(roleID, skillID)
 }
 
 // GetSkillExpProgress 获取武学熟练度进度
 func (s *Service) GetSkillExpProgress(roleID uint64, skillID uint32) (currentExp, expNeeded, level, maxLevel int64, err error) {
-	skills, err := Common.DBSkillGetList(roleID)
+	skills, err := common.DBSkillGetList(roleID)
 	if err != nil {
 		return 0, 0, 0, 0, err
 	}
@@ -299,7 +299,7 @@ func (s *Service) GetSkillExpProgress(roleID uint64, skillID uint32) (currentExp
 
 // CanLearnSkillByLevel 检查角色等级是否满足武学学习条件
 func (s *Service) CanLearnSkillByLevel(roleLevel uint32, skillID uint32) (bool, error) {
-	skillInfo, err := Common.DBSkillGetBase(skillID)
+	skillInfo, err := common.DBSkillGetBase(skillID)
 	if err != nil {
 		return false, errors.New("武学不存在")
 	}

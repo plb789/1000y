@@ -407,12 +407,14 @@ func (h *Handler) GetAllSkillBaseWithTypeName(c *gin.Context) {
 		return
 	}
 
-	result := make([]SkillInfoWithTypeName, len(skills))
+	result := make([]map[string]interface{}, len(skills))
 	for i, skill := range skills {
-		result[i] = SkillInfoWithTypeName{
-			SkillBase:   skill,
-			TypeName:    SkillTypeName[skill.Type],
-			SubTypeName: SkillSubTypeName[skill.SubType],
+		result[i] = skill
+		if t, ok := skill["type"].(uint8); ok {
+			result[i]["type_name"] = SkillTypeName[t]
+		}
+		if st, ok := skill["sub_type"].(uint8); ok {
+			result[i]["sub_type_name"] = SkillSubTypeName[st]
 		}
 	}
 

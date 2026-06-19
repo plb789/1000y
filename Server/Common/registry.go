@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"strings"
 	"time"
 )
@@ -23,6 +24,7 @@ type Registry struct {
 	instances   map[uint32]*GameServiceInstance // 本地缓存
 	mapToInst   map[uint32]uint32               // mapID -> instanceID
 	registryURL string                          // 注册中心地址
+	httpClient  *http.Client                    // HTTP客户端
 }
 
 var reg *Registry
@@ -34,6 +36,9 @@ func InitRegistry(registryURL string) {
 			instances:   make(map[uint32]*GameServiceInstance),
 			mapToInst:   make(map[uint32]uint32),
 			registryURL: registryURL,
+			httpClient: &http.Client{
+				Timeout: 5 * time.Second,
+			},
 		}
 	}
 }
@@ -52,14 +57,15 @@ func RegisterGameService(instanceID uint32, url string, handledMaps []uint32) er
 		Heartbeat:   time.Now().Unix(),
 	}
 
-	// 调用DBService API注册
+	// 调用RegistryService API注册
 	reqBody, _ := json.Marshal(map[string]interface{}{
 		"instance_id":  instanceID,
+		"service_type": "game",
 		"url":          url,
 		"handled_maps": handledMaps,
 	})
 
-	resp, err := DBClient.HTTPClient.Post(reg.registryURL+"/api/registry/register", "application/json", strings.NewReader(string(reqBody)))
+	resp, err := reg.httpClient.Post(reg.registryURL+"/api/registry/register", "application/json", strings.NewReader(string(reqBody)))
 	if err != nil {
 		log.Printf("注册到服务中心失败: %v, 使用本地缓存", err)
 		// 降级：使用本地缓存
@@ -87,12 +93,12 @@ func UnregisterGameService(instanceID uint32) error {
 		return fmt.Errorf("注册中心未初始化")
 	}
 
-	// 调用DBService API注销
+	// 调用RegistryService API注销
 	reqBody, _ := json.Marshal(map[string]interface{}{
 		"instance_id": instanceID,
 	})
 
-	resp, err := DBClient.HTTPClient.Post(reg.registryURL+"/api/registry/unregister", "application/json", strings.NewReader(string(reqBody)))
+	resp, err := reg.httpClient.Post(reg.registryURL+"/api/registry/unregister", "application/json", strings.NewReader(string(reqBody)))
 	if err != nil {
 		log.Printf("从服务中心注销失败: %v", err)
 	}
@@ -154,8 +160,8 @@ func GetAllInstances() []*GameServiceInstance {
 
 // RefreshFromRegistry 从注册中心刷新本地缓存
 func (r *Registry) RefreshFromRegistry() {
-	// 调用DBService API获取所有实例
-	resp, err := DBClient.HTTPClient.Get(r.registryURL + "/api/registry/list")
+	// 调用RegistryService API获取所有实例
+	resp, err := r.httpClient.Get(r.registryURL + "/api/registry/list")
 	if err != nil {
 		return
 	}
@@ -193,7 +199,7 @@ func UpdateHeartbeat(instanceID uint32) error {
 		"instance_id": instanceID,
 	})
 
-	resp, err := DBClient.HTTPClient.Post(reg.registryURL+"/api/registry/heartbeat", "application/json", strings.NewReader(string(reqBody)))
+	resp, err := reg.httpClient.Post(reg.registryURL+"/api/registry/heartbeat", "application/json", strings.NewReader(string(reqBody)))
 	if err != nil {
 		return err
 	}

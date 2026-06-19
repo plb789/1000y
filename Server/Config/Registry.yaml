@@ -1,0 +1,13 @@
+# RegistryService 配置文件
+# 服务注册中心配置
+
+http_port: 8081
+
+# 心跳超时配置
+heartbeat:
+  timeout: 60              # 心跳超时时间(秒)，超时视为离线
+  cleanup_interval: 30     # 清理离线实例间隔(秒)
+
+# 服务地址配置（用于服务间通信）
+services:
+  registry_service: "http://localhost:8081"

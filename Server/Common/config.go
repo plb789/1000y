@@ -29,6 +29,7 @@ type GlobalConfig struct {
 		DBService       string `yaml:"db_service"`
 		LoginService    string `yaml:"login_service"`
 		GameService     string `yaml:"game_service"`
+		GatewayService  string `yaml:"gateway_service"`  // Gateway服务地址
 		RegistryService string `yaml:"registry_service"` // 服务注册中心
 	} `yaml:"services"`
 	HTTPPort int `yaml:"http_port"` // HTTP服务端口

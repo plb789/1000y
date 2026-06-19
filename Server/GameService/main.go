@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	common "game-server/Common"
+	battle "game-server/GameService/Battle"
 	gamemap "game-server/GameService/Map"
 	"log"
 	"net/http"
@@ -149,6 +150,11 @@ func startHTTPServer() {
 	// 注册地图路由
 	mapHandler := gamemap.NewHandler()
 	mapHandler.RegisterRoutes(r)
+
+	// 注册战斗路由
+	gatewayURL := common.AppConfig.Services.GatewayService
+	battleHandler := battle.NewHandler(gatewayURL)
+	battleHandler.RegisterRoutes(r)
 
 	// 健康检查
 	r.GET("/health", func(c *gin.Context) {

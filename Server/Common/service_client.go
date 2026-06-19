@@ -235,7 +235,7 @@ func InitServiceClients() {
 		DBServiceURL = "http://localhost:8083"
 	}
 	if LoginServiceURL == "" {
-		LoginServiceURL = "http://localhost:8081"
+		LoginServiceURL = "http://localhost:8084"
 	}
 	if GameServiceURL == "" {
 		GameServiceURL = "http://localhost:8082"

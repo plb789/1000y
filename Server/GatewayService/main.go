@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -179,12 +180,19 @@ const (
 	CmdUseItem      uint16 = 2006 // 使用物品
 	CmdEquip        uint16 = 2007 // 装备
 	CmdTrade        uint16 = 2008 // 交易
+	CmdDamage       uint16 = 2009 // 伤害
+	CmdDeath        uint16 = 2010 // 死亡
+	CmdRespawn      uint16 = 2011 // 复活
+	CmdLevelUp      uint16 = 2012 // 升级
+	CmdBuff         uint16 = 2013 // 增益
+	CmdDeBuff       uint16 = 2014 // 减益
 	CmdEnterMap     uint16 = 3001 // 进入地图
 	CmdLeaveMap     uint16 = 3002 // 离开地图
 	CmdMapPlayer    uint16 = 3003 // 地图玩家列表
 	CmdOnlineCount  uint16 = 3004 // 在线人数广播
 	CmdNpcTalk      uint16 = 3005 // NPC对话
 	CmdNpcTrade     uint16 = 3006 // NPC交易
+	CmdMapEvent     uint16 = 3007 // 地图事件
 	CmdSkillLearn   uint16 = 4001 // 学习武学
 	CmdSkillUpgrade uint16 = 4002 // 升级武学
 	CmdRoleInfo     uint16 = 5001 // 角色信息
@@ -539,6 +547,27 @@ func (c *Client) handleMessage(cmd uint16, body []byte) {
 
 	case CmdEnterMap:
 		c.handleEnterMap(body)
+
+	case CmdDamage:
+		c.handleDamage(body)
+
+	case CmdDeath:
+		c.handleDeath(body)
+
+	case CmdRespawn:
+		c.handleRespawn(body)
+
+	case CmdLevelUp:
+		c.handleLevelUp(body)
+
+	case CmdBuff:
+		c.handleBuff(body)
+
+	case CmdDeBuff:
+		c.handleDeBuff(body)
+
+	case CmdMapEvent:
+		c.handleMapEvent(body)
 
 	default:
 		// 未知命令
@@ -917,6 +946,233 @@ func (c *Client) handleChat(body []byte) {
 		// 回显给自己
 		c.sendPacket(CmdChat, msg)
 	}
+}
+
+// handleDamage 处理伤害消息（转发到GameService）
+func (c *Client) handleDamage(body []byte) {
+	var dmg struct {
+		TargetID   uint64 `json:"target_id"`
+		Damage     int    `json:"damage"`
+		IsCritical bool   `json:"is_critical"`
+		IsBlocked  bool   `json:"is_blocked"`
+		IsDodged   bool   `json:"is_dodged"`
+	}
+	if err := json.Unmarshal(body, &dmg); err != nil {
+		return
+	}
+
+	// 调用GameService处理伤害逻辑
+	go func() {
+		// 获取GameService实例
+		instances := common.GetAllInstances()
+		if len(instances) == 0 {
+			log.Printf("没有可用的GameService实例")
+			return
+		}
+
+		// 使用第一个可用的GameService实例
+		gameServiceURL := instances[0].URL
+
+		// 构建请求数据
+		reqData := map[string]interface{}{
+			"target_id":   dmg.TargetID,
+			"damage":      dmg.Damage,
+			"is_critical": dmg.IsCritical,
+			"is_blocked":  dmg.IsBlocked,
+			"is_dodged":   dmg.IsDodged,
+		}
+
+		jsonData, err := json.Marshal(reqData)
+		if err != nil {
+			log.Printf("序列化伤害请求失败: %v", err)
+			return
+		}
+
+		// 调用GameService的HTTP接口
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Post(gameServiceURL+"/api/battle/damage", "application/json", bytes.NewReader(jsonData))
+		if err != nil {
+			log.Printf("调用GameService伤害接口失败: %v", err)
+			return
+		}
+		defer resp.Body.Close()
+
+		log.Printf("伤害处理完成，状态码: %d", resp.StatusCode)
+	}()
+}
+
+// handleDeath 处理死亡消息（转发到GameService）
+func (c *Client) handleDeath(body []byte) {
+	var death struct {
+		TargetID uint64 `json:"target_id"`
+	}
+	if err := json.Unmarshal(body, &death); err != nil {
+		return
+	}
+
+	// 调用GameService处理死亡逻辑
+	go func() {
+		// 获取GameService实例
+		instances := common.GetAllInstances()
+		if len(instances) == 0 {
+			log.Printf("没有可用的GameService实例")
+			return
+		}
+
+		// 使用第一个可用的GameService实例
+		gameServiceURL := instances[0].URL
+
+		// 构建请求数据
+		reqData := map[string]interface{}{
+			"target_id": death.TargetID,
+		}
+
+		jsonData, err := json.Marshal(reqData)
+		if err != nil {
+			log.Printf("序列化死亡请求失败: %v", err)
+			return
+		}
+
+		// 调用GameService的HTTP接口
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Post(gameServiceURL+"/api/battle/death", "application/json", bytes.NewReader(jsonData))
+		if err != nil {
+			log.Printf("调用GameService死亡接口失败: %v", err)
+			return
+		}
+		defer resp.Body.Close()
+
+		log.Printf("死亡处理完成，状态码: %d", resp.StatusCode)
+	}()
+}
+
+// handleRespawn 处理复活请求（转发到GameService）
+func (c *Client) handleRespawn(body []byte) {
+	var req struct {
+		Type   string `json:"type"` // "here"=原地复活, "town"=回城复活
+		RoleID uint64 `json:"role_id"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		return
+	}
+
+	// 调用GameService处理复活逻辑
+	go func() {
+		// 获取GameService实例
+		instances := common.GetAllInstances()
+		if len(instances) == 0 {
+			log.Printf("没有可用的GameService实例")
+			return
+		}
+
+		// 使用第一个可用的GameService实例
+		gameServiceURL := instances[0].URL
+
+		// 构建请求数据
+		reqData := map[string]interface{}{
+			"type":    req.Type,
+			"role_id": req.RoleID,
+		}
+
+		jsonData, err := json.Marshal(reqData)
+		if err != nil {
+			log.Printf("序列化复活请求失败: %v", err)
+			return
+		}
+
+		// 调用GameService的HTTP接口
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Post(gameServiceURL+"/api/battle/respawn", "application/json", bytes.NewReader(jsonData))
+		if err != nil {
+			log.Printf("调用GameService复活接口失败: %v", err)
+			return
+		}
+		defer resp.Body.Close()
+
+		log.Printf("复活处理完成，状态码: %d", resp.StatusCode)
+	}()
+}
+
+// handleLevelUp 处理升级消息（转发到GameService）
+func (c *Client) handleLevelUp(body []byte) {
+	var levelUp struct {
+		TargetID uint64 `json:"target_id"`
+		Level    int    `json:"level"`
+		MaxHP    int    `json:"max_hp"`
+		MaxMP    int    `json:"max_mp"`
+		Attack   int    `json:"attack"`
+		Defense  int    `json:"defense"`
+		Speed    int    `json:"speed"`
+	}
+	if err := json.Unmarshal(body, &levelUp); err != nil {
+		return
+	}
+
+	// 调用GameService处理升级逻辑
+	go func() {
+		// TODO: 调用GameService的HTTP接口
+		// 简化处理：直接广播给目标玩家
+		msg := mustMarshal(levelUp)
+		GlobalManager.broadcast <- &Message{To: levelUp.TargetID, Type: CmdLevelUp, Data: msg}
+	}()
+}
+
+// handleBuff 处理增益效果消息（转发到GameService）
+func (c *Client) handleBuff(body []byte) {
+	var buff struct {
+		TargetID uint64 `json:"target_id"`
+		BuffType string `json:"buff_type"` // attack, defense, speed, heal
+	}
+	if err := json.Unmarshal(body, &buff); err != nil {
+		return
+	}
+
+	// 调用GameService处理增益逻辑
+	go func() {
+		// TODO: 调用GameService的HTTP接口
+		// 简化处理：直接广播给目标玩家
+		msg := mustMarshal(buff)
+		GlobalManager.broadcast <- &Message{To: buff.TargetID, Type: CmdBuff, Data: msg}
+	}()
+}
+
+// handleDeBuff 处理减益效果消息（转发到GameService）
+func (c *Client) handleDeBuff(body []byte) {
+	var debuff struct {
+		TargetID   uint64 `json:"target_id"`
+		DeBuffType string `json:"debuff_type"` // poison, burn, freeze, stun, bleed, silence, fear
+	}
+	if err := json.Unmarshal(body, &debuff); err != nil {
+		return
+	}
+
+	// 调用GameService处理减益逻辑
+	go func() {
+		// TODO: 调用GameService的HTTP接口
+		// 简化处理：直接广播给目标玩家
+		msg := mustMarshal(debuff)
+		GlobalManager.broadcast <- &Message{To: debuff.TargetID, Type: CmdDeBuff, Data: msg}
+	}()
+}
+
+// handleMapEvent 处理地图事件消息（转发到GameService）
+func (c *Client) handleMapEvent(body []byte) {
+	var event struct {
+		EventType string `json:"event_type"` // spawn, end, portal_open, chest_open
+		X         int    `json:"x"`
+		Y         int    `json:"y"`
+	}
+	if err := json.Unmarshal(body, &event); err != nil {
+		return
+	}
+
+	// 调用GameService处理地图事件逻辑
+	go func() {
+		// TODO: 调用GameService的HTTP接口
+		// 简化处理：直接广播给当前地图所有玩家
+		msg := mustMarshal(event)
+		GlobalManager.BroadcastToMap(c.MapID, &Message{From: c.ID, Type: CmdMapEvent, Data: msg})
+	}()
 }
 
 func (c *Client) sendPacket(cmd uint16, data []byte) {
@@ -1319,7 +1575,118 @@ func main() {
 		w.Write([]byte(`{"status":"ok","online":` + fmt.Sprintf("%d", GlobalManager.GetOnlineCount()) + `}`))
 	})
 
+	// 内部API：GameService调用推送消息给客户端
+	http.HandleFunc("/internal/push", handleInternalPush)
+	// 内部API：GameService调用广播消息给地图玩家
+	http.HandleFunc("/internal/broadcast", handleInternalBroadcast)
+
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", wsPort), nil))
+}
+
+// handleInternalPush 处理GameService的推送请求（推送给指定玩家）
+func handleInternalPush(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		RoleID  uint64      `json:"role_id"`
+		MsgType string      `json:"msg_type"`
+		Data    interface{} `json:"data"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("解析推送请求失败: %v", err)
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	// 构建消息
+	msgData, err := json.Marshal(req.Data)
+	if err != nil {
+		log.Printf("序列化消息数据失败: %v", err)
+		http.Error(w, "Invalid data", http.StatusBadRequest)
+		return
+	}
+
+	// 根据MsgType获取命令码
+	cmd := getMsgTypeCmd(req.MsgType)
+
+	// 发送到广播通道
+	GlobalManager.broadcast <- &Message{
+		To:   req.RoleID,
+		Type: cmd,
+		Data: msgData,
+	}
+
+	log.Printf("推送消息到玩家: roleID=%d, msgType=%s, cmd=%d", req.RoleID, req.MsgType, cmd)
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"ok"}`))
+}
+
+// handleInternalBroadcast 处理GameService的广播请求（广播给地图所有玩家）
+func handleInternalBroadcast(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		MapID   uint32      `json:"map_id"`
+		MsgType string      `json:"msg_type"`
+		Data    interface{} `json:"data"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("解析广播请求失败: %v", err)
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	// 构建消息
+	msgData, err := json.Marshal(req.Data)
+	if err != nil {
+		log.Printf("序列化消息数据失败: %v", err)
+		http.Error(w, "Invalid data", http.StatusBadRequest)
+		return
+	}
+
+	// 根据MsgType获取命令码
+	cmd := getMsgTypeCmd(req.MsgType)
+
+	// 发送到广播通道（To=0表示广播）
+	GlobalManager.broadcast <- &Message{
+		To:   0, // 0表示广播
+		Type: cmd,
+		Data: msgData,
+	}
+
+	log.Printf("广播消息到地图: mapID=%d, msgType=%s, cmd=%d", req.MapID, req.MsgType, cmd)
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"ok"}`))
+}
+
+// getMsgTypeCmd 根据消息类型字符串获取命令码
+func getMsgTypeCmd(msgType string) uint16 {
+	switch msgType {
+	case "damage":
+		return CmdDamage
+	case "death":
+		return CmdDeath
+	case "respawn":
+		return CmdRespawn
+	case "level_up":
+		return CmdLevelUp
+	case "buff":
+		return CmdBuff
+	case "debuff":
+		return CmdDeBuff
+	case "map_event":
+		return CmdMapEvent
+	default:
+		return 0
+	}
 }
 
 // checkHeartbeatTimeout 心跳超时检测(清理僵尸连接)

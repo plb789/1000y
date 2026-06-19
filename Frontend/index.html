@@ -575,6 +575,51 @@
       <button class="skill-btn" data-skill="2">技能2</button>
       <button class="skill-btn" data-skill="3">技能3</button>
       <button class="skill-btn" data-skill="4">技能4</button>
+      <button class="skill-btn" id="settingsBtn" style="background: linear-gradient(135deg, #3182ce, #2b6cb0);">设置<br>⚙️</button>
+    </div>
+    
+    <!-- 设置面板 -->
+    <div id="settingsPanel" style="display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 320px; background: rgba(0, 0, 0, 0.9); border: 2px solid #e94560; border-radius: 15px; padding: 20px; color: #fff; z-index: 200;">
+      <div style="text-align: center; color: #e94560; font-size: 20px; margin-bottom: 20px; border-bottom: 1px solid #444; padding-bottom: 10px;">游戏设置</div>
+      
+      <!-- 音效设置 -->
+      <div style="margin-bottom: 15px;">
+        <div style="color: #999; font-size: 14px; margin-bottom: 8px;">音效设置</div>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin: 8px 0;">
+          <span>背景音乐</span>
+          <input type="range" id="bgmVolume" min="0" max="100" value="50" style="width: 150px;">
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin: 8px 0;">
+          <span>游戏音效</span>
+          <input type="range" id="sfxVolume" min="0" max="100" value="70" style="width: 150px;">
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin: 8px 0;">
+          <span>静音</span>
+          <input type="checkbox" id="muteAll">
+        </div>
+      </div>
+      
+      <!-- 特效设置 -->
+      <div style="margin-bottom: 15px;">
+        <div style="color: #999; font-size: 14px; margin-bottom: 8px;">特效设置</div>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin: 8px 0;">
+          <span>粒子特效</span>
+          <input type="checkbox" id="enableParticles" checked>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin: 8px 0;">
+          <span>技能特效</span>
+          <input type="checkbox" id="enableSkillEffects" checked>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin: 8px 0;">
+          <span>屏幕震动</span>
+          <input type="checkbox" id="enableScreenShake" checked>
+        </div>
+      </div>
+      
+      <!-- 按钮区域 -->
+      <div style="display: flex; justify-content: center; gap: 10px; margin-top: 20px;">
+        <button id="closeSettingsBtn" class="login-btn" style="width: 100px; padding: 10px; background: linear-gradient(135deg, #4a5568, #2d3748);">关闭</button>
+      </div>
     </div>
   </div>
 
@@ -593,13 +638,24 @@
   <script src="ResourceLoad/SpriteAnimator.js"></script>
   <script src="ResourceLoad/DdsParser.js"></script>
 
-  <!-- 5. 地图模块 -->
+  <!-- 5. UI系统 -->
+  <script src="GameLogic/UI/UIManager.js"></script>
+
+  <!-- 6. 特效系统 -->
+  <script src="GameLogic/Effects/ParticleSystem.js"></script>
+  <script src="GameLogic/Effects/EffectManager.js"></script>
+
+  <!-- 7. 音效系统 -->
+  <script src="GameLogic/Audio/SoundManager.js"></script>
+  <script src="GameLogic/Map/AnimationAudioSystem.js"></script>
+
+  <!-- 8. 地图模块 -->
   <script src="GameLogic/Map/MillenniumMapParser.js"></script>
   <script src="GameLogic/Map/MapRenderer.js"></script>
   <script src="GameLogic/Map/MapAnimationSystem.js"></script>
   <script src="GameLogic/Map/MapEngine.js"></script>
 
-  <!-- 6. 游戏主逻辑 -->
+  <!-- 9. 游戏主逻辑 -->
   <script src="Game.js"></script>
 </body>
 </html>

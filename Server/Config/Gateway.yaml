@@ -3,8 +3,9 @@ ip_white: []
 
 services:
   db_service: "http://localhost:8083"
-  login_service: "http://localhost:8081"
+  login_service: "http://localhost:8084"
   game_service: "http://localhost:8082"
+  registry_service: "http://localhost:8081"  # 服务注册中心地址（独立服务）
 
 redis:
   addr: "127.0.0.1:6379"

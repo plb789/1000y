@@ -49,7 +49,7 @@ func main() {
 
 	port := common.AppConfig.HTTPPort
 	if port == 0 {
-		port = 8081
+		port = 8084
 	}
 
 	log.Printf("  端口: %d", port)

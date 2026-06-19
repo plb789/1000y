@@ -6,6 +6,8 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	skillService "game-server/GameService/Skill"
 )
 
 // Service 战斗服务
@@ -367,6 +369,287 @@ func (s *Service) RecordKill(killerID uint64, killerType uint8, victimID uint64,
 }
 
 // GetSkillCoolDown 获取技能冷却时间
-func (s *Service) GetSkillCoolDown(roleID uint64, skillID uint32) int64 {
+func (s *Service) GetCoolDownRemaining(roleID uint64, skillID uint32) int64 {
 	return GlobalCoolDownManager.GetCoolDownRemaining(roleID, skillID)
+}
+
+// DamageResult 伤害结果
+type DamageResult struct {
+	TargetID   uint64 `json:"target_id"`
+	Damage     int    `json:"damage"`
+	CurrentHP  int    `json:"current_hp"`
+	MaxHP      int    `json:"max_hp"`
+	IsCritical bool   `json:"is_critical"`
+	IsBlocked  bool   `json:"is_blocked"`
+	IsDodged   bool   `json:"is_dodged"`
+	IsDead     bool   `json:"is_dead"`
+}
+
+// ProcessDamage 处理伤害
+func (s *Service) ProcessDamage(req DamageRequest) *DamageResult {
+	result := &DamageResult{
+		TargetID:   req.TargetID,
+		Damage:     req.Damage,
+		IsCritical: req.IsCritical,
+		IsBlocked:  req.IsBlocked,
+		IsDodged:   req.IsDodged,
+	}
+
+	// 如果是闪避，不造成伤害
+	if req.IsDodged {
+		result.Damage = 0
+		return result
+	}
+
+	// 更新目标血量
+	currentHP, err := common.DBRoleChangeHP(req.TargetID, -req.Damage)
+	if err != nil {
+		log.Printf("更新角色HP失败: %v", err)
+	}
+	result.CurrentHP = currentHP
+	result.IsDead = currentHP <= 0
+
+	// 获取MaxHP
+	if roleInfo, err := common.DBRoleGet(req.TargetID); err == nil && roleInfo != nil {
+		result.MaxHP = roleInfo.MaxHp
+	}
+
+	return result
+}
+
+// DeathResult 死亡结果
+type DeathResult struct {
+	TargetID uint64 `json:"target_id"`
+	KillerID uint64 `json:"killer_id"`
+	X        int    `json:"x"`
+	Y        int    `json:"y"`
+}
+
+// ProcessDeath 处理死亡
+func (s *Service) ProcessDeath(req DeathRequest) *DeathResult {
+	result := &DeathResult{
+		TargetID: req.TargetID,
+		KillerID: req.KillerID,
+	}
+
+	// 记录击杀
+	s.RecordKill(req.KillerID, 1, req.TargetID, 1)
+
+	return result
+}
+
+// RespawnResult 复活结果
+type RespawnResult struct {
+	RoleID uint64 `json:"role_id"`
+	X      int    `json:"x"`
+	Y      int    `json:"y"`
+	HP     int    `json:"hp"`
+	MP     int    `json:"mp"`
+}
+
+// ProcessRespawn 处理复活
+func (s *Service) ProcessRespawn(req RespawnRequest) *RespawnResult {
+	result := &RespawnResult{
+		RoleID: req.RoleID,
+	}
+
+	// 根据复活类型处理
+	switch req.Type {
+	case "here":
+		// 原地复活，消耗一定资源
+		hp, _ := common.DBRoleChangeHP(req.RoleID, 100)
+		mp, _ := common.DBRoleChangeMP(req.RoleID, 100)
+		result.HP = hp
+		result.MP = mp
+		// 位置不变
+		if role, err := common.DBRoleGet(req.RoleID); err == nil && role != nil {
+			result.X = role.MapX
+			result.Y = role.MapY
+		}
+
+	case "town":
+		// 回城复活，满血满蓝，回到主城
+		common.DBRoleFullRecovery(req.RoleID)
+		common.DBRoleChangeMap(req.RoleID, 1, 100, 100) // 主城地图ID为1，复活点坐标
+		if role, err := common.DBRoleGet(req.RoleID); err == nil && role != nil {
+			result.X = role.MapX
+			result.Y = role.MapY
+		}
+	}
+
+	return result
+}
+
+// LevelUpResult 升级结果
+type LevelUpResult struct {
+	RoleID  uint64 `json:"role_id"`
+	Level   int    `json:"level"`
+	MaxHP   int    `json:"max_hp"`
+	MaxMP   int    `json:"max_mp"`
+	Attack  int    `json:"attack"`
+	Defense int    `json:"defense"`
+	Speed   int    `json:"speed"`
+}
+
+// ProcessLevelUp 处理升级
+func (s *Service) ProcessLevelUp(req LevelUpRequest) *LevelUpResult {
+	result := &LevelUpResult{
+		RoleID: req.RoleID,
+		Level:  req.Level,
+	}
+
+	// 获取更新后的角色属性
+	role, _ := common.DBRoleGet(req.RoleID)
+	if role != nil {
+		result.MaxHP = role.MaxHp
+		result.MaxMP = role.MaxMp
+		result.Attack = role.Attack
+		result.Defense = role.Defense
+		result.Speed = role.Speed
+	}
+
+	return result
+}
+
+// BuffResult 增益结果
+type BuffResult struct {
+	TargetID    uint64 `json:"target_id"`
+	BuffType    string `json:"buff_type"`
+	Duration    int    `json:"duration"`
+	EffectValue int    `json:"effect_value"`
+}
+
+// ProcessBuff 处理增益
+func (s *Service) ProcessBuff(req BuffRequest) *BuffResult {
+	result := &BuffResult{
+		TargetID: req.TargetID,
+		BuffType: req.BuffType,
+	}
+
+	// 根据增益类型设置持续时间和效果值
+	switch req.BuffType {
+	case "attack":
+		result.Duration = 10000 // 10秒
+		result.EffectValue = 20 // 攻击+20
+	case "defense":
+		result.Duration = 10000
+		result.EffectValue = 20 // 防御+20
+	case "speed":
+		result.Duration = 8000
+		result.EffectValue = 30 // 速度+30
+	case "heal":
+		result.Duration = 10000
+		result.EffectValue = 5 // 每秒恢复5点
+	}
+
+	return result
+}
+
+// DeBuffResult 减益结果
+type DeBuffResult struct {
+	TargetID    uint64 `json:"target_id"`
+	DeBuffType  string `json:"debuff_type"`
+	Duration    int    `json:"duration"`
+	EffectValue int    `json:"effect_value"`
+}
+
+// ProcessDeBuff 处理减益
+func (s *Service) ProcessDeBuff(req DeBuffRequest) *DeBuffResult {
+	result := &DeBuffResult{
+		TargetID:   req.TargetID,
+		DeBuffType: req.DeBuffType,
+	}
+
+	// 根据减益类型设置持续时间和效果值
+	switch req.DeBuffType {
+	case "poison":
+		result.Duration = 5000 // 5秒
+		result.EffectValue = 3 // 每秒3点伤害
+	case "burn":
+		result.Duration = 3000
+		result.EffectValue = 5
+	case "freeze":
+		result.Duration = 2000
+		result.EffectValue = 50 // 减速50%
+	case "stun":
+		result.Duration = 1500
+		result.EffectValue = 0
+	case "bleed":
+		result.Duration = 4000
+		result.EffectValue = 2
+	case "silence":
+		result.Duration = 3000
+		result.EffectValue = 0
+	case "fear":
+		result.Duration = 2000
+		result.EffectValue = 0
+	}
+
+	return result
+}
+
+// MapEventResult 地图事件结果
+type MapEventResult struct {
+	EventType string `json:"event_type"`
+	X         int    `json:"x"`
+	Y         int    `json:"y"`
+}
+
+// ProcessMapEvent 处理地图事件
+func (s *Service) ProcessMapEvent(req MapEventRequest) *MapEventResult {
+	result := &MapEventResult{
+		EventType: req.EventType,
+		X:         req.X,
+		Y:         req.Y,
+	}
+
+	return result
+}
+
+// DamageRequest 伤害请求（用于handler）
+type DamageRequest struct {
+	TargetID   uint64 `json:"target_id"`
+	AttackerID uint64 `json:"attacker_id"`
+	Damage     int    `json:"damage"`
+	IsCritical bool   `json:"is_critical"`
+	IsBlocked  bool   `json:"is_blocked"`
+	IsDodged   bool   `json:"is_dodged"`
+}
+
+// DeathRequest 死亡请求（用于handler）
+type DeathRequest struct {
+	TargetID uint64 `json:"target_id"`
+	KillerID uint64 `json:"killer_id"`
+}
+
+// RespawnRequest 复活请求（用于handler）
+type RespawnRequest struct {
+	RoleID uint64 `json:"role_id"`
+	Type   string `json:"type"`
+}
+
+// LevelUpRequest 升级请求（用于handler）
+type LevelUpRequest struct {
+	RoleID uint64 `json:"role_id"`
+	Level  int    `json:"level"`
+}
+
+// BuffRequest 增益请求（用于handler）
+type BuffRequest struct {
+	TargetID uint64 `json:"target_id"`
+	BuffType string `json:"buff_type"`
+}
+
+// DeBuffRequest 减益请求（用于handler）
+type DeBuffRequest struct {
+	TargetID   uint64 `json:"target_id"`
+	DeBuffType string `json:"debuff_type"`
+}
+
+// MapEventRequest 地图事件请求（用于handler）
+type MapEventRequest struct {
+	EventType string `json:"event_type"`
+	X         int    `json:"x"`
+	Y         int    `json:"y"`
+	MapID     uint32 `json:"map_id"`
 }
