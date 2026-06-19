@@ -55,7 +55,8 @@ func initWebSocketConfig() {
 
 // Client 客户端连接
 type Client struct {
-	ID         uint64          // 角色ID
+	AccountID  uint64          // 账号ID（登录后设置）
+	ID         uint64          // 角色ID（选择角色后设置）
 	Name       string          // 角色名
 	Conn       *websocket.Conn // WebSocket连接
 	Send       chan []byte     // 发送通道
@@ -65,35 +66,37 @@ type Client struct {
 	Y          int             // Y坐标
 	LastPing   time.Time       // 最后心跳时间
 	Registered bool            // 是否已注册到管理器
-	Token      string          // 重连token
+	Token      string          // 登录token
 }
 
 // SessionData 会话数据（用于断线重连）
 type SessionData struct {
-	RoleID uint64    // 角色ID
-	Name   string    // 角色名
-	MapID  uint32    // 当前地图
-	X      int       // X坐标
-	Y      int       // Y坐标
-	Expire time.Time // 过期时间
+	AccountID uint64    // 账号ID
+	RoleID    uint64    // 角色ID
+	Name      string    // 角色名
+	MapID     uint32    // 当前地图
+	X         int       // X坐标
+	Y         int       // Y坐标
+	Expire    time.Time // 过期时间
 }
 
 // generateToken 生成重连token
-func generateToken(roleID uint64) string {
-	return fmt.Sprintf("%d_%d", roleID, time.Now().UnixNano())
+func generateToken(accountID, roleID uint64) string {
+	return fmt.Sprintf("%d_%d_%d", accountID, roleID, time.Now().UnixNano())
 }
 
 // saveSession 保存会话
-func saveSession(token string, roleID uint64, name string, mapID uint32, x, y int) {
+func saveSession(token string, accountID, roleID uint64, name string, mapID uint32, x, y int) {
 	sessionMutex.Lock()
 	defer sessionMutex.Unlock()
 	sessionStore[token] = &SessionData{
-		RoleID: roleID,
-		Name:   name,
-		MapID:  mapID,
-		X:      x,
-		Y:      y,
-		Expire: time.Now().Add(sessionTimeout),
+		AccountID: accountID,
+		RoleID:    roleID,
+		Name:      name,
+		MapID:     mapID,
+		X:         x,
+		Y:         y,
+		Expire:    time.Now().Add(sessionTimeout),
 	}
 }
 
@@ -167,6 +170,7 @@ const (
 	CmdLogin        uint16 = 1001 // 登录
 	CmdLogout       uint16 = 1002 // 登出
 	CmdHeartbeat    uint16 = 1003 // 心跳
+	CmdRegister     uint16 = 1004 // 注册
 	CmdMove         uint16 = 2001 // 移动
 	CmdAttack       uint16 = 2002 // 攻击
 	CmdUseSkill     uint16 = 2003 // 使用技能
@@ -186,6 +190,9 @@ const (
 	CmdRoleInfo     uint16 = 5001 // 角色信息
 	CmdRoleAttrib   uint16 = 5002 // 角色属性
 	CmdSync         uint16 = 5003 // 属性同步
+	CmdRoleList     uint16 = 5004 // 角色列表
+	CmdRoleCreate   uint16 = 5005 // 创建角色
+	CmdRoleSelect   uint16 = 5006 // 选择角色
 )
 
 // NewClientManager 创建客户端管理器
@@ -411,10 +418,11 @@ type LoginRequest struct {
 
 // LoginResponse 登录响应
 type LoginResponse struct {
-	Code   int    `json:"code"`
-	Msg    string `json:"msg"`
-	RoleID uint64 `json:"role_id,omitempty"`
-	Token  string `json:"token,omitempty"`
+	Code      int    `json:"code"`
+	Msg       string `json:"msg"`
+	AccountID uint64 `json:"account_id,omitempty"`
+	RoleID    uint64 `json:"role_id,omitempty"`
+	Token     string `json:"token,omitempty"`
 }
 
 // HandleWebSocket 处理WebSocket连接
@@ -486,11 +494,17 @@ func (c *Client) readLoop() {
 }
 
 func (c *Client) handleMessage(cmd uint16, body []byte) {
-	log.Printf("收到消息: cmd=%d, bodyLen=%d, roleID=%d", cmd, len(body), c.ID)
+	log.Printf("收到消息: cmd=%d, bodyLen=%d, accountID=%d, roleID=%d", cmd, len(body), c.AccountID, c.ID)
 
-	// 未登录玩家（roleID=0）只能发送登录和心跳消息
-	if c.ID == 0 && cmd != CmdLogin && cmd != CmdHeartbeat {
+	// 未登录玩家（AccountID=0）只能发送登录、注册、心跳消息
+	if c.AccountID == 0 && cmd != CmdLogin && cmd != CmdRegister && cmd != CmdHeartbeat {
 		log.Printf("拒绝未登录玩家的消息: cmd=%d", cmd)
+		return
+	}
+
+	// 未选择角色的玩家（ID=0）只能发送角色相关消息
+	if c.ID == 0 && c.AccountID > 0 && cmd != CmdRoleList && cmd != CmdRoleCreate && cmd != CmdRoleSelect && cmd != CmdLogout && cmd != CmdHeartbeat {
+		log.Printf("拒绝未选择角色的消息: cmd=%d", cmd)
 		return
 	}
 
@@ -499,17 +513,29 @@ func (c *Client) handleMessage(cmd uint16, body []byte) {
 		c.LastPing = time.Now()
 		c.sendPacket(CmdHeartbeat, []byte(`{"time":`+fmt.Sprintf("%d", time.Now().Unix())+`}`))
 
-	case CmdMove:
-		c.handleMove(body)
-
-	case CmdChat:
-		c.handleChat(body)
+	case CmdRegister:
+		c.handleRegister(body)
 
 	case CmdLogin:
 		c.handleLogin(body)
 
 	case CmdLogout:
 		c.handleLogout()
+
+	case CmdRoleList:
+		c.handleRoleList()
+
+	case CmdRoleCreate:
+		c.handleRoleCreate(body)
+
+	case CmdRoleSelect:
+		c.handleRoleSelect(body)
+
+	case CmdMove:
+		c.handleMove(body)
+
+	case CmdChat:
+		c.handleChat(body)
 
 	case CmdEnterMap:
 		c.handleEnterMap(body)
@@ -520,7 +546,7 @@ func (c *Client) handleMessage(cmd uint16, body []byte) {
 }
 
 func (c *Client) handleLogin(body []byte) {
-	log.Printf("处理登录请求: roleID=%d, body=%s", c.ID, string(body))
+	log.Printf("处理登录请求: accountID=%d, roleID=%d, body=%s", c.AccountID, c.ID, string(body))
 	var req LoginRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		c.sendPacket(CmdLogin, mustMarshal(LoginResponse{Code: 400, Msg: "请求格式错误"}))
@@ -529,26 +555,103 @@ func (c *Client) handleLogin(body []byte) {
 
 	switch req.Type {
 	case "account":
-		// TODO: 调用登录服务验证
-		c.sendPacket(CmdLogin, mustMarshal(LoginResponse{Code: 200, Msg: "登录成功", RoleID: 1}))
+		// 调用LoginService验证账号密码
+		loginReq := map[string]string{
+			"username": req.Username,
+			"password": req.Password,
+		}
+		resp, err := common.LoginClient.Post("/api/login", loginReq)
+		if err != nil {
+			log.Printf("调用LoginService失败: %v", err)
+			c.sendPacket(CmdLogin, mustMarshal(LoginResponse{Code: 500, Msg: "服务异常，请稍后重试"}))
+			return
+		}
+
+		var loginResp struct {
+			Code  int    `json:"code"`
+			UID   uint   `json:"uid"`
+			Token string `json:"token"`
+			Msg   string `json:"msg"`
+		}
+		if err := json.Unmarshal(resp, &loginResp); err != nil {
+			c.sendPacket(CmdLogin, mustMarshal(LoginResponse{Code: 500, Msg: "响应解析失败"}))
+			return
+		}
+
+		if loginResp.Code != 0 {
+			c.sendPacket(CmdLogin, mustMarshal(LoginResponse{Code: loginResp.Code, Msg: loginResp.Msg}))
+			return
+		}
+
+		// 登录成功，设置账号ID和token
+		c.AccountID = uint64(loginResp.UID)
+		c.Token = loginResp.Token
+
+		log.Printf("账号登录成功: accountID=%d, token=%s", c.AccountID, c.Token[:min(10, len(c.Token))]+"...")
+
+		// 返回登录成功响应（包含账号ID，等待前端选择角色）
+		c.sendPacket(CmdLogin, mustMarshal(LoginResponse{
+			Code:      200,
+			Msg:       "登录成功",
+			AccountID: c.AccountID,
+			Token:     c.Token,
+		}))
 
 	case "guest":
-		// 游客登录 - 生成唯一ID
-		roleID := uint64(time.Now().UnixNano() % 1000000)
-		if roleID == 0 {
-			roleID = uint64(time.Now().Unix())
+		// 游客登录 - 创建临时账号
+		guestID := time.Now().UnixNano() % 10000000 // 7位随机数
+		guestUsername := fmt.Sprintf("g_%d", guestID)
+		guestPassword := fmt.Sprintf("g_%d", time.Now().UnixNano()%10000000)
+
+		// 调用LoginService注册临时账号
+		registerReq := map[string]string{
+			"username": guestUsername,
+			"password": guestPassword,
 		}
-		c.ID = roleID
-		c.Name = req.Username
-		// 更新管理器中的客户端ID
-		GlobalManager.updateClientID(c, roleID)
-		// 生成重连token
-		token := generateToken(roleID)
-		c.Token = token // 保存token到client
-		c.sendPacket(CmdLogin, mustMarshal(LoginResponse{Code: 200, Msg: "登录成功", RoleID: roleID, Token: token}))
+		resp, err := common.LoginClient.Post("/api/register", registerReq)
+		if err != nil {
+			log.Printf("游客注册失败: %v", err)
+			// 如果注册失败，尝试直接登录（可能账号已存在）
+			loginResp, err := common.LoginClient.Post("/api/login", registerReq)
+			if err != nil {
+				c.sendPacket(CmdLogin, mustMarshal(LoginResponse{Code: 500, Msg: "服务异常"}))
+				return
+			}
+			resp = loginResp
+		}
+
+		var result struct {
+			Code  int    `json:"code"`
+			UID   uint   `json:"uid"`
+			Token string `json:"token"`
+			Msg   string `json:"msg"`
+		}
+		if err := json.Unmarshal(resp, &result); err != nil {
+			c.sendPacket(CmdLogin, mustMarshal(LoginResponse{Code: 500, Msg: "响应解析失败"}))
+			return
+		}
+
+		if result.Code != 0 {
+			c.sendPacket(CmdLogin, mustMarshal(LoginResponse{Code: result.Code, Msg: result.Msg}))
+			return
+		}
+
+		// 游客登录成功
+		c.AccountID = uint64(result.UID)
+		c.Token = result.Token
+		c.Name = guestUsername
+
+		log.Printf("游客登录成功: accountID=%d", c.AccountID)
+
+		c.sendPacket(CmdLogin, mustMarshal(LoginResponse{
+			Code:      200,
+			Msg:       "游客登录成功",
+			AccountID: c.AccountID,
+			Token:     c.Token,
+		}))
 
 	case "reconnect":
-		// 断线重连
+		// 断线重连 - 验证token
 		if req.Token == "" {
 			c.sendPacket(CmdLogin, mustMarshal(LoginResponse{Code: 400, Msg: "token不能为空"}))
 			return
@@ -562,28 +665,27 @@ func (c *Client) handleLogin(body []byte) {
 		}
 
 		// 恢复会话
+		c.AccountID = session.AccountID
 		c.ID = session.RoleID
 		c.Name = session.Name
 		c.MapID = session.MapID
 		c.X = session.X
 		c.Y = session.Y
 
-		// 更新管理器中的客户端ID
-		GlobalManager.updateClientID(c, session.RoleID)
-
 		// 注册到管理器
 		GlobalManager.addClient(c)
 
 		// 获取当前在线人数
 		currentCount := GlobalManager.GetOnlineCount()
-		log.Printf("重连成功: roleID=%d, mapID=%d, 在线人数=%d", c.ID, c.MapID, currentCount)
+		log.Printf("重连成功: accountID=%d, roleID=%d, mapID=%d, 在线人数=%d", c.AccountID, c.ID, c.MapID, currentCount)
 
-		// 发送登录成功响应（包含在线人数）
+		// 发送登录成功响应
 		c.sendPacket(CmdLogin, mustMarshal(LoginResponse{
-			Code:   200,
-			Msg:    "重连成功",
-			RoleID: session.RoleID,
-			Token:  req.Token, // 复用token
+			Code:      200,
+			Msg:       "重连成功",
+			AccountID: c.AccountID,
+			RoleID:    session.RoleID,
+			Token:     req.Token,
 		}))
 
 		// 发送在线人数
@@ -593,12 +695,10 @@ func (c *Client) handleLogin(body []byte) {
 		copy(sendPkg[2:], pkg)
 		c.Send <- sendPkg
 
-		// 广播在线人数更新给所有玩家
+		// 广播在线人数更新
 		GlobalManager.BroadcastToAll(&Message{
 			Type: CmdOnlineCount,
-			Data: mustMarshal(map[string]interface{}{
-				"count": currentCount,
-			}),
+			Data: mustMarshal(map[string]interface{}{"count": currentCount}),
 		})
 
 		// 广播玩家进入地图
@@ -669,8 +769,8 @@ func (c *Client) handleEnterMap(body []byte) {
 
 		// 保存会话（用于断线重连）
 		if c.Token != "" {
-			saveSession(c.Token, c.ID, c.Name, c.MapID, c.X, c.Y)
-			log.Printf("保存会话: token=%s, roleID=%d", c.Token[:10]+"...", c.ID)
+			saveSession(c.Token, c.AccountID, c.ID, c.Name, c.MapID, c.X, c.Y)
+			log.Printf("保存会话: token=%s, accountID=%d, roleID=%d", c.Token[:min(10, len(c.Token))]+"...", c.AccountID, c.ID)
 		}
 
 		// 先获取当前在线人数（注册后的值）
@@ -834,6 +934,318 @@ func (c *Client) sendPacket(cmd uint16, data []byte) {
 func mustMarshal(v interface{}) []byte {
 	data, _ := json.Marshal(v)
 	return data
+}
+
+// handleRegister 处理注册请求
+func (c *Client) handleRegister(body []byte) {
+	log.Printf("处理注册请求: body=%s", string(body))
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		c.sendPacket(CmdRegister, mustMarshal(map[string]interface{}{
+			"code": 400,
+			"msg":  "请求格式错误",
+		}))
+		return
+	}
+
+	if len(req.Username) < 4 || len(req.Username) > 20 {
+		c.sendPacket(CmdRegister, mustMarshal(map[string]interface{}{
+			"code": 400,
+			"msg":  "用户名长度需4-20位",
+		}))
+		return
+	}
+
+	if len(req.Password) < 6 || len(req.Password) > 20 {
+		c.sendPacket(CmdRegister, mustMarshal(map[string]interface{}{
+			"code": 400,
+			"msg":  "密码长度需6-20位",
+		}))
+		return
+	}
+
+	// 调用LoginService注册
+	registerReq := map[string]string{
+		"username": req.Username,
+		"password": req.Password,
+	}
+	resp, err := common.LoginClient.Post("/api/register", registerReq)
+	if err != nil {
+		log.Printf("调用LoginService注册失败: %v", err)
+		c.sendPacket(CmdRegister, mustMarshal(map[string]interface{}{
+			"code": 500,
+			"msg":  "服务异常，请稍后重试",
+		}))
+		return
+	}
+
+	var result struct {
+		Code  int    `json:"code"`
+		UID   uint   `json:"uid"`
+		Token string `json:"token"`
+		Msg   string `json:"msg"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		c.sendPacket(CmdRegister, mustMarshal(map[string]interface{}{
+			"code": 500,
+			"msg":  "响应解析失败",
+		}))
+		return
+	}
+
+	if result.Code != 0 {
+		c.sendPacket(CmdRegister, mustMarshal(map[string]interface{}{
+			"code": result.Code,
+			"msg":  result.Msg,
+		}))
+		return
+	}
+
+	// 注册成功，自动登录
+	c.AccountID = uint64(result.UID)
+	c.Token = result.Token
+
+	log.Printf("注册成功: accountID=%d", c.AccountID)
+
+	c.sendPacket(CmdRegister, mustMarshal(map[string]interface{}{
+		"code":       200,
+		"msg":        "注册成功",
+		"account_id": c.AccountID,
+		"token":      c.Token,
+	}))
+}
+
+// handleRoleList 处理获取角色列表请求
+func (c *Client) handleRoleList() {
+	log.Printf("获取角色列表: accountID=%d", c.AccountID)
+
+	if c.AccountID == 0 {
+		c.sendPacket(CmdRoleList, mustMarshal(map[string]interface{}{
+			"code": 400,
+			"msg":  "请先登录",
+		}))
+		return
+	}
+
+	// 调用DBService获取角色列表
+	resp, err := common.DBPost("/api/role/list", map[string]interface{}{
+		"account_id": c.AccountID,
+	})
+	if err != nil {
+		log.Printf("获取角色列表失败: %v", err)
+		c.sendPacket(CmdRoleList, mustMarshal(map[string]interface{}{
+			"code": 500,
+			"msg":  "服务异常",
+		}))
+		return
+	}
+
+	code, _ := resp["code"].(float64)
+	if code != 0 {
+		msg, _ := resp["msg"].(string)
+		c.sendPacket(CmdRoleList, mustMarshal(map[string]interface{}{
+			"code": int(code),
+			"msg":  msg,
+		}))
+		return
+	}
+
+	// 返回角色列表
+	roles, _ := resp["data"].([]interface{})
+	log.Printf("角色列表: accountID=%d, count=%d", c.AccountID, len(roles))
+
+	c.sendPacket(CmdRoleList, mustMarshal(map[string]interface{}{
+		"code":  200,
+		"msg":   "获取成功",
+		"roles": roles,
+	}))
+}
+
+// handleRoleCreate 处理创建角色请求
+func (c *Client) handleRoleCreate(body []byte) {
+	log.Printf("创建角色: accountID=%d, body=%s", c.AccountID, string(body))
+
+	if c.AccountID == 0 {
+		c.sendPacket(CmdRoleCreate, mustMarshal(map[string]interface{}{
+			"code": 400,
+			"msg":  "请先登录",
+		}))
+		return
+	}
+
+	var req struct {
+		Name       string `json:"name"`
+		Gender     uint8  `json:"gender"`
+		Appearance uint32 `json:"appearance"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		c.sendPacket(CmdRoleCreate, mustMarshal(map[string]interface{}{
+			"code": 400,
+			"msg":  "请求格式错误",
+		}))
+		return
+	}
+
+	if len(req.Name) < 2 || len(req.Name) > 12 {
+		c.sendPacket(CmdRoleCreate, mustMarshal(map[string]interface{}{
+			"code": 400,
+			"msg":  "角色名长度需2-12位",
+		}))
+		return
+	}
+
+	// 调用DBService创建角色
+	resp, err := common.DBPost("/api/role/create", map[string]interface{}{
+		"account_id": c.AccountID,
+		"name":       req.Name,
+		"gender":     req.Gender,
+		"appearance": req.Appearance,
+	})
+	if err != nil {
+		log.Printf("创建角色失败: %v", err)
+		c.sendPacket(CmdRoleCreate, mustMarshal(map[string]interface{}{
+			"code": 500,
+			"msg":  "服务异常",
+		}))
+		return
+	}
+
+	code, _ := resp["code"].(float64)
+	if code != 0 {
+		msg, _ := resp["msg"].(string)
+		c.sendPacket(CmdRoleCreate, mustMarshal(map[string]interface{}{
+			"code": int(code),
+			"msg":  msg,
+		}))
+		return
+	}
+
+	roleID, _ := resp["data"].(float64)
+	log.Printf("创建角色成功: accountID=%d, roleID=%d, name=%s", c.AccountID, uint64(roleID), req.Name)
+
+	c.sendPacket(CmdRoleCreate, mustMarshal(map[string]interface{}{
+		"code":    200,
+		"msg":     "创建成功",
+		"role_id": uint64(roleID),
+		"name":    req.Name,
+	}))
+}
+
+// handleRoleSelect 处理选择角色请求
+func (c *Client) handleRoleSelect(body []byte) {
+	log.Printf("选择角色: accountID=%d, body=%s", c.AccountID, string(body))
+
+	if c.AccountID == 0 {
+		c.sendPacket(CmdRoleSelect, mustMarshal(map[string]interface{}{
+			"code": 400,
+			"msg":  "请先登录",
+		}))
+		return
+	}
+
+	var req struct {
+		RoleID uint64 `json:"role_id"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		c.sendPacket(CmdRoleSelect, mustMarshal(map[string]interface{}{
+			"code": 400,
+			"msg":  "请求格式错误",
+		}))
+		return
+	}
+
+	// 调用DBService获取角色信息
+	resp, err := common.DBPost("/api/role/get", map[string]interface{}{
+		"id": req.RoleID,
+	})
+	if err != nil {
+		log.Printf("获取角色信息失败: %v", err)
+		c.sendPacket(CmdRoleSelect, mustMarshal(map[string]interface{}{
+			"code": 500,
+			"msg":  "服务异常",
+		}))
+		return
+	}
+
+	code, _ := resp["code"].(float64)
+	if code != 0 {
+		msg, _ := resp["msg"].(string)
+		c.sendPacket(CmdRoleSelect, mustMarshal(map[string]interface{}{
+			"code": int(code),
+			"msg":  msg,
+		}))
+		return
+	}
+
+	// 解析角色数据
+	data, _ := json.Marshal(resp["data"])
+	var role struct {
+		ID        uint64 `json:"id"`
+		AccountID uint64 `json:"account_id"`
+		Name      string `json:"name"`
+		Level     int    `json:"level"`
+		Gender    uint8  `json:"gender"`
+		MapID     int    `json:"map_id"`
+		MapX      int    `json:"map_x"`
+		MapY      int    `json:"map_y"`
+		Hp        int    `json:"hp"`
+		MaxHp     int    `json:"max_hp"`
+		Mp        int    `json:"mp"`
+		MaxMp     int    `json:"max_mp"`
+		Attack    int    `json:"attack"`
+		Defense   int    `json:"defense"`
+		Speed     int    `json:"speed"`
+		Gold      int64  `json:"gold"`
+	}
+	if err := json.Unmarshal(data, &role); err != nil {
+		c.sendPacket(CmdRoleSelect, mustMarshal(map[string]interface{}{
+			"code": 500,
+			"msg":  "角色数据解析失败",
+		}))
+		return
+	}
+
+	// 验证角色归属
+	if role.AccountID != c.AccountID {
+		c.sendPacket(CmdRoleSelect, mustMarshal(map[string]interface{}{
+			"code": 403,
+			"msg":  "角色不属于当前账号",
+		}))
+		return
+	}
+
+	// 设置角色信息
+	c.ID = role.ID
+	c.Name = role.Name
+	c.MapID = uint32(role.MapID)
+	c.X = role.MapX
+	c.Y = role.MapY
+
+	log.Printf("选择角色成功: accountID=%d, roleID=%d, name=%s, mapID=%d", c.AccountID, c.ID, c.Name, c.MapID)
+
+	// 返回角色完整信息
+	c.sendPacket(CmdRoleSelect, mustMarshal(map[string]interface{}{
+		"code":    200,
+		"msg":     "选择成功",
+		"role_id": role.ID,
+		"name":    role.Name,
+		"level":   role.Level,
+		"gender":  role.Gender,
+		"map_id":  role.MapID,
+		"x":       role.MapX,
+		"y":       role.MapY,
+		"hp":      role.Hp,
+		"max_hp":  role.MaxHp,
+		"mp":      role.Mp,
+		"max_mp":  role.MaxMp,
+		"attack":  role.Attack,
+		"defense": role.Defense,
+		"speed":   role.Speed,
+		"gold":    role.Gold,
+	}))
 }
 
 func init() {

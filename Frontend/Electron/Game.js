@@ -3,7 +3,13 @@
 class Game {
   constructor() {
     // 游戏状态
-    this.state = 'loading'; // loading, login, playing
+    this.state = 'loading'; // loading, login, role_select, role_create, playing
+    
+    // 账号数据
+    this.account = {
+      id: 0,
+      token: ''
+    };
     
     // 玩家数据
     this.player = {
@@ -27,6 +33,9 @@ class Game {
       y: 5
     };
     
+    // 角色列表
+    this.roles = [];
+    
     // 其他玩家
     this.players = new Map(); // key=roleID, value={id, name, x, y, hp, maxHp}
     
@@ -44,12 +53,24 @@ class Game {
     this.ui = {
       loadingOverlay: document.getElementById('loadingOverlay'),
       loginPanel: document.getElementById('loginPanel'),
+      roleSelectPanel: document.getElementById('roleSelectPanel'),
+      roleCreatePanel: document.getElementById('roleCreatePanel'),
       gamePanel: document.getElementById('gamePanel'),
       loginBtn: document.getElementById('loginBtn'),
+      registerBtn: document.getElementById('registerBtn'),
       guestBtn: document.getElementById('guestBtn'),
       username: document.getElementById('username'),
       password: document.getElementById('password'),
       loginMsg: document.getElementById('loginMsg'),
+      roleList: document.getElementById('roleList'),
+      noRoleMsg: document.getElementById('noRoleMsg'),
+      createRoleBtn: document.getElementById('createRoleBtn'),
+      roleSelectMsg: document.getElementById('roleSelectMsg'),
+      roleNameInput: document.getElementById('createRoleName'),
+      appearanceOptions: document.getElementById('appearanceOptions'),
+      confirmCreateBtn: document.getElementById('confirmCreateBtn'),
+      backToSelectBtn: document.getElementById('backToSelectBtn'),
+      roleCreateMsg: document.getElementById('roleCreateMsg'),
       chatMessages: document.getElementById('chatMessages'),
       chatInput: document.getElementById('chatInput'),
       roleName: document.getElementById('roleName'),
@@ -106,18 +127,42 @@ class Game {
   
   bindEvents() {
     // 登录按钮
-    this.ui.loginBtn.addEventListener('click', () => this.handleLogin());
-    this.ui.guestBtn.addEventListener('click', () => this.handleGuestLogin());
+    if (this.ui.loginBtn) {
+      this.ui.loginBtn.addEventListener('click', () => this.handleLogin());
+    }
+    if (this.ui.registerBtn) {
+      this.ui.registerBtn.addEventListener('click', () => this.handleRegister());
+    }
+    if (this.ui.guestBtn) {
+      this.ui.guestBtn.addEventListener('click', () => this.handleGuestLogin());
+    }
     
     // 回车登录
-    this.ui.password.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') this.handleLogin();
-    });
+    if (this.ui.password) {
+      this.ui.password.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') this.handleLogin();
+      });
+    }
+    
+    // 角色选择界面
+    if (this.ui.createRoleBtn) {
+      this.ui.createRoleBtn.addEventListener('click', () => this.showRoleCreatePanel());
+    }
+    
+    // 创建角色界面
+    if (this.ui.confirmCreateBtn) {
+      this.ui.confirmCreateBtn.addEventListener('click', () => this.handleRoleCreate());
+    }
+    if (this.ui.backToSelectBtn) {
+      this.ui.backToSelectBtn.addEventListener('click', () => this.showRoleSelectPanel());
+    }
     
     // 聊天发送
-    this.ui.chatInput.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') this.sendChat();
-    });
+    if (this.ui.chatInput) {
+      this.ui.chatInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') this.sendChat();
+      });
+    }
     
     // 键盘事件
     document.addEventListener('keydown', (e) => this.handleKeyDown(e));
@@ -330,14 +375,44 @@ class Game {
     });
   }
   
+  handleRegister() {
+    const username = this.ui.username.value.trim();
+    const password = this.ui.password.value;
+    
+    if (!username || !password) {
+      this.ui.loginMsg.textContent = '请输入账号和密码';
+      return;
+    }
+    
+    if (username.length < 4 || username.length > 20) {
+      this.ui.loginMsg.textContent = '用户名长度需4-20位';
+      return;
+    }
+    
+    if (password.length < 6 || password.length > 20) {
+      this.ui.loginMsg.textContent = '密码长度需6-20位';
+      return;
+    }
+    
+    this.ui.registerBtn.disabled = true;
+    this.ui.registerBtn.textContent = '注册中...';
+    
+    // 发送注册请求
+    window.GameWS.send(Protocol.CMD_REGISTER, {
+      username: username,
+      password: password
+    });
+  }
+  
   handleGuestLogin() {
     this.ui.guestBtn.disabled = true;
     this.ui.guestBtn.textContent = '进入中...';
     
-    // 游客登录
+    // 游客登录 - 生成短格式用户名
+    const guestId = Math.floor(Math.random() * 90000) + 10000;
     window.GameWS.send(Protocol.CMD_LOGIN, {
       type: 'guest',
-      username: 'guest_' + Date.now(),
+      username: 'guest_' + guestId,
       password: ''
     });
   }
@@ -345,23 +420,239 @@ class Game {
   handleLoginResponse(data) {
     this.ui.loginBtn.disabled = false;
     this.ui.loginBtn.textContent = '登 录';
+    this.ui.registerBtn.disabled = false;
+    this.ui.registerBtn.textContent = '注 册';
     this.ui.guestBtn.disabled = false;
     this.ui.guestBtn.textContent = '游客试玩';
     
     if (data.code === 200) {
-      this.player.id = data.role_id;
-      this.player.name = this.ui.username.value || '游客';
+      // 保存账号信息
+      this.account.id = data.account_id || 0;
+      this.account.token = data.token || '';
       
-      // 进入游戏
-      this.enterGame();
+      // 如果已经有角色ID（重连或游客），直接进入游戏
+      if (data.role_id) {
+        this.player.id = data.role_id;
+        this.player.name = data.name || '游客';
+        this.enterGame();
+      } else {
+        // 否则显示角色选择界面
+        this.showRoleSelectPanel();
+        // 自动获取角色列表
+        window.GameWS.send(Protocol.CMD_ROLE_LIST, {});
+      }
     } else {
       this.ui.loginMsg.textContent = data.msg || '登录失败';
     }
   }
   
+  handleRegisterResponse(data) {
+    this.ui.registerBtn.disabled = false;
+    this.ui.registerBtn.textContent = '注 册';
+    
+    if (data.code === 200) {
+      // 注册成功，自动登录
+      this.account.id = data.account_id || 0;
+      this.account.token = data.token || '';
+      this.ui.loginMsg.textContent = '注册成功！';
+      this.ui.loginMsg.style.color = '#4ade80';
+      
+      // 显示角色选择界面
+      this.showRoleSelectPanel();
+      // 自动获取角色列表
+      window.GameWS.send(Protocol.CMD_ROLE_LIST, {});
+    } else {
+      this.ui.loginMsg.textContent = data.msg || '注册失败';
+      this.ui.loginMsg.style.color = '#ff6b6b';
+    }
+  }
+  
+  showRoleSelectPanel() {
+    this.state = 'role_select';
+    this.ui.loginPanel.style.display = 'none';
+    this.ui.roleSelectPanel.style.display = 'block';
+    this.ui.roleCreatePanel.style.display = 'none';
+    this.ui.roleSelectMsg.textContent = '';
+  }
+  
+  showRoleCreatePanel() {
+    this.state = 'role_create';
+    this.ui.roleSelectPanel.style.display = 'none';
+    this.ui.roleCreatePanel.style.display = 'block';
+    this.ui.roleNameInput.value = '';
+    this.ui.roleCreateMsg.textContent = '';
+    
+    // 初始化外观选项
+    this.initAppearanceOptions();
+  }
+  
+  initAppearanceOptions() {
+    const appearances = [0, 1, 2, 3, 4, 5];
+    this.ui.appearanceOptions.innerHTML = '';
+    
+    appearances.forEach((app, index) => {
+      const btn = document.createElement('button');
+      btn.className = 'login-btn';
+      btn.style.width = '50px';
+      btn.style.height = '50px';
+      btn.style.padding = '0';
+      btn.style.fontSize = '14px';
+      btn.textContent = index + 1;
+      btn.dataset.appearance = app;
+      
+      if (index === 0) {
+        btn.style.borderColor = '#e94560';
+        btn.style.boxShadow = '0 0 10px rgba(233, 69, 96, 0.5)';
+        btn.dataset.selected = 'true';
+      }
+      
+      btn.addEventListener('click', () => {
+        // 移除其他按钮的选中状态
+        this.ui.appearanceOptions.querySelectorAll('button').forEach(b => {
+          b.style.borderColor = '#4a5568';
+          b.style.boxShadow = 'none';
+          b.dataset.selected = 'false';
+        });
+        // 设置当前按钮选中状态
+        btn.style.borderColor = '#e94560';
+        btn.style.boxShadow = '0 0 10px rgba(233, 69, 96, 0.5)';
+        btn.dataset.selected = 'true';
+      });
+      
+      this.ui.appearanceOptions.appendChild(btn);
+    });
+  }
+  
+  handleRoleListResponse(data) {
+    if (data.code === 200) {
+      this.roles = data.roles || [];
+      this.renderRoleList();
+    } else {
+      this.ui.roleSelectMsg.textContent = data.msg || '获取角色列表失败';
+    }
+  }
+  
+  renderRoleList() {
+    this.ui.roleList.innerHTML = '';
+    
+    if (this.roles.length === 0) {
+      this.ui.noRoleMsg.style.display = 'block';
+      return;
+    }
+    
+    this.ui.noRoleMsg.style.display = 'none';
+    
+    this.roles.forEach(role => {
+      const roleCard = document.createElement('div');
+      roleCard.className = 'login-box';
+      roleCard.style.width = '180px';
+      roleCard.style.padding = '20px';
+      roleCard.style.cursor = 'pointer';
+      roleCard.style.transition = 'all 0.3s';
+      
+      roleCard.innerHTML = `
+        <div style="text-align: center;">
+          <div style="color: #e94560; font-size: 18px; margin-bottom: 10px;">${role.name || '无名'}</div>
+          <div style="color: #fff; font-size: 14px;">等级: ${role.level || 1}</div>
+          <div style="color: #999; font-size: 12px; margin-top: 5px;">${role.gender === 0 ? '男' : '女'}</div>
+        </div>
+      `;
+      
+      roleCard.addEventListener('click', () => {
+        this.selectRole(role.id);
+      });
+      
+      roleCard.addEventListener('mouseenter', () => {
+        roleCard.style.transform = 'translateY(-5px)';
+        roleCard.style.boxShadow = '0 5px 20px rgba(233, 69, 96, 0.4)';
+      });
+      
+      roleCard.addEventListener('mouseleave', () => {
+        roleCard.style.transform = 'none';
+        roleCard.style.boxShadow = '0 0 30px rgba(233, 69, 96, 0.3)';
+      });
+      
+      this.ui.roleList.appendChild(roleCard);
+    });
+  }
+  
+  selectRole(roleId) {
+    this.ui.roleSelectMsg.textContent = '正在进入游戏...';
+    window.GameWS.send(Protocol.CMD_ROLE_SELECT, { role_id: roleId });
+  }
+  
+  handleRoleSelectResponse(data) {
+    if (data.code === 200) {
+      // 设置角色信息
+      this.player.id = data.role_id;
+      this.player.name = data.name;
+      this.player.level = data.level || 1;
+      this.player.hp = data.hp || 100;
+      this.player.maxHp = data.max_hp || 100;
+      this.player.mp = data.mp || 100;
+      this.player.maxMp = data.max_mp || 100;
+      this.player.attack = data.attack || 10;
+      this.player.defense = data.defense || 5;
+      this.player.speed = data.speed || 10;
+      this.player.gold = data.gold || 0;
+      this.player.mapId = data.map_id || 1;
+      this.player.x = data.x || 5;
+      this.player.y = data.y || 5;
+      
+      // 进入游戏
+      this.enterGame();
+    } else {
+      this.ui.roleSelectMsg.textContent = data.msg || '选择角色失败';
+    }
+  }
+  
+  handleRoleCreate() {
+    const name = this.ui.roleNameInput.value.trim();
+    const genderRadio = document.querySelector('input[name="gender"]:checked');
+    const gender = genderRadio ? parseInt(genderRadio.value) : 0;
+    const appearanceBtn = this.ui.appearanceOptions.querySelector('button[data-selected="true"]');
+    const appearance = appearanceBtn ? parseInt(appearanceBtn.dataset.appearance) : 0;
+    
+    if (!name || name.length < 2 || name.length > 12) {
+      this.ui.roleCreateMsg.textContent = '角色名长度需2-12位';
+      return;
+    }
+    
+    this.ui.confirmCreateBtn.disabled = true;
+    this.ui.confirmCreateBtn.textContent = '创建中...';
+    
+    window.GameWS.send(Protocol.CMD_ROLE_CREATE, {
+      name: name,
+      gender: gender,
+      appearance: appearance
+    });
+  }
+  
+  handleRoleCreateResponse(data) {
+    this.ui.confirmCreateBtn.disabled = false;
+    this.ui.confirmCreateBtn.textContent = '确认创建';
+    
+    if (data.code === 200) {
+      // 创建成功，返回角色选择界面
+      this.ui.roleCreateMsg.textContent = '创建成功！';
+      this.ui.roleCreateMsg.style.color = '#4ade80';
+      
+      // 重新获取角色列表
+      setTimeout(() => {
+        this.showRoleSelectPanel();
+        window.GameWS.send(Protocol.CMD_ROLE_LIST, {});
+      }, 500);
+    } else {
+      this.ui.roleCreateMsg.textContent = data.msg || '创建失败';
+      this.ui.roleCreateMsg.style.color = '#ff6b6b';
+    }
+  }
+  
   enterGame() {
     this.state = 'playing';
-    this.ui.loginPanel.classList.add('hidden');
+    this.ui.loginPanel.style.display = 'none';
+    this.ui.roleSelectPanel.style.display = 'none';
+    this.ui.roleCreatePanel.style.display = 'none';
     this.ui.gamePanel.classList.add('active');
     
     // 游戏面板显示后，调整画布大小
@@ -739,8 +1030,24 @@ class Game {
         this.handleLoginResponse(data);
         break;
         
+      case Protocol.CMD_REGISTER:
+        this.handleRegisterResponse(data);
+        break;
+        
       case Protocol.CMD_HEARTBEAT:
         // 心跳响应
+        break;
+        
+      case Protocol.CMD_ROLE_LIST:
+        this.handleRoleListResponse(data);
+        break;
+        
+      case Protocol.CMD_ROLE_CREATE:
+        this.handleRoleCreateResponse(data);
+        break;
+        
+      case Protocol.CMD_ROLE_SELECT:
+        this.handleRoleSelectResponse(data);
         break;
         
       case Protocol.CMD_MAP_PLAYER:
@@ -1293,6 +1600,7 @@ const Protocol = window.Protocol = {
   CMD_LOGIN: 1001,
   CMD_LOGOUT: 1002,
   CMD_HEARTBEAT: 1003,
+  CMD_REGISTER: 1004,
   
   // 游戏相关 2001-2030
   CMD_MOVE: 2001,
@@ -1319,7 +1627,10 @@ const Protocol = window.Protocol = {
   // 角色相关 5001-5020
   CMD_ROLE_INFO: 5001,
   CMD_ROLE_ATTRIB: 5002,
-  CMD_SYNC: 5003
+  CMD_SYNC: 5003,
+  CMD_ROLE_LIST: 5004,
+  CMD_ROLE_CREATE: 5005,
+  CMD_ROLE_SELECT: 5006
 };
 
 // 游戏单例

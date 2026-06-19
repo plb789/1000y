@@ -241,7 +241,7 @@ func GetAccountInfo(uid uint) (*Model.Account, error) {
 	data := dbResp.Data.(map[string]interface{})
 	acc := &Model.Account{}
 	if id, ok := data["id"].(float64); ok {
-		acc.ID = uint(id)
+		acc.ID = uint64(id)
 	}
 	if name, ok := data["name"].(string); ok {
 		acc.Username = name

@@ -56,10 +56,6 @@ func LoadMapFile(path string) error {
 	fmt.Printf("   格式: %s\n", mapBool(isNewFormat, "新格式(16位ID)", "旧格式(8位ID)"))
 
 	tiles := make([]Tile, total)
-	tileBytes := 5
-	if !isNewFormat {
-		tileBytes = 3
-	}
 
 	for i := 0; i < total; i++ {
 		var t Tile

@@ -36,6 +36,20 @@ func main() {
 		&Model.ItemBase{},
 		&Model.RoleBag{},
 		&Model.RoleEquipment{},
+		&Model.Friend{},
+		&Model.FriendRequest{},
+		&Model.Mail{},
+		&Model.TaskBase{},
+		&Model.RoleTask{},
+		&Model.Guild{},
+		&Model.GuildMember{},
+		&Model.GuildApply{},
+		&Model.ChatLog{},
+		&Model.RoleSignIn{},
+		&Model.SignInReward{},
+		&Model.RechargeOrder{},
+		&Model.RechargeProduct{},
+		&Model.RoleRecharge{},
 	)
 	if err != nil {
 		log.Fatal("建表失败:", err)
@@ -320,15 +334,47 @@ func handleRoleCreate(c *gin.Context) {
 		return
 	}
 
+	// 输入验证
+	if len(req.Name) < 2 || len(req.Name) > 12 {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "角色名长度需2-12位"})
+		return
+	}
+	if req.Gender > 1 {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "性别参数错误"})
+		return
+	}
+	if req.Appearance > 10 {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "外观参数错误"})
+		return
+	}
+
+	now := time.Now()
 	role := Model.Role{
-		AccountID:  req.AccountID,
-		Name:       req.Name,
-		Gender:     req.Gender,
-		Appearance: req.Appearance,
-		Level:      1,
-		MapID:      1,
-		MapX:       400,
-		MapY:       300,
+		AccountID:    req.AccountID,
+		Name:         req.Name,
+		Gender:       req.Gender,
+		Appearance:   req.Appearance,
+		Level:        1,
+		MapID:        1,
+		MapX:         400,
+		MapY:         300,
+		Hp:           100,
+		MaxHp:        100,
+		Mp:           100,
+		MaxMp:        100,
+		Stamina:      100,
+		MaxStamina:   100,
+		Attack:       10,
+		Defense:      5,
+		Speed:        10,
+		Hit:          50,
+		Dodge:        10,
+		Crit:         5,
+		CritDamage:   150,
+		CreateTime:   now,
+		LastLogin:    now,
+		LastSaveTime: now,
+		LogoutTime:   now, // 设置为当前时间，避免0000-00-00错误
 	}
 
 	if err := Mysql.DB.Create(&role).Error; err != nil {
@@ -355,7 +401,36 @@ func handleRoleGet(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"code": 0, "data": role})
+	// 返回小写字段名格式
+	c.JSON(http.StatusOK, gin.H{
+		"code": 0,
+		"data": map[string]interface{}{
+			"id":          role.ID,
+			"account_id":  role.AccountID,
+			"name":        role.Name,
+			"level":       role.Level,
+			"exp":         role.Exp,
+			"gold":        role.Gold,
+			"gender":      role.Gender,
+			"appearance":  role.Appearance,
+			"hp":          role.Hp,
+			"max_hp":      role.MaxHp,
+			"mp":          role.Mp,
+			"max_mp":      role.MaxMp,
+			"stamina":     role.Stamina,
+			"max_stamina": role.MaxStamina,
+			"attack":      role.Attack,
+			"defense":     role.Defense,
+			"speed":       role.Speed,
+			"hit":         role.Hit,
+			"dodge":       role.Dodge,
+			"crit":        role.Crit,
+			"crit_damage": role.CritDamage,
+			"map_id":      role.MapID,
+			"map_x":       role.MapX,
+			"map_y":       role.MapY,
+		},
+	})
 }
 
 // handleRoleUpdate 更新角色信息
@@ -408,7 +483,20 @@ func handleRoleList(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"code": 0, "data": roles})
+	// 转换为前端需要的格式（小写字段名）
+	roleList := make([]map[string]interface{}, len(roles))
+	for i, r := range roles {
+		roleList[i] = map[string]interface{}{
+			"id":         r.ID,
+			"account_id": r.AccountID,
+			"name":       r.Name,
+			"level":      r.Level,
+			"gender":     r.Gender,
+			"appearance": r.Appearance,
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "data": roleList})
 }
 
 // handleRoleUpdatePosition 更新角色位置

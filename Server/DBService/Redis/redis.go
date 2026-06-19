@@ -2,6 +2,7 @@ package Redis
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"time"
@@ -98,15 +99,24 @@ func Init() {
 
 // Set 设置键值对
 func Set(key string, value string, expire time.Duration) error {
+	if RDB == nil {
+		return fmt.Errorf("Redis客户端未初始化")
+	}
 	return RDB.Set(ctx, key, value, expire).Err()
 }
 
 // Get 获取键值
 func Get(key string) (string, error) {
+	if RDB == nil {
+		return "", fmt.Errorf("Redis客户端未初始化")
+	}
 	return RDB.Get(ctx, key).Result()
 }
 
 // Del 删除键
 func Del(key string) error {
+	if RDB == nil {
+		return fmt.Errorf("Redis客户端未初始化")
+	}
 	return RDB.Del(ctx, key).Err()
 }
