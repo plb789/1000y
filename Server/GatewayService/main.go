@@ -24,11 +24,6 @@ var (
 	maxConnectionsPerIP  int
 	pongTimeout          time.Duration
 	pingInterval         time.Duration
-
-	// 会话管理
-	sessionStore   = make(map[string]*SessionData) // token -> session
-	sessionMutex   sync.RWMutex
-	sessionTimeout = 5 * time.Minute // 会话超时时间
 )
 
 // 初始化WebSocket配置
@@ -84,67 +79,6 @@ type SessionData struct {
 // generateToken 生成重连token
 func generateToken(accountID, roleID uint64) string {
 	return fmt.Sprintf("%d_%d_%d", accountID, roleID, time.Now().UnixNano())
-}
-
-// saveSession 保存会话
-func saveSession(token string, accountID, roleID uint64, name string, mapID uint32, x, y int) {
-	sessionMutex.Lock()
-	defer sessionMutex.Unlock()
-	sessionStore[token] = &SessionData{
-		AccountID: accountID,
-		RoleID:    roleID,
-		Name:      name,
-		MapID:     mapID,
-		X:         x,
-		Y:         y,
-		Expire:    time.Now().Add(sessionTimeout),
-	}
-}
-
-// getSession 获取会话
-func getSession(token string) (*SessionData, bool) {
-	sessionMutex.RLock()
-	defer sessionMutex.RUnlock()
-	session, ok := sessionStore[token]
-	if !ok {
-		return nil, false
-	}
-	// 检查是否过期
-	if session.Expire.Before(time.Now()) {
-		return nil, false
-	}
-	return session, true
-}
-
-// removeSession 删除会话
-func removeSession(token string) {
-	sessionMutex.Lock()
-	defer sessionMutex.Unlock()
-	delete(sessionStore, token)
-}
-
-// getSessionByRoleID 通过角色ID获取会话
-func getSessionByRoleID(roleID uint64) (*SessionData, bool) {
-	sessionMutex.RLock()
-	defer sessionMutex.RUnlock()
-	for _, session := range sessionStore {
-		if session.RoleID == roleID && session.Expire.After(time.Now()) {
-			return session, true
-		}
-	}
-	return nil, false
-}
-
-// cleanupExpiredSessions 清理过期会话（定时调用）
-func cleanupExpiredSessions() {
-	sessionMutex.Lock()
-	defer sessionMutex.Unlock()
-	now := time.Now()
-	for token, session := range sessionStore {
-		if session.Expire.Before(now) {
-			delete(sessionStore, token)
-		}
-	}
 }
 
 // ClientManager 客户端管理器
@@ -546,6 +480,12 @@ func (c *Client) handleMessage(cmd uint16, body []byte) {
 	case CmdHeartbeat:
 		c.LastPing = time.Now()
 		c.sendPacket(CmdHeartbeat, []byte(`{"time":`+fmt.Sprintf("%d", time.Now().Unix())+`}`))
+		// 刷新会话过期时间
+		if c.Token != "" {
+			if err := refreshSession(c.Token); err != nil {
+				log.Printf("刷新会话失败: %v", err)
+			}
+		}
 
 	case CmdRegister:
 		c.handleRegister(body)
@@ -823,8 +763,11 @@ func (c *Client) handleEnterMap(body []byte) {
 
 		// 保存会话（用于断线重连）
 		if c.Token != "" {
-			saveSession(c.Token, c.AccountID, c.ID, c.Name, c.MapID, c.X, c.Y)
-			log.Printf("保存会话: token=%s, accountID=%d, roleID=%d", c.Token[:min(10, len(c.Token))]+"...", c.AccountID, c.ID)
+			if err := saveSession(c.Token, c.AccountID, c.ID, c.Name, c.MapID, c.X, c.Y); err != nil {
+				log.Printf("保存会话失败: %v", err)
+			} else {
+				log.Printf("保存会话: token=%s, accountID=%d, roleID=%d", c.Token[:min(10, len(c.Token))]+"...", c.AccountID, c.ID)
+			}
 		}
 
 		// 向客户端发送当前位置同步（纠正客户端坐标）
@@ -1824,11 +1767,23 @@ func main() {
 	redisMinIdle := common.AppConfig.Redis.MinIdleConns
 	InitRedis(redisAddr, redisPassword, redisDB, redisPoolSize, redisMinIdle)
 
+	// 初始化 Redis Session（分布式会话）
+	InitRedisSession(redisAddr, redisPassword, redisDB, redisPoolSize, redisMinIdle)
+
 	// 启动定期广播在线人数（每10秒）
 	go broadcastOnlineCount()
 
 	// 启动心跳超时检测
 	go checkHeartbeatTimeout()
+
+	// 启动定期会话清理日志（每5分钟）
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			cleanupExpiredSessions()
+		}
+	}()
 
 	wsPort := common.AppConfig.GetWSPort()
 	log.Printf("WebSocket: :%d", wsPort)
