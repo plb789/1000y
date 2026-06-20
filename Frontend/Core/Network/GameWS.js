@@ -1,7 +1,14 @@
 /**
  * WebSocket 长连接封装
- * 协议格式: [cmd(2字节)][len(2字节)][消息体][校验码(1字节)]
+ * 协议格式: [cmd(2字节)][body(N字节)]
  */
+
+// 二进制协议集合：这些cmd的body为紧凑二进制格式，不走JSON解析
+// 怪物位置更新(3101): [map_id:4B][count:2B][timestamp:8B] + 每怪物[instance_id:4B][x:2B][y:2B][state:1B][hp:4B]
+const BINARY_PROTOCOLS = new Set([
+  3101 // CMD_MONSTER_POSITION_UPDATE
+]);
+
 class GameWS {
   constructor() {
     this.ws = null;
@@ -170,6 +177,7 @@ class GameWS {
   /**
    * 解析接收数据包
    * 简化协议: [cmd(2字节)][body(N字节)]
+   * 二进制协议cmd集合: body为紧凑二进制，不走JSON解析
    */
   _onRecv(buffer) {
     try {
@@ -182,16 +190,21 @@ class GameWS {
       const cmd = view.getUint16(0, true);
       // 数据
       const bodyLen = totalLen - 2;
+      const bodyData = data.slice(2, 2 + bodyLen);
       
       let body = {};
       if (bodyLen > 0) {
-        const bodyData = data.slice(2, 2 + bodyLen);
-        const jsonStr = new TextDecoder().decode(bodyData);
-        try {
-          body = JSON.parse(jsonStr);
-        } catch (e) {
-          console.warn('JSON解析失败:', jsonStr);
-          body = { raw: jsonStr };
+        // 二进制协议集合：直接传Uint8Array，不做JSON解析
+        if (BINARY_PROTOCOLS.has(cmd)) {
+          body = bodyData;
+        } else {
+          const jsonStr = new TextDecoder().decode(bodyData);
+          try {
+            body = JSON.parse(jsonStr);
+          } catch (e) {
+            console.warn('JSON解析失败:', jsonStr);
+            body = { raw: jsonStr };
+          }
         }
       }
 

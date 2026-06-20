@@ -2,11 +2,13 @@ package battle
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	common "game-server/Common"
 	monster "game-server/GameService/Monster"
 	"log"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -306,6 +308,99 @@ func (h *Handler) broadcastToMap(mapID uint32, msgType string, data interface{})
 func (h *Handler) BroadcastMonsterPositions(mapID uint32, data interface{}) {
 	log.Printf("📡 广播怪物位置: 地图%d, %d个怪物", mapID, len(data.(gin.H)["monsters"].([]monster.MonsterPositionInfo)))
 	h.broadcastToMap(mapID, "monster_position_update", data)
+}
+
+// BroadcastMonsterPositionsBinary 广播怪物位置（二进制协议，紧凑格式）
+// 二进制格式: [map_id:4B][count:2B][timestamp:8B] + 每个怪物[instance_id:4B][x:2B][y:2B][state:1B][hp:4B]
+func (h *Handler) BroadcastMonsterPositionsBinary(mapID uint32, positions []monster.MonsterPositionInfo) {
+	if len(positions) == 0 {
+		return
+	}
+
+	// 编码二进制数据
+	body := EncodeMonsterPositions(mapID, positions)
+
+	// 优先通过消息总线发送（RabbitMQ，自动降级到HTTP）
+	// 消息总线不可用时，回退到直连Gateway的HTTP二进制接口
+	if common.GlobalMessageBus != nil && common.GlobalMessageBus.IsAvailable() {
+		if err := common.PublishMonsterPositionBinary(mapID, 3101, body); err != nil {
+			log.Printf("消息总线发送怪物位置失败，回退直连HTTP: %v", err)
+			h.broadcastToMapBinary(mapID, 3101, body)
+		}
+	} else {
+		// 消息总线不可用，直接走HTTP二进制接口
+		h.broadcastToMapBinary(mapID, 3101, body)
+	}
+}
+
+// EncodeMonsterPositions 编码怪物位置为二进制格式
+// 格式: [map_id:4B uint32][count:2B uint16][timestamp:8B int64] + 每个怪物13字节
+func EncodeMonsterPositions(mapID uint32, positions []monster.MonsterPositionInfo) []byte {
+	const headerSize = 14 // 4 + 2 + 8
+	const perMonster = 13 // 4 + 2 + 2 + 1 + 4
+	buf := make([]byte, headerSize+len(positions)*perMonster)
+
+	offset := 0
+	// map_id (uint32 小端)
+	binary.LittleEndian.PutUint32(buf[offset:], mapID)
+	offset += 4
+	// count (uint16 小端)
+	binary.LittleEndian.PutUint16(buf[offset:], uint16(len(positions)))
+	offset += 2
+	// timestamp (int64 小端)
+	binary.LittleEndian.PutUint64(buf[offset:], uint64(time.Now().UnixMilli()))
+	offset += 8
+
+	// 每个怪物
+	for _, p := range positions {
+		// instance_id (uint32 小端，怪物实例ID不会超过42亿)
+		binary.LittleEndian.PutUint32(buf[offset:], uint32(p.InstanceID))
+		offset += 4
+		// x (uint16 小端)
+		binary.LittleEndian.PutUint16(buf[offset:], uint16(p.X))
+		offset += 2
+		// y (uint16 小端)
+		binary.LittleEndian.PutUint16(buf[offset:], uint16(p.Y))
+		offset += 2
+		// state (uint8)
+		buf[offset] = byte(p.State)
+		offset += 1
+		// hp (int32 小端)
+		binary.LittleEndian.PutUint32(buf[offset:], uint32(p.HP))
+		offset += 4
+	}
+
+	return buf
+}
+
+// broadcastToMapBinary 通过二进制接口广播消息给地图所有玩家
+// Gateway收到后直接透传 [cmd][body] 给客户端，零拷贝
+func (h *Handler) broadcastToMapBinary(mapID uint32, cmd uint16, body []byte) {
+	gatewayURL := h.GetGatewayURL()
+	if gatewayURL == "" {
+		return
+	}
+
+	// 异步发送二进制数据到Gateway的专用接口
+	go func() {
+		url := gatewayURL + "/internal/broadcast_binary"
+		req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+		if err != nil {
+			log.Printf("构建二进制广播请求失败: %v", err)
+			return
+		}
+		// 通过Header传递元数据，body是纯二进制
+		req.Header.Set("Content-Type", "application/octet-stream")
+		req.Header.Set("X-Map-Id", strconv.FormatUint(uint64(mapID), 10))
+		req.Header.Set("X-Cmd", strconv.FormatUint(uint64(cmd), 10))
+
+		resp, err := h.client.Do(req)
+		if err != nil {
+			log.Printf("二进制广播到Gateway失败: %v", err)
+			return
+		}
+		defer resp.Body.Close()
+	}()
 }
 
 // getPlayerMapID 获取玩家当前地图ID

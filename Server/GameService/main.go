@@ -370,21 +370,14 @@ func startHTTPServer() {
 	battleHandler.RegisterRoutes(r)
 
 	// 设置怪物位置广播函数（通过Gateway同步给所有客户端）
+	// 使用二进制协议广播，大幅减少带宽（约6倍压缩）
 	monster.SetPositionBroadcastFunc(func(positionMap map[uint32][]monster.MonsterPositionInfo) {
 		for mapID, positions := range positionMap {
 			if len(positions) == 0 {
 				continue
 			}
-
-			// 构造广播数据
-			data := gin.H{
-				"map_id":    mapID,
-				"monsters":  positions,
-				"timestamp": time.Now().UnixMilli(),
-			}
-
-			// 通过Handler的broadcastToMap方法广播
-			battleHandler.BroadcastMonsterPositions(mapID, data)
+			// 通过二进制协议广播（uint16坐标紧凑格式）
+			battleHandler.BroadcastMonsterPositionsBinary(mapID, positions)
 		}
 	})
 

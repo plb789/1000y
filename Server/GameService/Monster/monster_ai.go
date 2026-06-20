@@ -110,11 +110,16 @@ type AIService struct {
 
 	// 位置同步回调（用于广播怪物位置给客户端）
 	positionSyncCallback func(map[uint32][]MonsterPositionInfo)
+
+	// 增量广播：记录上次广播的位置快照，仅当有变化时才广播
+	lastBroadcastPositions map[uint64]MonsterPositionInfo
+	broadcastUpdateCount   int64 // 广播次数计数（用于采样日志）
 }
 
 // MonsterPositionInfo 怪物位置信息（用于同步）
 type MonsterPositionInfo struct {
 	InstanceID uint64 `json:"instance_id"`
+	MapID      uint32 `json:"-"` // 地图ID（仅服务端内部分组用，不编码到二进制协议）
 	X          int    `json:"x"`
 	Y          int    `json:"y"`
 	State      int    `json:"state"` // AI状态
@@ -189,7 +194,7 @@ func (s *AIService) SetPositionSyncCallback(callback func(map[uint32][]MonsterPo
 
 // Start 启动AI主循环
 func (s *AIService) Start() {
-	s.ticker = time.NewTicker(500 * time.Millisecond) // 每500ms更新一次
+	s.ticker = time.NewTicker(1000 * time.Millisecond) // 每1秒更新一次（降频优化：怪物移动慢，1秒延迟无感）
 	s.stopCh = make(chan struct{})
 
 	go func() {
@@ -227,39 +232,74 @@ func (s *AIService) Update() {
 
 	// 位置同步：收集所有活跃怪物的位置并广播给客户端
 	if s.positionSyncCallback != nil {
-		positionMap := make(map[uint32][]MonsterPositionInfo)
-
+		// 收集当前所有活跃怪物的位置
+		currentPositions := make(map[uint64]MonsterPositionInfo, len(s.monsters))
 		for instanceID, monster := range s.monsters {
 			// 只同步非死亡状态的怪物
 			if monster.State != AIStateDead && monster.State != AIStateRespawn {
-				info := MonsterPositionInfo{
+				currentPositions[instanceID] = MonsterPositionInfo{
 					InstanceID: instanceID,
+					MapID:      monster.MapID, // 构建时直接保存，避免分组时二次查找
 					X:          monster.X,
 					Y:          monster.Y,
 					State:      int(monster.State),
 					HP:         monster.CurrentHP,
 				}
-
-				// 按地图ID分组
-				positionMap[monster.MapID] = append(positionMap[monster.MapID], info)
 			}
 		}
 
-		// 触发回调进行广播（异步执行，避免阻塞AI更新）
-		if len(positionMap) > 0 {
-			go s.positionSyncCallback(positionMap)
+		// 增量判断：与上次广播快照对比，仅当有变化时才广播
+		hasChange := s.hasPositionChanged(currentPositions)
 
-			// 调试日志：每10次打印一次（避免刷屏）
-			if now%5000 < 500 {
-				totalMonsters := 0
-				for _, positions := range positionMap {
-					totalMonsters += len(positions)
-				}
-				log.Printf("📍 AI位置同步: %d个地图, 共%d个活跃怪物",
-					len(positionMap), totalMonsters)
+		if hasChange && len(currentPositions) > 0 {
+			// 按地图ID分组（直接使用info.MapID，无需二次查找s.monsters）
+			positionMap := make(map[uint32][]MonsterPositionInfo)
+			for _, info := range currentPositions {
+				positionMap[info.MapID] = append(positionMap[info.MapID], info)
 			}
+
+			// 触发回调进行广播（异步执行，避免阻塞AI更新）
+			if len(positionMap) > 0 {
+				go s.positionSyncCallback(positionMap)
+			}
+		}
+
+		// 更新上次广播快照
+		s.lastBroadcastPositions = currentPositions
+
+		// 采样日志：每60次广播打印一次（约1分钟1条），避免刷屏
+		s.broadcastUpdateCount++
+		if s.broadcastUpdateCount%60 == 0 {
+			totalMonsters := len(currentPositions)
+			log.Printf("📍 AI位置同步(采样): 活跃怪物=%d, 已广播次数=%d", totalMonsters, s.broadcastUpdateCount)
 		}
 	}
+}
+
+// hasPositionChanged 判断怪物位置/状态/血量是否发生变化
+func (s *AIService) hasPositionChanged(current map[uint64]MonsterPositionInfo) bool {
+	// 首次广播
+	if s.lastBroadcastPositions == nil {
+		return true
+	}
+
+	// 数量变化（怪物生成/死亡）
+	if len(current) != len(s.lastBroadcastPositions) {
+		return true
+	}
+
+	// 逐个对比
+	for id, info := range current {
+		last, exists := s.lastBroadcastPositions[id]
+		if !exists {
+			return true // 新怪物
+		}
+		if last.X != info.X || last.Y != info.Y || last.State != info.State || last.HP != info.HP {
+			return true // 位置/状态/血量变化
+		}
+	}
+
+	return false // 无变化
 }
 
 // Update 更新单个怪物AI状态

@@ -2081,63 +2081,103 @@ class Game {
   }
   
   /**
-   * 处理怪物位置更新（服务端AI同步）
+   * 处理怪物位置更新（服务端AI同步 - 二进制协议）
+   * 二进制格式: [map_id:4B][count:2B][timestamp:8B] + 每怪物[instance_id:4B][x:2B][y:2B][state:1B][hp:4B]
    */
   handleMonsterPositionUpdate(data) {
-    if (!this.battleSystem || !data.monsters) return;
-    
-    console.log(`📍 收到怪物位置同步: 地图${data.map_id}, ${data.monsters.length}个怪物`);
-    
-    let updatedCount = 0;
-    let missingCount = 0;
+    if (!this.battleSystem) return;
+
+    // 兼容处理：如果是对象（旧JSON格式），走旧逻辑
+    if (data && typeof data === 'object' && !ArrayBuffer.isView(data)) {
+      return this.handleMonsterPositionUpdateJSON(data);
+    }
+
+    // 二进制格式解析
+    if (!(data instanceof Uint8Array) || data.length < 14) {
+      console.warn('怪物位置更新: 二进制数据长度不足', data?.length);
+      return;
+    }
+
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    let offset = 0;
+
+    // 解析头部
+    const mapId = view.getUint32(offset, true); offset += 4;
+    const count = view.getUint16(offset, true); offset += 2;
+    const timestamp = Number(view.getBigInt64(offset, true)); offset += 8;
+
+    // 校验数据长度
+    const expectedLen = 14 + count * 13;
+    if (data.length < expectedLen) {
+      console.warn(`怪物位置更新: 数据不完整, 期望${expectedLen}实际${data.length}, count=${count}`);
+      return;
+    }
+
     const now = Date.now();
-    
-    // 更新每个怪物的位置和状态（使用平滑移动系统）
-    data.monsters.forEach(monsterData => {
-      const monster = this.battleSystem.monsters.get(monsterData.instance_id);
-      
+
+    // 解析每个怪物
+    for (let i = 0; i < count; i++) {
+      const instanceId = view.getUint32(offset, true); offset += 4;
+      const x = view.getUint16(offset, true); offset += 2;
+      const y = view.getUint16(offset, true); offset += 2;
+      const state = view.getUint8(offset); offset += 1;
+      const hp = view.getInt32(offset, true); offset += 4;
+
+      const monster = this.battleSystem.monsters.get(instanceId);
+
       if (monster) {
-        // ✅ 碰撞检测：防止怪物位置与玩家重叠
-        if (monsterData.x === this.player.x && monsterData.y === this.player.y) {
-          console.log(`  🛡️ 怪物#${monsterData.instance_id} 位置(${monsterData.x},${monsterData.y})与玩家重叠，拒绝更新`);
+        // 碰撞检测：防止怪物位置与玩家重叠
+        if (x === this.player.x && y === this.player.y) {
           // 保持怪物当前位置不变，只更新血量和状态
         } else {
           // 使用平滑移动更新位置
-          const oldX = monster.x;
-          const oldY = monster.y;
+          this.battleSystem.updateMonsterPosition(monster, x, y, now);
+        }
 
-          // 调用BattleSystem的平滑移动方法
-          this.battleSystem.updateMonsterPosition(monster, monsterData.x, monsterData.y, now);
-
-          // 记录位置变化（调试用）
-          if (oldX !== monsterData.x || oldY !== monsterData.y) {
-            console.log(`  🔄 怪物#${monsterData.instance_id} 位置更新: (${oldX},${oldY}) → (${monsterData.x},${monsterData.y}) [平滑移动中]`);
+        // 更新血量
+        if (hp !== monster.hp) {
+          monster.hp = hp;
+          if (monster.hp <= 0) {
+            monster.status = 4; // 标记为死亡
           }
         }
-        
-        // 更新血量（如果变化）
+
+        // 更新AI状态
+        monster.aiState = state;
+      }
+    }
+  }
+
+  /**
+   * 处理怪物位置更新（旧JSON格式兼容）
+   */
+  handleMonsterPositionUpdateJSON(data) {
+    if (!this.battleSystem || !data.monsters) return;
+
+    const now = Date.now();
+
+    data.monsters.forEach(monsterData => {
+      const monster = this.battleSystem.monsters.get(monsterData.instance_id);
+
+      if (monster) {
+        if (monsterData.x === this.player.x && monsterData.y === this.player.y) {
+          // 位置重叠，只更新血量和状态
+        } else {
+          this.battleSystem.updateMonsterPosition(monster, monsterData.x, monsterData.y, now);
+        }
+
         if (monsterData.hp !== undefined && monsterData.hp !== monster.hp) {
           monster.hp = monsterData.hp;
           if (monster.hp <= 0) {
-            monster.status = 4; // 标记为死亡
-            console.log(`💀 怪物 ${monster.name} 已死亡（位置同步）`);
+            monster.status = 4;
           }
         }
-        
-        // 更新AI状态（用于调整移动速度）
+
         if (monsterData.state !== undefined) {
           monster.aiState = monsterData.state;
         }
-        
-        updatedCount++;
-      } else {
-        // ⚠️ 怪物不存在于本地，尝试从同步数据创建
-        console.log(`  ⚠️ 未知怪物 instance_id=${monsterData.instance_id}, 尝试创建...`);
-        missingCount++;
       }
     });
-    
-    console.log(`✅ 同步完成: 更新=${updatedCount}, 缺失=${missingCount}`);
   }
   
   /**

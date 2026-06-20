@@ -5,8 +5,10 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1779,7 +1781,35 @@ func subscribeMessages() {
 		})
 	})
 
-	log.Printf("消息总线订阅完成")
+	// 订阅怪物位置二进制消息（来自GameService，通过RabbitMQ或HTTP降级）
+	// 元数据: map_id, cmd；body: 紧凑二进制格式
+	common.GlobalMessageBus.SubscribeRaw("monster_position", func(metadata map[string]string, body []byte) {
+		mapIDStr, ok1 := metadata["map_id"]
+		cmdStr, ok2 := metadata["cmd"]
+		if !ok1 || !ok2 {
+			log.Printf("怪物位置消息缺少元数据: %v", metadata)
+			return
+		}
+
+		mapID64, err := strconv.ParseUint(mapIDStr, 10, 32)
+		if err != nil {
+			log.Printf("解析map_id失败: %v", err)
+			return
+		}
+		cmd64, err := strconv.ParseUint(cmdStr, 10, 16)
+		if err != nil {
+			log.Printf("解析cmd失败: %v", err)
+			return
+		}
+
+		// 直接透传二进制body给同地图所有客户端 [cmd][body]
+		GlobalManager.BroadcastToMap(uint32(mapID64), &Message{
+			Type: uint16(cmd64),
+			Data: body,
+		})
+	})
+
+	log.Printf("消息总线订阅完成: map_move, monster_position")
 }
 
 func main() {
@@ -1848,6 +1878,8 @@ func main() {
 	http.HandleFunc("/internal/broadcast", handleInternalBroadcast)
 	// 内部API：GameService调用广播移动消息给同地图玩家
 	http.HandleFunc("/internal/broadcast_map", handleInternalBroadcastMap)
+	// 内部API：GameService调用二进制广播（透传二进制body给客户端，零拷贝）
+	http.HandleFunc("/internal/broadcast_binary", handleInternalBroadcastBinary)
 
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", wsPort), nil))
 }
@@ -1975,6 +2007,61 @@ func handleInternalBroadcastMap(w http.ResponseWriter, r *http.Request) {
 	})
 
 	log.Printf("广播移动消息: roleID=%d, mapID=%d, x=%d, y=%d", req.RoleID, req.MapID, req.X, req.Y)
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"ok"}`))
+}
+
+// handleInternalBroadcastBinary 处理GameService的二进制广播请求
+// 直接透传二进制body给客户端，避免JSON编解码开销
+// Header: X-Map-Id (地图ID), X-Cmd (命令码)
+// Body: 纯二进制数据，Gateway直接拼 [cmd][body] 发给客户端
+func handleInternalBroadcastBinary(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// 从Header读取元数据
+	mapIDStr := r.Header.Get("X-Map-Id")
+	cmdStr := r.Header.Get("X-Cmd")
+	if mapIDStr == "" || cmdStr == "" {
+		http.Error(w, "Missing X-Map-Id or X-Cmd header", http.StatusBadRequest)
+		return
+	}
+
+	mapID64, err := strconv.ParseUint(mapIDStr, 10, 32)
+	if err != nil {
+		http.Error(w, "Invalid X-Map-Id", http.StatusBadRequest)
+		return
+	}
+	mapID := uint32(mapID64)
+
+	cmd64, err := strconv.ParseUint(cmdStr, 10, 16)
+	if err != nil {
+		http.Error(w, "Invalid X-Cmd", http.StatusBadRequest)
+		return
+	}
+	cmd := uint16(cmd64)
+
+	// 读取二进制body
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Printf("读取二进制广播body失败: %v", err)
+		http.Error(w, "Read body failed", http.StatusBadRequest)
+		return
+	}
+
+	if len(body) == 0 {
+		http.Error(w, "Empty body", http.StatusBadRequest)
+		return
+	}
+
+	// 直接构建客户端数据包 [cmd(2)][body]，零拷贝透传
+	GlobalManager.BroadcastToMap(mapID, &Message{
+		Type: cmd,
+		Data: body,
+	})
+
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"status":"ok"}`))
 }
