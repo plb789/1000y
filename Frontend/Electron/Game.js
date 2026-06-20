@@ -138,6 +138,16 @@ class Game {
       this.uiManager = window.UIManager;
     }
     
+    // 初始化技能栏
+    if (window.SkillBar) {
+      this.skillBar = new window.SkillBar(this);
+    }
+    
+    // 初始化背包
+    if (window.Inventory) {
+      this.inventory = new window.Inventory(this);
+    }
+    
     // 特效设置
     this.effectSettings = {
       enableParticles: true,
@@ -210,13 +220,7 @@ class Game {
     // 键盘事件
     document.addEventListener('keydown', (e) => this.handleKeyDown(e));
     
-    // 技能按钮
-    document.querySelectorAll('.skill-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const skillId = parseInt(btn.dataset.skill);
-        this.useSkill(skillId);
-      });
-    });
+    // 技能按钮事件绑定已移至 SkillBar.js 统一处理
     
     // 窗口大小调整
     window.addEventListener('resize', () => {
@@ -842,7 +846,7 @@ class Game {
     }
   }
   
-  enterGame() {
+  async enterGame() {
     this.state = 'playing';
     this.ui.loginPanel.style.display = 'none';
     this.ui.roleSelectPanel.style.display = 'none';
@@ -866,6 +870,28 @@ class Game {
     // 初始化在线人数显示（自己在线）
     this.updateOnlineCount();
     
+    // 确保物品数据加载完成后再初始化背包
+    if (window.itemDataManager) {
+      try {
+        await window.itemDataManager.loadData();
+      } catch (error) {
+        console.error('物品数据加载失败，将使用降级模式:', error);
+        // 降级处理：标记数据管理器为不可用状态，后续背包功能跳过物品详情
+        window._itemDataLoadFailed = true;
+      }
+    }
+    
+    // 加载背包数据（开发环境使用测试数据）
+    if (this.inventory) {
+      if ((typeof process !== 'undefined' && process.env && process.env.NODE_ENV === 'development') || window.DEBUG_MODE) {
+        // 开发环境：加载测试数据
+        this.inventory.loadTestData();
+      } else {
+        // 生产环境：从服务器加载真实数据
+        this.loadInventoryData();
+      }
+    }
+    
     this.addChatMessage('系统', '欢迎来到千年江湖！', 'system');
     
     // 显示欢迎提示
@@ -875,6 +901,24 @@ class Game {
     
     // 开始游戏循环
     this.startGameLoop();
+  }
+  
+  /**
+   * 从服务器加载背包数据
+   */
+  async loadInventoryData() {
+    if (!this.inventory) return;
+    
+    try {
+      await this.inventory.loadFromServer();
+      console.log('背包数据加载完成');
+    } catch (error) {
+      console.error('加载背包数据失败:', error);
+      // 如果服务器加载失败，使用测试数据作为降级方案
+      if (window.DEBUG_MODE) {
+        this.inventory.loadTestData();
+      }
+    }
   }
   
   async loadMap(mapId) {
@@ -2151,6 +2195,11 @@ class Game {
       if (this.state === 'playing') {
         // 更新技能冷却UI
         this.updateSkillUI();
+        
+        // 更新技能栏
+        if (this.skillBar) {
+          this.skillBar.update();
+        }
         
         // 更新特效系统
         if (this.effectSettings.enableParticles && this.effectManager) {
