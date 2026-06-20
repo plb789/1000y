@@ -1,0 +1,1188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UI编辑器 - 千年沧桑</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: 'Microsoft YaHei', sans-serif;
+      background: #1a1a2e;
+      color: #fff;
+      height: 100vh;
+      overflow: hidden;
+    }
+    
+    /* 顶部工具栏 */
+    .toolbar {
+      height: 50px;
+      background: rgba(0, 0, 0, 0.8);
+      border-bottom: 2px solid #e94560;
+      display: flex;
+      align-items: center;
+      padding: 0 15px;
+      gap: 15px;
+    }
+    
+    .toolbar-title {
+      color: #e94560;
+      font-size: 18px;
+      font-weight: bold;
+    }
+    
+    .toolbar-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    
+    .toolbar-btn {
+      padding: 8px 15px;
+      background: linear-gradient(135deg, #e94560, #c53030);
+      border: none;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-family: inherit;
+    }
+    
+    .toolbar-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 3px 10px rgba(233, 69, 96, 0.3);
+    }
+    
+    .toolbar-btn.secondary {
+      background: linear-gradient(135deg, #4a5568, #2d3748);
+    }
+    
+    .toolbar-btn.success {
+      background: linear-gradient(135deg, #4ade80, #22c55e);
+    }
+    
+    .toolbar-btn.warning {
+      background: linear-gradient(135deg, #f59e0b, #d97706);
+    }
+    
+    .toolbar-select {
+      padding: 6px 12px;
+      background: rgba(45, 55, 72, 0.6);
+      border: 1px solid #4a5568;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 13px;
+      font-family: inherit;
+    }
+    
+    .toolbar-divider {
+      width: 1px;
+      height: 30px;
+      background: #4a5568;
+    }
+    
+    /* 主布局 */
+    .main-layout {
+      display: flex;
+      height: calc(100vh - 50px);
+    }
+    
+    /* 左侧面板 */
+    .left-panel {
+      width: 280px;
+      background: rgba(0, 0, 0, 0.5);
+      border-right: 1px solid rgba(233, 69, 96, 0.2);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    
+    .panel-header {
+      padding: 15px;
+      background: rgba(233, 69, 96, 0.1);
+      border-bottom: 1px solid rgba(233, 69, 96, 0.2);
+      font-size: 14px;
+      font-weight: bold;
+      color: #e94560;
+    }
+    
+    .panel-tabs {
+      display: flex;
+      border-bottom: 1px solid rgba(233, 69, 96, 0.2);
+    }
+    
+    .panel-tab {
+      flex: 1;
+      padding: 10px;
+      text-align: center;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+      border-bottom: 2px solid transparent;
+    }
+    
+    .panel-tab:hover {
+      background: rgba(233, 69, 96, 0.1);
+    }
+    
+    .panel-tab.active {
+      background: rgba(233, 69, 96, 0.2);
+      border-bottom-color: #e94560;
+      color: #e94560;
+    }
+    
+    .panel-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px;
+    }
+    
+    .tab-panel {
+      display: none;
+    }
+    
+    .tab-panel.active {
+      display: block;
+    }
+    
+    /* 组件树 */
+    .component-tree {
+      font-size: 12px;
+    }
+    
+    .tree-node {
+      padding: 5px 10px;
+      cursor: pointer;
+      transition: all 0.2s;
+      border-radius: 4px;
+      margin-bottom: 2px;
+    }
+    
+    .tree-node:hover {
+      background: rgba(233, 69, 96, 0.1);
+    }
+    
+    .tree-node.selected {
+      background: rgba(233, 69, 96, 0.2);
+      color: #e94560;
+    }
+    
+    .node-icon {
+      margin-right: 5px;
+    }
+    
+    .node-name {
+      font-weight: bold;
+    }
+    
+    .node-type {
+      font-size: 10px;
+      color: #60a5fa;
+      margin-left: 5px;
+    }
+    
+    /* 预览区 */
+    .preview-area {
+      flex: 1;
+      background: #0f0f1a;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .preview-container {
+      width: 100%;
+      height: 100%;
+      position: relative;
+      overflow: auto;
+    }
+    
+    .preview-iframe {
+      width: 100%;
+      height: 100%;
+      border: none;
+      background: #fff;
+    }
+    
+    /* 加载覆盖层 */
+    .loading-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.9);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+    
+    .loading-text {
+      font-size: 18px;
+      margin-bottom: 20px;
+      color: #e94560;
+    }
+    
+    /* 右侧面板 */
+    .right-panel {
+      width: 320px;
+      background: rgba(0, 0, 0, 0.5);
+      border-left: 1px solid rgba(233, 69, 96, 0.2);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    
+    .property-grid {
+      display: grid;
+      grid-template-columns: 80px 1fr;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    
+    .property-label {
+      font-size: 12px;
+      color: #a0aec0;
+    }
+    
+    .property-input {
+      padding: 6px 10px;
+      background: rgba(45, 55, 72, 0.6);
+      border: 1px solid #4a5568;
+      border-radius: 4px;
+      color: #fff;
+      font-size: 12px;
+      font-family: inherit;
+      width: 100%;
+    }
+    
+    .property-input:focus {
+      outline: none;
+      border-color: #e94560;
+    }
+    
+    /* 图片网格 */
+    .image-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-top: 10px;
+    }
+    
+    .image-item {
+      aspect-ratio: 1;
+      background: rgba(45, 55, 72, 0.6);
+      border: 2px solid transparent;
+      border-radius: 8px;
+      cursor: pointer;
+      overflow: hidden;
+      transition: all 0.2s;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .image-item:hover {
+      border-color: #e94560;
+      transform: scale(1.05);
+    }
+    
+    .image-item img {
+      width: 100%;
+      height: 80%;
+      object-fit: cover;
+    }
+    
+    .image-item .name {
+      font-size: 10px;
+      padding: 5px;
+      text-align: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    
+    .empty-state {
+      text-align: center;
+      padding: 20px;
+      color: #a0aec0;
+    }
+    
+    /* 通知 */
+    .notification {
+      position: fixed;
+      top: 60px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 12px 24px;
+      background: rgba(0, 0, 0, 0.9);
+      border: 1px solid #e94560;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 14px;
+      z-index: 10000;
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+    }
+    
+    .notification.show {
+      opacity: 1;
+    }
+    
+    .notification.error {
+      border-color: #ef4444;
+      background: rgba(239, 68, 68, 0.2);
+    }
+    
+    /* 连接状态 */
+    .connection-status {
+      position: fixed;
+      bottom: 10px;
+      right: 10px;
+      padding: 6px 12px;
+      background: rgba(0, 0, 0, 0.8);
+      border: 1px solid #4a5568;
+      border-radius: 6px;
+      font-size: 11px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #ef4444;
+    }
+    
+    .status-dot.connected {
+      background: #4ade80;
+    }
+    
+    /* 预览尺寸控制 */
+    .preview-controls {
+      position: fixed;
+      bottom: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 8px 16px;
+      background: rgba(0, 0, 0, 0.8);
+      border: 1px solid #4a5568;
+      border-radius: 6px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      font-size: 12px;
+    }
+    
+    .preview-btn {
+      padding: 4px 8px;
+      background: transparent;
+      border: 1px solid #4a5568;
+      border-radius: 4px;
+      color: #fff;
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .preview-btn:hover, .preview-btn.active {
+      background: #e94560;
+      border-color: #e94560;
+    }
+    
+    /* 上传区域 */
+    .upload-area {
+      border: 2px dashed #4a5568;
+      border-radius: 8px;
+      padding: 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin-bottom: 15px;
+    }
+    
+    .upload-area:hover {
+      border-color: #e94560;
+      background: rgba(233, 69, 96, 0.1);
+    }
+    
+    .upload-area input {
+      display: none;
+    }
+    
+    /* 代码预览 */
+    .code-preview {
+      background: rgba(0, 0, 0, 0.6);
+      border: 1px solid #4a5568;
+      border-radius: 6px;
+      padding: 10px;
+      font-family: 'Consolas', monospace;
+      font-size: 11px;
+      max-height: 200px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    
+    /* 滚动条样式 */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    
+    ::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.3);
+    }
+    
+    ::-webkit-scrollbar-thumb {
+      background: #4a5568;
+      border-radius: 4px;
+    }
+    
+    ::-webkit-scrollbar-thumb:hover {
+      background: #e94560;
+    }
+  </style>
+</head>
+<body>
+  <!-- 顶部工具栏 -->
+  <div class="toolbar">
+    <div class="toolbar-title">UI编辑器</div>
+    
+    <div class="toolbar-divider"></div>
+    
+    <div class="toolbar-group">
+      <select class="toolbar-select" id="sceneSelect">
+        <option value="login">登录界面</option>
+        <option value="roleSelect">角色选择</option>
+        <option value="roleCreate">创建角色</option>
+        <option value="game">游戏主界面</option>
+      </select>
+    </div>
+    
+    <div class="toolbar-divider"></div>
+    
+    <div class="toolbar-group">
+      <button class="toolbar-btn secondary" id="editModeBtn" onclick="toggleEditMode()">开启编辑</button>
+      <button class="toolbar-btn secondary" onclick="deleteSelected()">删除组件</button>
+    </div>
+    
+    <div style="flex: 1;"></div>
+    
+    <div class="toolbar-group">
+      <button class="toolbar-btn success" onclick="saveChanges()">保存</button>
+      <button class="toolbar-btn warning" onclick="exportCode()">导出</button>
+    </div>
+  </div>
+  
+  <!-- 主布局 -->
+  <div class="main-layout">
+    <!-- 左侧面板 -->
+    <div class="left-panel">
+      <div class="panel-tabs">
+        <div class="panel-tab active" data-tab="components">组件树</div>
+        <div class="panel-tab" data-tab="images">图片</div>
+      </div>
+      
+      <div class="panel-content">
+        <!-- 组件树 -->
+        <div class="tab-panel active" id="components-panel">
+          <div class="component-tree" id="componentTree">
+            <div class="empty-state">请先加载客户端HTML</div>
+          </div>
+        </div>
+        
+        <!-- 图片管理 -->
+        <div class="tab-panel" id="images-panel">
+          <div class="upload-area" onclick="document.getElementById('imageInput').click()">
+            <input type="file" id="imageInput" accept="image/*" multiple onchange="handleImageUpload(event)">
+            <p>点击上传图片</p>
+            <p style="font-size: 11px; color: #a0aec0; margin-top: 5px;">支持 PNG, JPG, GIF</p>
+          </div>
+          <div class="image-grid" id="imageGrid">
+            <div class="empty-state" style="grid-column: span 3;">暂无图片</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- 预览区 -->
+    <div class="preview-area">
+      <div class="preview-container" id="previewContainer">
+        <iframe id="previewIframe" class="preview-iframe"></iframe>
+        
+        <!-- 加载覆盖层 -->
+        <div class="loading-overlay" id="loadingOverlay">
+          <div class="loading-text">请选择客户端HTML文件</div>
+          <button class="toolbar-btn" onclick="selectClientFile()">选择文件</button>
+          <input type="file" id="fileInput" style="display: none;" accept=".html" onchange="handleFileSelect(event)">
+          <p style="color: #999; font-size: 12px; margin-top: 15px;">或手动粘贴HTML内容</p>
+          <textarea id="manualHTMLInput" style="width: 80%; height: 150px; margin-top: 10px; background: rgba(45, 55, 72, 0.6); border: 1px solid #4a5568; border-radius: 8px; color: #fff; padding: 10px; font-family: 'Consolas', monospace; font-size: 12px;" placeholder="粘贴HTML内容..."></textarea>
+          <button class="toolbar-btn secondary" style="margin-top: 10px;" onclick="loadManualHTML()">加载HTML</button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- 右侧面板 -->
+    <div class="right-panel">
+      <div class="panel-header">属性编辑器</div>
+      
+      <div class="panel-content" id="propertyPanel">
+        <div class="empty-state" id="noSelection">请选择一个元素进行编辑</div>
+        
+        <div id="propertyEditor" style="display: none;">
+          <div class="panel-tabs">
+            <div class="panel-tab active" data-prop-tab="style">样式</div>
+            <div class="panel-tab" data-prop-tab="layout">布局</div>
+            <div class="panel-tab" data-prop-tab="image">图片</div>
+            <div class="panel-tab" data-prop-tab="code">代码</div>
+          </div>
+          
+          <!-- 样式属性 -->
+          <div class="tab-panel active" id="style-tab">
+            <div class="property-grid">
+              <span class="property-label">宽度</span>
+              <input type="text" class="property-input" id="propWidth" onchange="updateProperty('width', this.value)">
+            </div>
+            <div class="property-grid">
+              <span class="property-label">高度</span>
+              <input type="text" class="property-input" id="propHeight" onchange="updateProperty('height', this.value)">
+            </div>
+            <div class="property-grid">
+              <span class="property-label">背景色</span>
+              <input type="text" class="property-input" id="propBgColor" onchange="updateProperty('backgroundColor', this.value)">
+            </div>
+            <div class="property-grid">
+              <span class="property-label">文字颜色</span>
+              <input type="text" class="property-input" id="propColor" onchange="updateProperty('color', this.value)">
+            </div>
+            <div class="property-grid">
+              <span class="property-label">字体大小</span>
+              <input type="text" class="property-input" id="propFontSize" onchange="updateProperty('fontSize', this.value)">
+            </div>
+            <div class="property-grid">
+              <span class="property-label">圆角</span>
+              <input type="text" class="property-input" id="propBorderRadius" onchange="updateProperty('borderRadius', this.value)">
+            </div>
+          </div>
+          
+          <!-- 布局属性 -->
+          <div class="tab-panel" id="layout-tab">
+            <div class="property-grid">
+              <span class="property-label">X位置</span>
+              <input type="text" class="property-input" id="propLeft" onchange="updateProperty('left', this.value)">
+            </div>
+            <div class="property-grid">
+              <span class="property-label">Y位置</span>
+              <input type="text" class="property-input" id="propTop" onchange="updateProperty('top', this.value)">
+            </div>
+            <div class="property-grid">
+              <span class="property-label">定位方式</span>
+              <select class="property-input" id="propPosition" onchange="updateProperty('position', this.value)">
+                <option value="static">static</option>
+                <option value="relative">relative</option>
+                <option value="absolute">absolute</option>
+                <option value="fixed">fixed</option>
+              </select>
+            </div>
+            <div class="property-grid">
+              <span class="property-label">内边距</span>
+              <input type="text" class="property-input" id="propPadding" onchange="updateProperty('padding', this.value)">
+            </div>
+            <div class="property-grid">
+              <span class="property-label">外边距</span>
+              <input type="text" class="property-input" id="propMargin" onchange="updateProperty('margin', this.value)">
+            </div>
+          </div>
+          
+          <!-- 图片属性 -->
+          <div class="tab-panel" id="image-tab">
+            <p style="font-size: 12px; color: #a0aec0; margin-bottom: 10px;">选择已上传的图片应用到元素：</p>
+            <div class="image-grid" id="applyImageGrid">
+              <div class="empty-state" style="grid-column: span 3;">暂无图片</div>
+            </div>
+          </div>
+          
+          <!-- 代码 -->
+          <div class="tab-panel" id="code-tab">
+            <p style="font-size: 12px; color: #a0aec0; margin-bottom: 10px;">元素HTML代码：</p>
+            <div class="code-preview" id="codePreview">无选中元素</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- 预览控制 -->
+  <div class="preview-controls">
+    <span>预览尺寸：</span>
+    <button class="preview-btn active" onclick="setPreviewSize(100)">100%</button>
+    <button class="preview-btn" onclick="setPreviewSize(75)">75%</button>
+    <button class="preview-btn" onclick="setPreviewSize(50)">50%</button>
+    <span>|</span>
+    <span id="zoomLevel">缩放: 100%</span>
+  </div>
+  
+  <!-- 连接状态 -->
+  <div class="connection-status">
+    <div class="status-dot" id="statusDot"></div>
+    <span id="statusText">未连接</span>
+  </div>
+  
+  <!-- 通知 -->
+  <div class="notification" id="notification"></div>
+
+  <script>
+    // 状态管理
+    var state = {
+      currentScene: 'login',
+      editMode: false,
+      selectedElement: null,
+      images: [],
+      zoom: 100,
+      iframeWindow: null,
+      iframeDocument: null
+    };
+    
+    // 初始化
+    window.onload = function() {
+      setupEventListeners();
+      loadSavedImages();
+      updateImageGrid();
+    };
+    
+    // 设置事件监听
+    function setupEventListeners() {
+      // 面板切换
+      document.querySelectorAll('.panel-tab').forEach(function(tab) {
+        tab.onclick = function() {
+          var panel = this.dataset.tab;
+          if (panel) {
+            // 左侧面板标签
+            document.querySelectorAll('.left-panel .panel-tab').forEach(function(t) {
+              t.classList.remove('active');
+            });
+            this.classList.add('active');
+            document.querySelectorAll('#components-panel, #images-panel').forEach(function(p) {
+              p.classList.remove('active');
+            });
+            document.getElementById(panel + '-panel').classList.add('active');
+          }
+        };
+      });
+      
+      // 属性面板切换
+      document.querySelectorAll('[data-prop-tab]').forEach(function(tab) {
+        tab.onclick = function() {
+          var tabId = this.dataset.propTab;
+          document.querySelectorAll('#propertyEditor .panel-tab').forEach(function(t) {
+            t.classList.remove('active');
+          });
+          this.classList.add('active');
+          document.querySelectorAll('#propertyEditor .tab-panel').forEach(function(p) {
+            p.classList.remove('active');
+          });
+          document.getElementById(tabId + '-tab').classList.add('active');
+        };
+      });
+      
+      // 场景切换
+      document.getElementById('sceneSelect').onchange = function() {
+        state.currentScene = this.value;
+        sendMessage('switch-scene', { scene: this.value });
+      };
+      
+      // 键盘快捷键
+      document.addEventListener('keydown', function(e) {
+        if (e.ctrlKey && e.key === 's') {
+          e.preventDefault();
+          saveChanges();
+        }
+        
+        if (e.key === 'Delete' && state.selectedElement) {
+          e.preventDefault();
+          deleteSelected();
+        }
+        
+        if (e.key === 'Escape') {
+          clearSelection();
+        }
+      });
+      
+      // 消息监听
+      window.addEventListener('message', function(e) {
+        handleMessage(e.data);
+      });
+    }
+    
+    // 选择文件
+    function selectClientFile() {
+      document.getElementById('fileInput').click();
+    }
+    
+    // 处理文件选择
+    function handleFileSelect(event) {
+      var file = event.target.files[0];
+      if (!file) return;
+      
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        var html = e.target.result;
+        loadHTMLIntoIframe(html);
+        showNotification('HTML文件已加载');
+      };
+      reader.onerror = function() {
+        showNotification('文件读取失败', true);
+      };
+      reader.readAsText(file);
+    }
+    
+    // 加载手动输入的HTML
+    function loadManualHTML() {
+      var html = document.getElementById('manualHTMLInput').value.trim();
+      if (!html) {
+        showNotification('请先粘贴HTML内容', true);
+        return;
+      }
+      
+      loadHTMLIntoIframe(html);
+      showNotification('HTML已加载');
+    }
+    
+    // 加载HTML到iframe
+    function loadHTMLIntoIframe(html) {
+      var iframe = document.getElementById('previewIframe');
+      var loadingOverlay = document.getElementById('loadingOverlay');
+      
+      // 加载外部编辑器脚本
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', 'editor-inject.js', false);
+      try {
+        xhr.send();
+        if (xhr.status === 200) {
+          var editorScript = xhr.responseText;
+        } else {
+          alert('无法加载编辑器脚本，请确保editor-inject.js文件存在');
+          return;
+        }
+      } catch (err) {
+        alert('加载编辑器脚本失败: ' + err.message);
+        return;
+      }
+      
+      // 注入编辑器脚本
+      var scriptOpen = '<scr' + 'ipt>';
+      var scriptClose = '</scr' + 'ipt>';
+      var modifiedHTML = html.replace('</body>', scriptOpen + editorScript + scriptClose + '</body>');
+      
+      // 使用srcdoc属性加载HTML
+      iframe.srcdoc = modifiedHTML;
+      
+      iframe.onload = function() {
+        try {
+          state.iframeWindow = iframe.contentWindow;
+          state.iframeDocument = iframe.contentDocument;
+          
+          loadingOverlay.style.display = 'none';
+          updateConnectionStatus(true);
+          
+          // 初始显示登录界面
+          setTimeout(function() {
+            sendMessage('switch-scene', { scene: 'login' });
+            loadComponentTree();
+          }, 500);
+          
+        } catch (error) {
+          console.error('初始化iframe失败:', error);
+          showNotification('初始化失败', true);
+        }
+      };
+    }
+    
+    // 切换编辑模式
+    function toggleEditMode() {
+      state.editMode = !state.editMode;
+      var btn = document.getElementById('editModeBtn');
+      
+      if (state.editMode) {
+        btn.textContent = '关闭编辑';
+        btn.style.background = 'linear-gradient(135deg, #4ade80, #22c55e)';
+        sendMessage('enable-editor', {});
+      } else {
+        btn.textContent = '开启编辑';
+        btn.style.background = 'linear-gradient(135deg, #4a5568, #2d3748)';
+        sendMessage('disable-editor', {});
+        clearSelection();
+      }
+    }
+    
+    // 发送消息到iframe
+    function sendMessage(type, data) {
+      if (state.iframeWindow) {
+        state.iframeWindow.postMessage({ type: type, data: data }, '*');
+      }
+    }
+    
+    // 处理接收到的消息
+    function handleMessage(message) {
+      var type = message.type;
+      var data = message.data;
+      
+      switch (type) {
+        case 'editor-ready':
+          console.log('编辑器已就绪');
+          break;
+          
+        case 'element-selected':
+          selectElementInEditor(data);
+          break;
+          
+        case 'selection-cleared':
+          clearSelection();
+          break;
+          
+        case 'element-deleted':
+          clearSelection();
+          loadComponentTree();
+          break;
+      }
+    }
+    
+    // 在编辑器中选择元素
+    function selectElementInEditor(data) {
+      state.selectedElement = data;
+      
+      document.getElementById('noSelection').style.display = 'none';
+      document.getElementById('propertyEditor').style.display = 'block';
+      
+      // 更新属性值
+      document.getElementById('propWidth').value = data.style.width || '';
+      document.getElementById('propHeight').value = data.style.height || '';
+      document.getElementById('propBgColor').value = data.style.backgroundColor || '';
+      document.getElementById('propColor').value = data.style.color || '';
+      document.getElementById('propFontSize').value = data.style.fontSize || '';
+      document.getElementById('propBorderRadius').value = data.style.borderRadius || '';
+      document.getElementById('propLeft').value = data.style.left || '';
+      document.getElementById('propTop').value = data.style.top || '';
+      document.getElementById('propPosition').value = data.style.position || 'static';
+      document.getElementById('propPadding').value = data.style.padding || '';
+      document.getElementById('propMargin').value = data.style.margin || '';
+      document.getElementById('codePreview').textContent = data.outerHTML || '无选中元素';
+      
+      // 更新组件树选择
+      updateComponentTreeSelection(data.id);
+    }
+    
+    // 更新属性
+    function updateProperty(property, value) {
+      if (!state.selectedElement) return;
+      
+      sendMessage('update-style', {
+        property: property,
+        value: value
+      });
+      
+      showNotification('属性已更新');
+    }
+    
+    // 清除选择
+    function clearSelection() {
+      state.selectedElement = null;
+      document.getElementById('noSelection').style.display = 'block';
+      document.getElementById('propertyEditor').style.display = 'none';
+    }
+    
+    // 删除选中元素
+    function deleteSelected() {
+      if (!state.selectedElement) {
+        showNotification('请先选择一个元素', true);
+        return;
+      }
+      
+      sendMessage('delete-element', {});
+      clearSelection();
+      showNotification('元素已删除');
+    }
+    
+    // 加载组件树
+    function loadComponentTree() {
+      if (!state.iframeDocument) return;
+      
+      var body = state.iframeDocument.body;
+      var treeContainer = document.getElementById('componentTree');
+      treeContainer.innerHTML = '';
+      
+      buildComponentTree(body, treeContainer, 0);
+    }
+    
+    // 构建组件树
+    function buildComponentTree(element, container, depth) {
+      if (depth > 5) return;
+      
+      var children = element.children;
+      for (var i = 0; i < children.length; i++) {
+        var child = children[i];
+        
+        // 跳过编辑器相关元素
+        if (child.id && (child.id.indexOf('editor-') === 0 || child.id.indexOf('ed-') === 0)) {
+          continue;
+        }
+        
+        var node = document.createElement('div');
+        node.className = 'tree-node';
+        node.style.paddingLeft = (depth * 15) + 'px';
+        
+        var tag = child.tagName ? child.tagName.toLowerCase() : '';
+        var id = child.id || '';
+        var className = child.className || '';
+        var label = id || className || tag;
+        
+        node.innerHTML = '<span class="node-icon">' + getNodeIcon(tag) + '</span>' +
+                        '<span class="node-name">' + (label || tag) + '</span>' +
+                        '<span class="node-type">' + tag + '</span>';
+        
+        node.onclick = (function(el) {
+          return function() {
+            selectTreeNode(el);
+          };
+        })(child);
+        
+        container.appendChild(node);
+        
+        // 递归处理子元素
+        if (child.children.length > 0) {
+          buildComponentTree(child, container, depth + 1);
+        }
+      }
+    }
+    
+    // 获取节点图标
+    function getNodeIcon(tag) {
+      var icons = {
+        'div': '[ ]',
+        'span': '< >',
+        'p': 'P',
+        'img': 'IMG',
+        'button': 'BTN',
+        'input': 'INP',
+        'form': 'FORM',
+        'a': 'A',
+        'ul': 'UL',
+        'li': 'LI',
+        'h1': 'H1',
+        'h2': 'H2',
+        'h3': 'H3'
+      };
+      return icons[tag] || '[ ]';
+    }
+    
+    // 选择树节点
+    function selectTreeNode(element) {
+      sendMessage('select-element', { id: element.id });
+    }
+    
+    // 更新组件树选择
+    function updateComponentTreeSelection(id) {
+      document.querySelectorAll('.tree-node').forEach(function(node) {
+        node.classList.remove('selected');
+        if (node.querySelector('.node-name').textContent === id || 
+            node.querySelector('.node-name').textContent === state.selectedElement.className) {
+          node.classList.add('selected');
+        }
+      });
+    }
+    
+    // 更新连接状态
+    function updateConnectionStatus(connected) {
+      var dot = document.getElementById('statusDot');
+      var text = document.getElementById('statusText');
+      
+      if (connected) {
+        dot.classList.add('connected');
+        text.textContent = '已连接';
+      } else {
+        dot.classList.remove('connected');
+        text.textContent = '未连接';
+      }
+    }
+    
+    // 显示通知
+    function showNotification(message, isError) {
+      var notification = document.getElementById('notification');
+      notification.textContent = message;
+      notification.className = 'notification show' + (isError ? ' error' : '');
+      
+      setTimeout(function() {
+        notification.classList.remove('show');
+      }, 3000);
+    }
+    
+    // 设置预览尺寸
+    function setPreviewSize(percent) {
+      state.zoom = percent;
+      
+      var iframe = document.getElementById('previewIframe');
+      iframe.style.transform = 'scale(' + (percent / 100) + ')';
+      iframe.style.transformOrigin = 'top left';
+      
+      // 调整容器大小
+      var container = document.getElementById('previewContainer');
+      container.style.overflow = 'auto';
+      
+      // 更新按钮状态
+      document.querySelectorAll('.preview-btn').forEach(function(btn) {
+        btn.classList.remove('active');
+        if (btn.textContent === percent + '%') {
+          btn.classList.add('active');
+        }
+      });
+      
+      document.getElementById('zoomLevel').textContent = '缩放: ' + percent + '%';
+    }
+    
+    // 保存更改
+    function saveChanges() {
+      sendMessage('get-html', { scene: state.currentScene });
+      
+      var handleMessage = function(event) {
+        if (event.data.type === 'html-content') {
+          var html = event.data.data.html;
+          localStorage.setItem('uiEditor_savedHTML', html);
+          showNotification('修改已保存');
+          window.removeEventListener('message', handleMessage);
+        }
+      };
+      
+      window.addEventListener('message', handleMessage);
+    }
+    
+    // 导出代码
+    function exportCode() {
+      sendMessage('get-html', { scene: state.currentScene });
+      
+      var handleMessage = function(event) {
+        if (event.data.type === 'html-content') {
+          var html = event.data.data.html;
+          
+          var blob = new Blob([html], { type: 'text/html' });
+          var url = URL.createObjectURL(blob);
+          
+          var a = document.createElement('a');
+          a.href = url;
+          a.download = 'modified-ui.html';
+          a.click();
+          
+          URL.revokeObjectURL(url);
+          showNotification('代码已导出');
+          window.removeEventListener('message', handleMessage);
+        }
+      };
+      
+      window.addEventListener('message', handleMessage);
+    }
+    
+    // 处理图片上传
+    function handleImageUpload(event) {
+      var files = event.target.files;
+      if (!files || files.length === 0) return;
+      
+      for (var i = 0; i < files.length; i++) {
+        var file = files[i];
+        if (!file.type.startsWith('image/')) continue;
+        
+        var reader = new FileReader();
+        reader.onload = (function(f) {
+          return function(e) {
+            var imageData = e.target.result;
+            state.images.push({
+              name: f.name,
+              data: imageData,
+              type: f.type
+            });
+            
+            updateImageGrid();
+            saveImagesToStorage();
+            showNotification('图片已上传: ' + f.name);
+          };
+        })(file);
+        reader.readAsDataURL(file);
+      }
+      
+      event.target.value = '';
+    }
+    
+    // 更新图片网格
+    function updateImageGrid() {
+      var grid = document.getElementById('imageGrid');
+      grid.innerHTML = '';
+      
+      if (state.images.length === 0) {
+        grid.innerHTML = '<div class="empty-state" style="grid-column: span 3;">暂无图片</div>';
+        return;
+      }
+      
+      for (var i = 0; i < state.images.length; i++) {
+        var img = state.images[i];
+        var item = document.createElement('div');
+        item.className = 'image-item';
+        item.onclick = (function(index) {
+          return function() {
+            applyImageToElement(index);
+          };
+        })(i);
+        
+        item.innerHTML = '<img src="' + img.data + '" alt="' + img.name + '">' +
+                        '<div class="name">' + img.name + '</div>';
+        
+        grid.appendChild(item);
+      }
+      
+      // 更新属性面板的图片列表
+      var applyGrid = document.getElementById('applyImageGrid');
+      applyGrid.innerHTML = grid.innerHTML;
+    }
+    
+    // 应用图片到元素
+    function applyImageToElement(index) {
+      if (!state.selectedElement) {
+        showNotification('请先选择一个元素', true);
+        return;
+      }
+      
+      var img = state.images[index];
+      sendMessage('apply-image', { imageData: img.data });
+      showNotification('图片已应用');
+    }
+    
+    // 保存图片到存储
+    function saveImagesToStorage() {
+      try {
+        localStorage.setItem('uiEditor_images', JSON.stringify(state.images));
+      } catch (e) {
+        console.error('保存图片失败:', e);
+      }
+    }
+    
+    // 加载已保存的图片
+    function loadSavedImages() {
+      try {
+        var saved = localStorage.getItem('uiEditor_images');
+        if (saved) {
+          state.images = JSON.parse(saved);
+        }
+      } catch (e) {
+        console.error('加载图片失败:', e);
+      }
+    }
+  </script>
+</body>
+</html>

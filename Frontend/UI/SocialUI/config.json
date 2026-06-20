@@ -1,0 +1,49 @@
+{
+  "name": "SocialUI",
+  "version": "1.0",
+  "description": "社交界面配置（好友、组队、门派）",
+  "components": {
+    "socialPanel": {
+      "enabled": true,
+      "position": { "x": "center", "y": "center" },
+      "size": { "width": 500, "height": 400 },
+      "style": {
+        "background": "rgba(20, 20, 30, 0.95)",
+        "border": "2px solid #e94560",
+        "borderRadius": 15
+      }
+    },
+    "tabs": {
+      "items": ["好友", "组队", "门派", "邮件"],
+      "style": {
+        "active": { "color": "#e94560", "borderColor": "#e94560" },
+        "inactive": { "color": "#999", "borderColor": "#4a5568" }
+      }
+    },
+    "friendList": {
+      "showOnline": true,
+      "showLevel": true,
+      "showStatus": true,
+      "sortBy": "online"
+    },
+    "teamList": {
+      "showMemberCount": true,
+      "showLeader": true,
+      "maxMembers": 5
+    },
+    "guildList": {
+      "showMemberCount": true,
+      "showRank": true
+    },
+    "mailList": {
+      "showUnread": true,
+      "showDate": true
+    },
+    "actions": {
+      "addFriend": true,
+      "createTeam": true,
+      "joinGuild": true,
+      "sendMail": true
+    }
+  }
+}

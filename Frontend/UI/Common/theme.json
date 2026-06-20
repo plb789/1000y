@@ -1,0 +1,96 @@
+{
+  "name": "Common",
+  "version": "1.0",
+  "description": "通用UI组件和主题配置",
+  "theme": {
+    "primary": "#e94560",
+    "secondary": "#4a5568",
+    "success": "#4ade80",
+    "warning": "#fbbf24",
+    "danger": "#ef4444",
+    "info": "#60a5fa",
+    "dark": "#1a202c",
+    "light": "#f7fafc",
+    "background": "rgba(0, 0, 0, 0.8)",
+    "text": "#ffffff",
+    "textMuted": "#999999"
+  },
+  "fonts": {
+    "default": "'Microsoft YaHei', sans-serif",
+    "monospace": "'Consolas', monospace"
+  },
+  "animations": {
+    "duration": {
+      "fast": 150,
+      "normal": 300,
+      "slow": 500
+    },
+    "easing": {
+      "default": "ease-out",
+      "bounce": "cubic-bezier(0.68, -0.55, 0.265, 1.55)"
+    }
+  },
+  "components": {
+    "button": {
+      "primary": {
+        "background": "linear-gradient(135deg, #e94560, #c53030)",
+        "border": "none",
+        "color": "#fff",
+        "borderRadius": 6,
+        "padding": "10px 20px",
+        "fontSize": 14
+      },
+      "secondary": {
+        "background": "linear-gradient(135deg, #4a5568, #2d3748)",
+        "border": "none",
+        "color": "#fff",
+        "borderRadius": 6,
+        "padding": "10px 20px",
+        "fontSize": 14
+      },
+      "outline": {
+        "background": "transparent",
+        "border": "1px solid #4a5568",
+        "color": "#999",
+        "borderRadius": 6,
+        "padding": "10px 20px",
+        "fontSize": 14
+      }
+    },
+    "input": {
+      "background": "rgba(45, 55, 72, 0.6)",
+      "border": "1px solid #4a5568",
+      "color": "#fff",
+      "borderRadius": 6,
+      "padding": "8px 12px",
+      "fontSize": 14
+    },
+    "slider": {
+      "track": {
+        "background": "#4a5568",
+        "height": 4,
+        "borderRadius": 2
+      },
+      "thumb": {
+        "background": "#e94560",
+        "size": 14,
+        "borderRadius": "50%"
+      }
+    },
+    "tooltip": {
+      "background": "rgba(20, 20, 30, 0.95)",
+      "border": "2px solid #e94560",
+      "borderRadius": 10,
+      "padding": "12px 15px",
+      "fontSize": 12,
+      "shadow": "0 0 20px rgba(233, 69, 96, 0.3)"
+    }
+  },
+  "zIndex": {
+    "base": 100,
+    "tooltip": 200,
+    "modal": 300,
+    "notification": 400,
+    "damageNumber": 500
+  }
+}

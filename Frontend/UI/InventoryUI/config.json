@@ -1,0 +1,74 @@
+{
+  "name": "InventoryUI",
+  "version": "1.0",
+  "description": "背包界面配置",
+  "components": {
+    "inventoryPanel": {
+      "enabled": true,
+      "position": { "x": "center", "y": "center" },
+      "size": { "width": 480, "height": "auto" },
+      "style": {
+        "background": "rgba(20, 20, 30, 0.95)",
+        "border": "2px solid #e94560",
+        "borderRadius": 15,
+        "boxShadow": "0 0 30px rgba(233, 69, 96, 0.3)"
+      }
+    },
+    "tabs": {
+      "items": ["物品", "装备", "任务"],
+      "style": {
+        "active": { "background": "rgba(233, 69, 96, 0.2)", "borderColor": "#e94560", "color": "#e94560" },
+        "inactive": { "background": "rgba(74, 85, 104, 0.3)", "borderColor": "#4a5568", "color": "#999" }
+      }
+    },
+    "itemGrid": {
+      "columns": 5,
+      "rows": 4,
+      "slotSize": { "width": 60, "height": 60 },
+      "gap": 8
+    },
+    "equipGrid": {
+      "columns": 2,
+      "slotSize": { "width": 70, "height": 70 },
+      "gap": 10,
+      "positions": ["weapon", "armor", "helmet", "necklace", "ring", "boots"]
+    },
+    "itemSlot": {
+      "normal": {
+        "background": "rgba(45, 55, 72, 0.6)",
+        "border": "2px solid #4a5568",
+        "borderRadius": 8
+      },
+      "hover": {
+        "borderColor": "#e94560"
+      },
+      "qualityColors": {
+        "1": "#ffffff",
+        "2": "#4ade80",
+        "3": "#60a5fa",
+        "4": "#a855f7",
+        "5": "#fbbf24"
+      }
+    },
+    "tooltip": {
+      "enabled": true,
+      "showName": true,
+      "showType": true,
+      "showQuality": true,
+      "showDescription": true,
+      "showAttributes": true
+    },
+    "goldDisplay": {
+      "enabled": true,
+      "icon": "💰"
+    },
+    "attributePanel": {
+      "enabled": true,
+      "showAttack": true,
+      "showDefense": true,
+      "showSpeed": true,
+      "showHP": true,
+      "showMP": true
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "version": "1.0",
+  "description": "UI模块总配置文件",
+  "modules": [
+    "ChatUI",
+    "RoleUI",
+    "SkillBarUI",
+    "InventoryUI",
+    "ShopUI",
+    "SocialUI",
+    "MiniMapUI",
+    "SettingsUI"
+  ],
+  "loadOrder": [
+    "Common",
+    "RoleUI",
+    "SkillBarUI",
+    "MiniMapUI",
+    "ChatUI",
+    "InventoryUI",
+    "ShopUI",
+    "SocialUI",
+    "SettingsUI"
+  ],
+  "defaultModule": "default",
+  "fallbackTheme": "dark"
+}

@@ -1,0 +1,42 @@
+{
+  "name": "SettingsUI",
+  "version": "1.0",
+  "description": "设置界面配置",
+  "components": {
+    "settingsPanel": {
+      "enabled": true,
+      "position": { "x": "center", "y": "center" },
+      "size": { "width": 320, "height": "auto" },
+      "style": {
+        "background": "rgba(0, 0, 0, 0.9)",
+        "border": "2px solid #e94560",
+        "borderRadius": 15,
+        "padding": 20
+      }
+    },
+    "sections": {
+      "audio": {
+        "title": "音效设置",
+        "items": ["bgmVolume", "sfxVolume"]
+      },
+      "video": {
+        "title": "画面设置",
+        "items": ["fps", "particleEffects", "screenShake"]
+      },
+      "game": {
+        "title": "游戏设置",
+        "items": ["showDamage", "showNameplate", "autoPickup"]
+      }
+    },
+    "controls": {
+      "closeButton": true,
+      "resetButton": true,
+      "saveButton": true
+    },
+    "buttons": {
+      "close": { "text": "关闭", "style": "secondary" },
+      "reset": { "text": "恢复默认", "style": "outline" },
+      "save": { "text": "保存", "style": "primary" }
+    }
+  }
+}

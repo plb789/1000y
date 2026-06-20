@@ -38,6 +38,9 @@ class UIManager {
       shadowColor: 'rgba(233, 69, 96, 0.3)'
     };
     
+    // 伤害飘字容器
+    this.damageNumbers = [];
+    
     // 初始化
     this.init();
   }
@@ -471,8 +474,313 @@ class UIManager {
         25% { transform: translateX(-5px); }
         75% { transform: translateX(5px); }
       }
+      
+      /* 伤害飘字动画 */
+      @keyframes damageFloat {
+        0% {
+          opacity: 1;
+          transform: translateX(-50%) translateY(0) scale(0.5);
+        }
+        10% {
+          transform: translateX(-50%) translateY(-10px) scale(1.2);
+        }
+        20% {
+          transform: translateX(-50%) translateY(-20px) scale(1);
+        }
+        80% {
+          opacity: 1;
+        }
+        100% {
+          opacity: 0;
+          transform: translateX(-50%) translateY(-60px) scale(0.8);
+        }
+      }
+      
+      @keyframes comboFloat {
+        0% {
+          opacity: 0;
+          transform: translateX(-50%) translateY(0) scale(0.5);
+        }
+        20% {
+          opacity: 1;
+          transform: translateX(-50%) translateY(-15px) scale(1.3);
+        }
+        40% {
+          transform: translateX(-50%) translateY(-25px) scale(1);
+        }
+        80% {
+          opacity: 1;
+        }
+        100% {
+          opacity: 0;
+          transform: translateX(-50%) translateY(-50px) scale(0.9);
+        }
+      }
+      
+      @keyframes expFloat {
+        0% {
+          opacity: 0;
+          transform: translateX(-50%) translateY(0);
+        }
+        20% {
+          opacity: 1;
+          transform: translateX(-50%) translateY(-10px);
+        }
+        80% {
+          opacity: 1;
+        }
+        100% {
+          opacity: 0;
+          transform: translateX(-50%) translateY(-40px);
+        }
+      }
     `;
     document.head.appendChild(style);
+  }
+  
+  /**
+   * 创建常用UI组件
+   */
+  createCommonComponents() {
+    // Toast容器
+    this.toastContainer = document.createElement('div');
+    this.toastContainer.id = 'ui-toast-container';
+    this.toastContainer.style.cssText = `
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: ${this.config.zIndexBase + 400};
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    `;
+    document.body.appendChild(this.toastContainer);
+    
+    // 伤害飘字容器（如果尚未创建）
+    if (!this.damageContainer) {
+      this.damageContainer = document.createElement('div');
+      this.damageContainer.id = 'ui-damage-container';
+      this.damageContainer.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: ${this.config.zIndexBase + 50};
+        overflow: hidden;
+      `;
+      document.body.appendChild(this.damageContainer);
+    }
+  }
+  
+  /**
+   * 显示伤害飘字
+   * @param {Object} options - 配置选项
+   * @param {number} options.x - 屏幕X坐标
+   * @param {number} options.y - 屏幕Y坐标
+   * @param {number} options.damage - 伤害值
+   * @param {boolean} options.isCritical - 是否暴击
+   * @param {boolean} options.isBlocked - 是否格挡
+   * @param {boolean} options.isDodged - 是否闪避
+   * @param {boolean} options.isHeal - 是否治疗
+   * @param {number} options.duration - 持续时间(ms)
+   */
+  showDamageNumber(options = {}) {
+    const {
+      x = 0,
+      y = 0,
+      damage = 0,
+      isCritical = false,
+      isBlocked = false,
+      isDodged = false,
+      isHeal = false,
+      duration = 1000
+    } = options;
+    
+    // 创建飘字元素
+    const damageEl = document.createElement('div');
+    damageEl.style.cssText = `
+      position: absolute;
+      left: ${x}px;
+      top: ${y}px;
+      font-family: 'Microsoft YaHei', sans-serif;
+      font-weight: bold;
+      font-size: ${isCritical ? '28px' : '20px'};
+      text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8), -1px -1px 2px rgba(0, 0, 0, 0.5);
+      pointer-events: none;
+      z-index: ${this.config.zIndexBase + 60};
+      transform: translateX(-50%);
+      animation: damageFloat ${duration}ms ease-out forwards;
+    `;
+    
+    // 根据类型设置颜色和文字
+    let text = '';
+    let color = '';
+    
+    if (isDodged) {
+      text = '闪避';
+      color = '#60a5fa'; // 蓝色
+      damageEl.style.fontSize = '18px';
+    } else if (isBlocked) {
+      text = '格挡';
+      color = '#fbbf24'; // 黄色
+      damageEl.style.fontSize = '18px';
+    } else if (isHeal) {
+      text = `+${damage}`;
+      color = '#4ade80'; // 绿色
+    } else if (isCritical) {
+      text = `${damage}`;
+      color = '#ff6b6b'; // 红色（暴击）
+    } else {
+      text = `${damage}`;
+      color = '#ffffff'; // 白色
+    }
+    
+    // 设置颜色
+    damageEl.style.color = color;
+    
+    // 添加飘字内容
+    if (isCritical) {
+      // 暴击时添加暴击标记
+      damageEl.innerHTML = `
+        <span style="display: block; text-align: center;">
+          <span style="font-size: 14px; color: #ff6b6b;">暴击</span><br>
+          <span>${text}</span>
+        </span>
+      `;
+    } else if (isDodged || isBlocked) {
+      damageEl.textContent = text;
+    } else if (isHeal) {
+      damageEl.textContent = text;
+    } else {
+      damageEl.textContent = text;
+    }
+    
+    // 添加到容器
+    this.damageContainer.appendChild(damageEl);
+
+    // 动画结束后自动移除元素，防止内存泄漏
+    damageEl.addEventListener('animationend', () => {
+      damageEl.remove();
+      const idx = this.damageNumbers.indexOf(damageEl);
+      if (idx > -1) this.damageNumbers.splice(idx, 1);
+    });
+    
+    // 保存引用用于清理
+    this.damageNumbers.push(damageEl);
+    
+    // 限制飘字数量
+    if (this.damageNumbers.length > 20) {
+      const old = this.damageNumbers.shift();
+      if (old.parentNode) {
+        old.parentNode.removeChild(old);
+      }
+    }
+    
+    // 动画结束后移除
+    setTimeout(() => {
+      if (damageEl.parentNode) {
+        damageEl.parentNode.removeChild(damageEl);
+      }
+      const idx = this.damageNumbers.indexOf(damageEl);
+      if (idx > -1) {
+        this.damageNumbers.splice(idx, 1);
+      }
+    }, duration);
+    
+    return damageEl;
+  }
+  
+  /**
+   * 显示连击飘字
+   * @param {Object} options - 配置选项
+   */
+  showComboNumber(options = {}) {
+    const {
+      x = 0,
+      y = 0,
+      comboCount = 0,
+      duration = 800
+    } = options;
+    
+    const comboEl = document.createElement('div');
+    comboEl.style.cssText = `
+      position: absolute;
+      left: ${x}px;
+      top: ${y - 60}px;
+      font-family: 'Microsoft YaHei', sans-serif;
+      font-weight: bold;
+      font-size: 24px;
+      color: #fbbf24;
+      text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8), 0 0 10px rgba(251, 191, 36, 0.5);
+      pointer-events: none;
+      z-index: ${this.config.zIndexBase + 60};
+      transform: translateX(-50%);
+      animation: comboFloat ${duration}ms ease-out forwards;
+    `;
+    comboEl.textContent = `${comboCount} 连击!`;
+    
+    this.damageContainer.appendChild(comboEl);
+    this.damageNumbers.push(comboEl);
+    
+    setTimeout(() => {
+      if (comboEl.parentNode) {
+        comboEl.parentNode.removeChild(comboEl);
+      }
+      const idx = this.damageNumbers.indexOf(comboEl);
+      if (idx > -1) {
+        this.damageNumbers.splice(idx, 1);
+      }
+    }, duration);
+    
+    return comboEl;
+  }
+  
+  /**
+   * 显示经验值飘字
+   * @param {Object} options - 配置选项
+   */
+  showExpNumber(options = {}) {
+    const {
+      x = 0,
+      y = 0,
+      exp = 0,
+      duration = 1500
+    } = options;
+    
+    const expEl = document.createElement('div');
+    expEl.style.cssText = `
+      position: absolute;
+      left: ${x}px;
+      top: ${y - 40}px;
+      font-family: 'Microsoft YaHei', sans-serif;
+      font-weight: bold;
+      font-size: 16px;
+      color: #a855f7;
+      text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+      pointer-events: none;
+      z-index: ${this.config.zIndexBase + 60};
+      transform: translateX(-50%);
+      animation: expFloat ${duration}ms ease-out forwards;
+    `;
+    expEl.textContent = `+${exp} 经验`;
+    
+    this.damageContainer.appendChild(expEl);
+    this.damageNumbers.push(expEl);
+    
+    setTimeout(() => {
+      if (expEl.parentNode) {
+        expEl.parentNode.removeChild(expEl);
+      }
+      const idx = this.damageNumbers.indexOf(expEl);
+      if (idx > -1) {
+        this.damageNumbers.splice(idx, 1);
+      }
+    }, duration);
+    
+    return expEl;
   }
   
   /**

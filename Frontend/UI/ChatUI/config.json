@@ -1,0 +1,39 @@
+{
+  "name": "ChatUI",
+  "version": "1.0",
+  "description": "聊天界面配置",
+  "components": {
+    "chatBox": {
+      "enabled": true,
+      "position": { "x": 20, "y": "auto", "bottom": 90 },
+      "size": { "width": 350, "height": 200 },
+      "style": {
+        "background": "rgba(0, 0, 0, 0.7)",
+        "border": "1px solid #444",
+        "borderRadius": 10
+      },
+      "messages": {
+        "maxMessages": 50,
+        "fontSize": 13,
+        "lineHeight": 1.5,
+        "timestamp": true
+      },
+      "channels": ["世界", "地图", "门派", "私聊"],
+      "input": {
+        "placeholder": "按Enter发送聊天",
+        "maxLength": 200
+      }
+    },
+    "messageTypes": {
+      "system": { "color": "#4ade80", "prefix": "[系统]" },
+      "world": { "color": "#fbbf24", "prefix": "[世界]" },
+      "map": { "color": "#60a5fa", "prefix": "[地图]" },
+      "guild": { "color": "#a855f7", "prefix": "[门派]" },
+      "private": { "color": "#f472b6", "prefix": "[私聊]" }
+    }
+  },
+  "defaultConfig": {
+    "theme": "dark",
+    "animations": true
+  }
+}

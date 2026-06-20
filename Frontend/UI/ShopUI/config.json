@@ -1,0 +1,53 @@
+{
+  "name": "ShopUI",
+  "version": "1.0",
+  "description": "商店界面配置",
+  "components": {
+    "shopPanel": {
+      "enabled": true,
+      "position": { "x": "center", "y": "center" },
+      "size": { "width": 600, "height": 450 },
+      "style": {
+        "background": "rgba(20, 20, 30, 0.95)",
+        "border": "2px solid #e94560",
+        "borderRadius": 15,
+        "boxShadow": "0 0 30px rgba(233, 69, 96, 0.3)"
+      },
+      "header": {
+        "height": 50,
+        "title": "商店",
+        "closeButton": true
+      },
+      "tabs": ["全部", "武器", "防具", "药品", "材料"]
+    },
+    "itemGrid": {
+      "columns": 5,
+      "rowHeight": 90,
+      "gap": 10,
+      "padding": 15
+    },
+    "itemSlot": {
+      "size": { "width": 70, "height": 70 },
+      "style": {
+        "background": "rgba(45, 55, 72, 0.6)",
+        "border": "2px solid #4a5568",
+        "borderRadius": 8
+      }
+    },
+    "itemCard": {
+      "showIcon": true,
+      "showName": true,
+      "showPrice": true,
+      "showStock": true
+    },
+    "buyConfirm": {
+      "showDialog": true,
+      "confirmText": "确认购买",
+      "cancelText": "取消"
+    },
+    "currency": {
+      "type": "gold",
+      "icon": "💰"
+    }
+  }
+}

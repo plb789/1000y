@@ -1,0 +1,207 @@
+{
+  "items": [
+    {
+      "id": 1,
+      "name": "疗伤药",
+      "icon": "🧪",
+      "type": "potion",
+      "type_name": "药品",
+      "quality": 1,
+      "stack_max": 99,
+      "can_use": true,
+      "use_effect": {
+        "hp": 50
+      },
+      "description": "恢复50点生命"
+    },
+    {
+      "id": 2,
+      "name": "回蓝药",
+      "icon": "💧",
+      "type": "potion",
+      "type_name": "药品",
+      "quality": 1,
+      "stack_max": 99,
+      "can_use": true,
+      "use_effect": {
+        "mp": 30
+      },
+      "description": "恢复30点内力"
+    },
+    {
+      "id": 3,
+      "name": "神秘矿石",
+      "icon": "💎",
+      "type": "material",
+      "type_name": "材料",
+      "quality": 4,
+      "stack_max": 99,
+      "description": "蕴含神秘力量的矿石"
+    },
+    {
+      "id": 4,
+      "name": "草药",
+      "icon": "🌿",
+      "type": "material",
+      "type_name": "材料",
+      "quality": 1,
+      "stack_max": 99,
+      "description": "普通的草药"
+    },
+    {
+      "id": 5,
+      "name": "丝绸",
+      "icon": "🧵",
+      "type": "material",
+      "type_name": "材料",
+      "quality": 2,
+      "stack_max": 99,
+      "description": "柔软的丝绸"
+    }
+  ],
+  "weapons": [
+    {
+      "id": 101,
+      "name": "玄铁剑",
+      "icon": "⚔️",
+      "type": "weapon",
+      "type_name": "武器",
+      "quality": 3,
+      "equip_pos": "weapon",
+      "attrs": {
+        "attack": 15,
+        "speed": 1.0
+      },
+      "description": "玄铁打造的长剑，锋利无比"
+    },
+    {
+      "id": 102,
+      "name": "桃木剑",
+      "icon": "🗡️",
+      "type": "weapon",
+      "type_name": "武器",
+      "quality": 1,
+      "equip_pos": "weapon",
+      "attrs": {
+        "attack": 5,
+        "speed": 1.2
+      },
+      "description": "桃木制成的短剑，轻便灵活"
+    },
+    {
+      "id": 103,
+      "name": "屠龙刀",
+      "icon": "🗡️",
+      "type": "weapon",
+      "type_name": "武器",
+      "quality": 5,
+      "equip_pos": "weapon",
+      "attrs": {
+        "attack": 35,
+        "speed": 0.8
+      },
+      "description": "传说中的宝刀，威力无穷"
+    },
+    {
+      "id": 104,
+      "name": "折扇",
+      "icon": "🪭",
+      "type": "weapon",
+      "type_name": "武器",
+      "quality": 2,
+      "equip_pos": "weapon",
+      "attrs": {
+        "attack": 8,
+        "speed": 1.5
+      },
+      "description": "精美的折扇，可作兵器"
+    }
+  ],
+  "armors": [
+    {
+      "id": 201,
+      "name": "皮甲",
+      "icon": "🥋",
+      "type": "armor",
+      "type_name": "防具",
+      "quality": 2,
+      "equip_pos": "armor",
+      "attrs": {
+        "defense": 8,
+        "dodge": 5
+      },
+      "description": "普通的皮甲，轻便灵活"
+    },
+    {
+      "id": 202,
+      "name": "铁甲",
+      "icon": "🛡️",
+      "type": "armor",
+      "type_name": "防具",
+      "quality": 4,
+      "equip_pos": "armor",
+      "attrs": {
+        "defense": 25,
+        "dodge": -5
+      },
+      "description": "厚重的铁甲，防护力强"
+    },
+    {
+      "id": 203,
+      "name": "布衣",
+      "icon": "👕",
+      "type": "armor",
+      "type_name": "防具",
+      "quality": 1,
+      "equip_pos": "armor",
+      "attrs": {
+        "defense": 3,
+        "dodge": 10
+      },
+      "description": "普通的布衣服装"
+    },
+    {
+      "id": 204,
+      "name": "金丝甲",
+      "icon": "👑",
+      "type": "armor",
+      "type_name": "防具",
+      "quality": 5,
+      "equip_pos": "armor",
+      "attrs": {
+        "defense": 40,
+        "dodge": 5
+      },
+      "description": "用金丝编织的宝甲，珍贵无比"
+    }
+  ],
+  "accessories": [
+    {
+      "id": 301,
+      "name": "护腕",
+      "icon": "📿",
+      "type": "accessory",
+      "type_name": "饰品",
+      "quality": 2,
+      "equip_pos": "accessory",
+      "attrs": {
+        "attack": 3
+      },
+      "description": "普通的护腕"
+    },
+    {
+      "id": 302,
+      "name": "玉佩",
+      "icon": "🔮",
+      "type": "accessory",
+      "type_name": "饰品",
+      "quality": 3,
+      "equip_pos": "accessory",
+      "attrs": {
+        "max_hp": 50,
+        "max_mp": 30
+      },
+      "description": "温润的玉佩，蕴含灵气"
+    }
+  ]
+}
