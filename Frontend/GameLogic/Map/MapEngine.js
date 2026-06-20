@@ -33,10 +33,10 @@ class MapEngine {
       isDrag: false
     };
 
-    // 玩家数据
+    // 玩家数据（初始位置为 0,0，真实位置由 Game.syncPlayerPosition 从服务端坐标同步覆盖）
     this.player = {
-      x: 10,
-      y: 10,
+      x: 0,
+      y: 0,
       pixelX: 0,
       pixelY: 0,
       speed: 6, // 提高移动速度，使移动更流畅
@@ -55,7 +55,9 @@ class MapEngine {
       lastDirX: 0,            // 上一次移动方向X
       lastDirY: 0,            // 上一次移动方向Y
       pressStartTime: 0,      // 按住开始时间（用于区分点击和按住）
-      clickThreshold: 200    // 点击判定阈值（毫秒）
+      clickThreshold: 200,    // 点击判定阈值（毫秒）
+      isBlocked: false,       // 是否被阻挡（新增）
+      blockedTime: 0          // 被阻挡的时间戳（新增）
     };
 
     // 资源
@@ -241,6 +243,7 @@ class MapEngine {
       this.mouseFollow.pressStartTime = now; // 记录按住开始时间
       this.mouseFollow.isPressed = true;
       this.mouseFollow.isRunning = e.shiftKey; // 保存Shift键状态
+      this.mouseFollow.isBlocked = false; // ✅ 重置阻挡状态（新点击允许移动）
 
       // 记录初始点击位置
       const rect = this.canvas.getBoundingClientRect();
@@ -550,6 +553,27 @@ class MapEngine {
       return; // 按住时间不足阈值，不执行持续跟随
     }
 
+    // ✅ 新增：检查是否被阻挡
+    if (this.mouseFollow.isBlocked) {
+      // 被阻挡时，只有当鼠标位置改变（远离障碍物方向）才允许重试
+      const dx = this.mouseFollow.targetX - this.player.x;
+      const dy = this.mouseFollow.targetY - this.player.y;
+
+      // 检查鼠标是否在玩家前方（与上次移动方向一致）
+      if (this.mouseFollow.lastDirX !== 0 || this.mouseFollow.lastDirY !== 0) {
+        const dotProduct = dx * this.mouseFollow.lastDirX + dy * this.mouseFollow.lastDirY;
+
+        // 如果鼠标在反方向（点积<0），保持阻挡状态不移动
+        if (dotProduct < 0) {
+          return; // 鼠标在后方，不允许反向移动
+        }
+      }
+
+      // 鼠标在前方或改变方向，解除阻挡状态
+      this.mouseFollow.isBlocked = false;
+      console.log('✅ 解除阻挡状态，允许继续移动');
+    }
+
     // 检查是否还在移动中（当前格子移动完成后立即开始下一格）
     if (this.player.movePath.length > 0) return;
 
@@ -606,6 +630,51 @@ class MapEngine {
     }
 
     return true;
+  }
+
+  // 强制设置玩家位置（用于服务端碰撞回滚）
+  setPlayerPosition(x, y) {
+    console.log(`🗺️ MapEngine: 设置玩家位置 → (${x}, ${y})`);
+
+    // 更新格子坐标
+    this.player.x = x;
+    this.player.y = y;
+
+    // 清空移动路径（防止继续移动）
+    this.player.movePath = [];
+    this.player.moveTargetX = null;
+    this.player.moveTargetY = null;
+
+    // 同步像素坐标
+    this.syncPlayerPixel();
+
+    // 更新镜头跟随
+    if (this.camera) {
+      this.followPlayer();
+    }
+  }
+
+  // 停止玩家移动（被阻挡时调用）
+  stopMoving() {
+    console.log('⛔ MapEngine: 停止玩家移动');
+
+    // 清空移动路径
+    this.player.movePath = [];
+
+    // 清除目标点
+    this.player.moveTargetX = null;
+    this.player.moveTargetY = null;
+
+    // ✅ 新增：设置阻挡状态（防止反向移动）
+    this.mouseFollow.isBlocked = true;
+    this.mouseFollow.blockedTime = Date.now();
+
+    // 重置鼠标跟随状态（如果存在）
+    if (this.mouseFollow) {
+      this.mouseFollow.isActive = false;
+      // 注意：不重置 targetX/targetY，保留用于方向判断
+      // 也不重置 isPressed，让用户可以改变方向后继续移动
+    }
   }
 
   loop() {

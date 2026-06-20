@@ -3,6 +3,8 @@ package battle
 import (
 	"bytes"
 	"encoding/json"
+	common "game-server/Common"
+	monster "game-server/GameService/Monster"
 	"log"
 	"net/http"
 	"sync"
@@ -47,6 +49,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	battleGroup := r.Group("/api/battle")
 	{
 		// 战斗相关
+		battleGroup.POST("/attack", h.HandleAttack)   // 玩家攻击怪物
 		battleGroup.POST("/damage", h.HandleDamage)   // 处理伤害
 		battleGroup.POST("/death", h.HandleDeath)     // 处理死亡
 		battleGroup.POST("/respawn", h.HandleRespawn) // 处理复活
@@ -55,6 +58,65 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 		battleGroup.POST("/debuff", h.HandleDeBuff)   // 处理减益
 		battleGroup.POST("/event", h.HandleMapEvent)  // 处理地图事件
 	}
+}
+
+// HandleAttack 处理玩家攻击怪物请求
+func (h *Handler) HandleAttack(c *gin.Context) {
+	var req AttackRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "请求参数错误"})
+		return
+	}
+
+	log.Printf("⚔️ 收到攻击请求: roleID=%d, monsterID=%d, skillID=%d",
+		req.AttackerID, req.TargetID, req.SkillID)
+
+	// 调用战斗服务处理攻击
+	result := h.service.PlayerAttackMonster(req.AttackerID, req.TargetID, req.SkillID)
+
+	if result == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code": 500,
+			"msg":  "战斗计算失败",
+			"data": nil,
+		})
+		return
+	}
+
+	if !result.Success && result.ErrorCode > 0 {
+		// 攻击失败（距离过远、冷却中等）
+		c.JSON(http.StatusOK, gin.H{
+			"code": result.ErrorCode,
+			"msg":  result.ErrorMsg,
+			"data": result,
+		})
+		return
+	}
+
+	// 攻击成功，返回完整结果
+	log.Printf("✅ 攻击结果: 怪物%d 受到%d点伤害 (暴击=%v, 闪避=%v, 死亡=%v)",
+		req.TargetID, result.Damage, result.IsCrit, result.IsMiss, result.IsDead)
+
+	// 推送战斗结果给客户端（通过Gateway WebSocket）
+	h.pushToClient(req.AttackerID, "attack_result", result)
+
+	// 如果怪物死亡，广播给同地图所有玩家
+	if result.IsDead {
+		deathNotice := map[string]interface{}{
+			"monster_id": req.TargetID,
+			"killer_id":  req.AttackerID,
+			"exp_gain":   result.ExpGain,
+			"gold_gain":  result.GoldGain,
+			"drops":      result.Drops,
+		}
+		h.broadcastToMap(getPlayerMapID(req.AttackerID), "monster_death", deathNotice)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code": 200,
+		"msg":  "success",
+		"data": result,
+	})
 }
 
 // HandleDamage 处理伤害
@@ -238,4 +300,19 @@ func (h *Handler) broadcastToMap(mapID uint32, msgType string, data interface{})
 		}
 		defer resp.Body.Close()
 	}()
+}
+
+// BroadcastMonsterPositions 广播怪物位置更新给地图所有玩家
+func (h *Handler) BroadcastMonsterPositions(mapID uint32, data interface{}) {
+	log.Printf("📡 广播怪物位置: 地图%d, %d个怪物", mapID, len(data.(gin.H)["monsters"].([]monster.MonsterPositionInfo)))
+	h.broadcastToMap(mapID, "monster_position_update", data)
+}
+
+// getPlayerMapID 获取玩家当前地图ID
+func getPlayerMapID(roleID uint64) uint32 {
+	pos, err := common.DBGetRolePosition(roleID)
+	if err != nil || pos == nil {
+		return 1 // 默认返回新手村
+	}
+	return pos.MapID
 }

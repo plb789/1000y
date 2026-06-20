@@ -1,6 +1,7 @@
 package battle
 
 import (
+	"math"
 	"math/rand"
 	"time"
 )
@@ -197,8 +198,67 @@ func CalculateDodge(attacker, defender *BaseFighter) bool {
 	if dodgeRate > 50 {
 		dodgeRate = 50 // 最高50%闪避率
 	}
-
 	return rand.Float64()*100 < dodgeRate
+}
+
+// CalculateBlock 计算格挡
+// attacker: 攻击方
+// defender: 防御方
+// 返回: 是否格挡, 格挡减伤比例(0-1)
+func CalculateBlock(attacker, defender *BaseFighter) (bool, float64) {
+	// 格挡率基于防御方的防御力
+	blockRate := float64(defender.Defense) / (float64(defender.Defense) + float64(attacker.Attack)) * 30
+	if blockRate > 40 {
+		blockRate = 40 // 最高40%格挡率
+	}
+
+	if rand.Float64()*100 < blockRate {
+		// 格挡成功，减少30%-50%伤害
+		reduction := 0.3 + rand.Float64()*0.2
+		return true, reduction
+	}
+	return false, 0
+}
+
+// CheckAttackRange 检查攻击范围
+// attackerX, attackerY: 攻击者坐标
+// targetX, targetY: 目标坐标
+// attackRange: 攻击范围（格子数）
+// 返回: 是否在范围内, 实际距离
+func CheckAttackRange(attackerX, attackerY, targetX, targetY int, attackRange int) (bool, float64) {
+	dx := float64(attackerX - targetX)
+	dy := float64(attackerY - targetY)
+	distance := math.Sqrt(dx*dx + dy*dy)
+
+	return distance <= float64(attackRange), distance
+}
+
+// CalculateFinalDamage 计算最终伤害（包含所有修正）
+// attacker: 攻击者
+// defender: 防御者
+// skillBonus: 技能加成
+// 返回: 最终伤害, 是否暴击, 是否闪避, 是否格挡, 格挡减伤比例
+func CalculateFinalDamage(attacker, defender *BaseFighter, skillBonus int) (int, bool, bool, bool, float64) {
+	// 1. 命中检测
+	if !CalculateHit(attacker, defender) {
+		return 0, false, true, false, 0 // 闪避
+	}
+
+	// 2. 格挡检测
+	isBlocked, blockReduction := CalculateBlock(attacker, defender)
+
+	// 3. 计算基础伤害
+	damage, isCrit := CalculateDamage(attacker, defender, skillBonus)
+
+	// 4. 应用格挡减伤
+	if isBlocked {
+		damage = int(float64(damage) * (1 - blockReduction))
+		if damage < 1 {
+			damage = 1
+		}
+	}
+
+	return damage, isCrit, false, isBlocked, blockReduction
 }
 
 // SkillDamageFactor 技能伤害系数

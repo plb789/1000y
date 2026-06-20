@@ -2,15 +2,18 @@ package main
 
 import (
 	"fmt"
-	common "game-server/Common"
-	battle "game-server/GameService/Battle"
-	gamemap "game-server/GameService/Map"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	common "game-server/Common"
+	battle "game-server/GameService/Battle"
+	gamemap "game-server/GameService/Map"
+	monster "game-server/GameService/Monster"
 
 	"github.com/gin-gonic/gin"
 )
@@ -77,6 +80,48 @@ func main() {
 
 	// 加载本实例负责的地图
 	loadManagedMaps()
+
+	// 初始化怪物服务（必须在loadManagedMaps之后）
+	battleSvc := battle.NewService()
+	monster.InitService(battleSvc)
+
+	// ✅ 解决循环依赖：双向注入服务接口
+	// 1. Monster → Battle: AI系统需要调用战斗服务进行攻击计算
+	monster.SetBattleService(battleSvc)
+
+	// 2. Monster → Map: AI系统需要调用地图服务进行碰撞检测
+	monster.SetMapService(gamemap.GetService())
+
+	// 3. Monster → EntityChecker: AI系统需要检测玩家/怪物实体碰撞
+	entityChecker := &EntityCollisionCheckerImpl{
+		monsterSvc: monster.GetService(),
+		mapSvc:     gamemap.GetService(),
+	}
+	monster.SetEntityChecker(entityChecker)
+
+	// 4. Map → EntityChecker: 地图服务需要检测怪物碰撞（用于玩家移动）
+	gamemap.SetEntityChecker(entityChecker)
+
+	// 4. Battle → Monster: 战斗系统需要获取怪物信息和通知AI
+	battle.SetMonsterService(monster.GetService())
+	battle.SetAIService(monster.GetAIService())
+
+	// 5. Monster → PlayerPosition: AI系统需要获取玩家位置用于追踪目标
+	monster.SetPlayerPositionFunc(func(targetID uint64) (int, int, bool) {
+		// 遍历所有已加载地图查找玩家
+		players := gamemap.GetService().GetAllPlayersInMap(0)
+		for _, p := range players {
+			if p.RoleID == targetID {
+				return p.X, p.Y, true
+			}
+		}
+		return 0, 0, false
+	})
+
+	// 为每个地图生成初始怪物
+	for _, mapID := range handledMaps {
+		monster.InitMapMonsters(mapID)
+	}
 
 	// 启动HTTP服务
 	go startHTTPServer()
@@ -168,6 +213,137 @@ func waitForExit() {
 	os.Exit(0)
 }
 
+// ========== 实体碰撞检测器实现 ==========
+
+// EntityCollisionCheckerImpl 实体碰撞检测器（用于怪物AI和玩家移动）
+type EntityCollisionCheckerImpl struct {
+	monsterSvc *monster.Service
+	mapSvc     *gamemap.Service
+}
+
+// CheckEntityCollision 检查实体间碰撞（怪物-玩家、怪物-怪物）
+// 参数:
+//   - mapID: 地图ID
+//   - x, y: 目标坐标
+//   - excludeID: 排除的实体ID（通常是自身，0表示不排除任何实体）
+//
+// 返回值:
+//   - bool: 是否有碰撞
+//   - uint64: 碰撞的实体ID
+func (e *EntityCollisionCheckerImpl) CheckEntityCollision(mapID uint32, x, y int, excludeID uint64) (bool, uint64) {
+	// 1. 检查怪物碰撞
+	if e.monsterSvc != nil {
+		monsters := e.monsterSvc.GetAllMonsters()
+
+		for _, m := range monsters {
+			// 排除自身
+			if m.ID == excludeID {
+				continue
+			}
+
+			// 只检查同地图的怪物
+			if m.MapID != mapID {
+				continue
+			}
+
+			// 跳过死亡怪物
+			if m.Status == 4 { // 死亡状态
+				continue
+			}
+
+			// 计算距离（碰撞半径=0.8格，允许部分重叠但不完全重合）
+			dx := float64(m.X - x)
+			dy := float64(m.Y - y)
+			distance := math.Sqrt(dx*dx + dy*dy)
+
+			collisionRadius := 0.8 // 碰撞半径（格）
+			if distance < collisionRadius {
+				return true, m.ID
+			}
+		}
+	}
+
+	// 2. 检查玩家碰撞
+	if e.mapSvc != nil {
+		players := e.mapSvc.GetAllPlayersInMap(mapID)
+
+		for _, p := range players {
+			// 排除自身（如果excludeID是玩家ID）
+			if p.RoleID == excludeID {
+				continue
+			}
+
+			// 计算距离（玩家碰撞半径=0.8格）
+			dx := float64(p.X - x)
+			dy := float64(p.Y - y)
+			distance := math.Sqrt(dx*dx + dy*dy)
+
+			collisionRadius := 0.8 // 碰撞半径（格）
+			if distance < collisionRadius {
+				return true, p.RoleID
+			}
+		}
+	}
+
+	return false, 0
+}
+
+// CheckMonsterCollision 仅检查怪物碰撞（用于玩家移动验证）
+func (e *EntityCollisionCheckerImpl) CheckMonsterCollision(mapID uint32, x, y int, playerID uint64) (bool, uint64) {
+	if e.monsterSvc == nil {
+		return false, 0
+	}
+
+	monsters := e.monsterSvc.GetAllMonsters()
+
+	for _, m := range monsters {
+		// 只检查同地图的怪物
+		if m.MapID != mapID {
+			continue
+		}
+
+		// 跳过死亡怪物
+		if m.Status == 4 {
+			continue
+		}
+
+		// 计算距离
+		dx := float64(m.X - x)
+		dy := float64(m.Y - y)
+		distance := math.Sqrt(dx*dx + dy*dy)
+
+		collisionRadius := 0.8
+		if distance < collisionRadius {
+			return true, m.ID
+		}
+	}
+
+	return false, 0
+}
+
+// GetEntityPosition 获取实体位置
+func (e *EntityCollisionCheckerImpl) GetEntityPosition(entityID uint64) (int, int, bool) {
+	// 先尝试从怪物服务查找
+	if e.monsterSvc != nil {
+		m, exists := e.monsterSvc.GetMonster(entityID)
+		if exists {
+			return m.X, m.Y, true
+		}
+	}
+
+	// 再尝试从地图服务查找玩家
+	if e.mapSvc != nil {
+		players := e.mapSvc.GetAllPlayersInMap(0) // 需要知道mapID，这里简化处理
+		for _, p := range players {
+			if p.RoleID == entityID {
+				return p.X, p.Y, true
+			}
+		}
+	}
+
+	return 0, 0, false
+}
+
 func startHTTPServer() {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
@@ -192,6 +368,29 @@ func startHTTPServer() {
 	gatewayURL := common.AppConfig.Services.GatewayService
 	battleHandler := battle.NewHandler(gatewayURL)
 	battleHandler.RegisterRoutes(r)
+
+	// 设置怪物位置广播函数（通过Gateway同步给所有客户端）
+	monster.SetPositionBroadcastFunc(func(positionMap map[uint32][]monster.MonsterPositionInfo) {
+		for mapID, positions := range positionMap {
+			if len(positions) == 0 {
+				continue
+			}
+
+			// 构造广播数据
+			data := gin.H{
+				"map_id":    mapID,
+				"monsters":  positions,
+				"timestamp": time.Now().UnixMilli(),
+			}
+
+			// 通过Handler的broadcastToMap方法广播
+			battleHandler.BroadcastMonsterPositions(mapID, data)
+		}
+	})
+
+	// 注册怪物路由（包含GM命令）
+	monsterHandler := &monster.MonsterHandler{}
+	monsterHandler.RegisterRoutes(r)
 
 	// 健康检查
 	r.GET("/health", func(c *gin.Context) {

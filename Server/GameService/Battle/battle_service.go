@@ -10,6 +10,37 @@ import (
 	skillService "game-server/GameService/Skill"
 )
 
+// ========== 接口定义（避免循环依赖）==========
+
+// MonsterServiceInterface 怪物服务接口 - 由外部注入
+type MonsterServiceInterface interface {
+	GetMonsterInfo(monsterID uint64) (*common.MonsterInfo, bool)
+	MonsterTakeDamage(instanceID uint64, damage int) (newHP int, isDead bool)
+	MonsterDie(instanceID uint64) (exp int, gold int, drops []uint32, err error)
+}
+
+// AIServiceInterface AI服务接口 - 由外部注入
+type AIServiceInterface interface {
+	// OnMonsterHurted 通知AI系统怪物受伤
+	OnMonsterHurted(monsterID uint64, attackerID uint64)
+}
+
+// 全局服务实例（通过依赖注入设置）
+var globalMonsterSvc MonsterServiceInterface
+var globalAIService AIServiceInterface
+
+// SetMonsterService 注入怪物服务实例（在main.go中调用）
+func SetMonsterService(svc MonsterServiceInterface) {
+	globalMonsterSvc = svc
+	log.Printf("✅ Battle系统: 怪物服务已注入")
+}
+
+// SetAIService 注入AI服务实例（在main.go中调用）
+func SetAIService(svc AIServiceInterface) {
+	globalAIService = svc
+	log.Printf("✅ Battle系统: AI服务已注入")
+}
+
 // Service 战斗服务
 type Service struct {
 	battles         map[uint64]*BattleState // key=战斗ID
@@ -293,16 +324,16 @@ func (s *Service) EndBattle(battleID uint64, winner uint8) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	battle, exists := s.battles[battleID]
+	battleState, exists := s.battles[battleID]
 	if !exists {
 		return errors.New("战斗不存在")
 	}
 
-	battle.EndBattle(winner)
+	battleState.EndBattle(winner)
 
 	// 清理战斗者映射
-	delete(s.battleByFighter, battle.AttackerID)
-	delete(s.battleByFighter, battle.DefenderID)
+	delete(s.battleByFighter, battleState.AttackerID)
+	delete(s.battleByFighter, battleState.DefenderID)
 
 	return nil
 }
@@ -337,15 +368,15 @@ func (s *Service) GetBattleOpponent(fighterID uint64) uint64 {
 		return 0
 	}
 
-	battle, exists := s.battles[battleID]
-	if !exists || battle.Status != 0 {
+	battleState, exists := s.battles[battleID]
+	if !exists || battleState.Status != 0 {
 		return 0
 	}
 
-	if battle.AttackerID == fighterID {
-		return battle.DefenderID
+	if battleState.AttackerID == fighterID {
+		return battleState.DefenderID
 	}
-	return battle.AttackerID
+	return battleState.AttackerID
 }
 
 // RecordKill 记录击杀
@@ -652,4 +683,245 @@ type MapEventRequest struct {
 	X         int    `json:"x"`
 	Y         int    `json:"y"`
 	MapID     uint32 `json:"map_id"`
+}
+
+// ==================== 完整战斗系统：玩家攻击怪物 ====================
+
+// PlayerAttackResult 玩家攻击结果
+type PlayerAttackResult struct {
+	Success    bool     `json:"success"`     // 攻击是否成功
+	ErrorCode  int      `json:"error_code"`  // 错误代码: 0=成功, 1=距离过远, 2=冷却中, 3=目标不存在, 4=目标已死
+	ErrorMsg   string   `json:"error_msg"`   // 错误信息
+	AttackerID uint64   `json:"attacker_id"` // 攻击者ID
+	TargetID   uint64   `json:"target_id"`   // 目标ID
+	Damage     int      `json:"damage"`      // 伤害值
+	IsCrit     bool     `json:"is_crit"`     // 是否暴击
+	IsMiss     bool     `json:"is_miss"`     // 是否闪避
+	IsBlocked  bool     `json:"is_blocked"`  // 是否格挡
+	CurrentHP  int      `json:"current_hp"`  // 目标当前血量
+	MaxHP      int      `json:"max_hp"`      // 目标最大血量
+	IsDead     bool     `json:"is_dead"`     // 目标是否死亡
+	ExpGain    int      `json:"exp_gain"`    // 获得经验
+	GoldGain   int      `json:"gold_gain"`   // 获得金币
+	Drops      []uint32 `json:"drops"`       // 掉落物品ID列表
+	LeveledUp  bool     `json:"leveled_up"`  // 是否升级
+	NewLevel   int      `json:"new_level"`   // 新等级（如果升级了）
+}
+
+// PlayerAttackMonster 玩家攻击怪物（完整流程）
+func (s *Service) PlayerAttackMonster(roleID uint64, monsterInstanceID uint64, skillID uint32) *PlayerAttackResult {
+	result := &PlayerAttackResult{
+		AttackerID: roleID,
+		TargetID:   monsterInstanceID,
+	}
+
+	// 1. 获取玩家属性
+	playerFighter, err := s.getPlayerFighter(roleID)
+	if err != nil {
+		result.ErrorCode = 3
+		result.ErrorMsg = "玩家数据获取失败"
+		return result
+	}
+
+	// 2. 获取怪物实例和属性（通过注入的接口）
+	if globalMonsterSvc == nil {
+		result.ErrorCode = 3
+		result.ErrorMsg = "怪物服务未初始化"
+		return result
+	}
+	monster, exists := globalMonsterSvc.GetMonsterInfo(monsterInstanceID)
+	if !exists || monster.Status == 4 {
+		result.ErrorCode = 3
+		result.ErrorMsg = "目标不存在或已死亡"
+		return result
+	}
+
+	// 3. 检查攻击距离
+	playerPos := getPlayerPosition(roleID)
+	inRange, distance := CheckAttackRange(playerPos.X, playerPos.Y, monster.X, monster.Y, 1) // 近战默认1格范围
+	if !inRange {
+		result.ErrorCode = 1
+		result.ErrorMsg = "距离过远"
+		result.Success = false
+		return result
+	}
+	_ = distance
+
+	// 4. 检查普通攻击冷却（默认1.5秒）
+	attackCooldown := int64(1500)
+	if GlobalCoolDownManager.IsCoolingDown(roleID, 0) { // skillID=0 表示普通攻击
+		result.ErrorCode = 2
+		result.ErrorMsg = "攻击冷却中"
+		return result
+	}
+	GlobalCoolDownManager.SetCoolDown(roleID, 0, attackCooldown)
+
+	// 5. 构建怪物战斗属性
+	monsterFighter := &BaseFighter{
+		ID:         monster.ID,
+		Attack:     monster.Attack,
+		Defense:    monster.Defense,
+		Speed:      monster.Speed,
+		Hit:        50, // 从配置读取，这里简化处理
+		Dodge:      10,
+		Crit:       5,
+		CritDamage: 150,
+		CurrentHP:  monster.CurrentHP,
+		MaxHP:      monster.MaxHP,
+	}
+
+	// 6. 计算最终伤害（命中→格挡→暴击→伤害计算）
+	skillBonus := 0
+	damage, isCrit, isMiss, isBlocked, _ := CalculateFinalDamage(playerFighter, monsterFighter, skillBonus)
+
+	// 7. 填充结果
+	result.Damage = damage
+	result.IsCrit = isCrit
+	result.IsMiss = isMiss
+	result.IsBlocked = isBlocked
+
+	if isMiss {
+		// 闪避，不造成伤害
+		result.Damage = 0
+		result.CurrentHP = monster.CurrentHP
+		result.MaxHP = monster.MaxHP
+		result.Success = true
+		// 通知怪物AI被攻击
+		s.notifyMonsterHurted(monsterInstanceID, roleID)
+		return result
+	}
+
+	// 8. 应用伤害到怪物
+	newHP, isDead := globalMonsterSvc.MonsterTakeDamage(monsterInstanceID, damage)
+	result.CurrentHP = newHP
+	result.MaxHP = monster.MaxHP
+	result.IsDead = isDead
+	result.Success = true
+
+	// 9. 通知怪物AI被攻击（触发追击/反击）
+	s.notifyMonsterHurted(monsterInstanceID, roleID)
+
+	// 10. 如果怪物死亡，处理掉落
+	if isDead {
+		exp, gold, drops, err := globalMonsterSvc.MonsterDie(monsterInstanceID)
+		if err == nil {
+			result.ExpGain = exp
+			result.GoldGain = gold
+			result.Drops = drops
+
+			// 给玩家增加经验和金币（返回是否升级）
+			leveledUp, newLevel := s.rewardPlayer(roleID, exp, gold)
+
+			if leveledUp {
+				result.LeveledUp = true
+				result.NewLevel = newLevel
+			}
+		}
+	}
+
+	return result
+}
+
+// notifyMonsterHurted 通知怪物被攻击（通过注入的AI接口）
+func (s *Service) notifyMonsterHurted(monsterID uint64, attackerID uint64) {
+	if globalAIService == nil {
+		return // AI服务未注入，跳过通知
+	}
+	globalAIService.OnMonsterHurted(monsterID, attackerID)
+}
+
+// rewardPlayer 奖励玩家（经验+金币）
+func (s *Service) rewardPlayer(roleID uint64, exp int, gold int) (leveledUp bool, newLevel int) {
+	// 增加经验（返回是否升级）
+	leveledUp, newLevel, _, err := common.DBRoleAddExp(roleID, int64(exp))
+	if err != nil {
+		log.Printf("增加经验失败: %v", err)
+	}
+
+	// 增加金币
+	err = common.DBRoleAddGold(roleID, int64(gold))
+	if err != nil {
+		log.Printf("增加金币失败: %v", err)
+	}
+
+	if leveledUp {
+		log.Printf("🎉 玩家 %d 升级到 %d 级! (+%d EXP, +%d 金币)", roleID, newLevel, exp, gold)
+	}
+
+	return leveledUp, newLevel
+}
+
+// MonsterAttackPlayer 怪物反击玩家
+func (s *Service) MonsterAttackPlayer(monsterInstanceID uint64, playerID uint64) *common.MonsterAttackResult {
+	result := &common.MonsterAttackResult{
+		MonsterID: monsterInstanceID,
+		TargetID:  playerID,
+	}
+
+	// 获取怪物属性（通过注入的接口）
+	if globalMonsterSvc == nil {
+		return result
+	}
+	monster, exists := globalMonsterSvc.GetMonsterInfo(monsterInstanceID)
+	if !exists {
+		return result
+	}
+
+	monsterFighter := &BaseFighter{
+		ID:         monster.ID,
+		Attack:     monster.Attack,
+		Defense:    monster.Defense,
+		Speed:      monster.Speed,
+		Hit:        50,
+		Dodge:      10,
+		Crit:       5,
+		CritDamage: 150,
+		CurrentHP:  monster.CurrentHP,
+		MaxHP:      monster.MaxHP,
+	}
+
+	// 获取玩家属性
+	playerFighter, err := s.getPlayerFighter(playerID)
+	if err != nil {
+		return result
+	}
+
+	// 计算伤害
+	damage, isCrit, isMiss, _, _ := CalculateFinalDamage(monsterFighter, playerFighter, 0)
+
+	result.Damage = damage
+	result.IsCrit = isCrit
+	result.IsMiss = isMiss
+
+	if isMiss {
+		return result
+	}
+
+	// 应用伤害到玩家
+	newHP, isDead := playerFighter.TakeDamage(damage, DamageTypePhysical)
+	if err := common.DBRoleSetHP(playerID, newHP); err != nil {
+		log.Printf("更新玩家HP失败: %v", err)
+	}
+
+	result.PlayerHP = newHP
+	result.PlayerMaxHP = playerFighter.MaxHP
+	result.IsDead = isDead
+
+	return result
+}
+
+// ==================== 辅助函数 ====================
+
+// PlayerPosition 玩家位置
+type PlayerPosition struct {
+	X int
+	Y int
+}
+
+// getPlayerPosition 获取玩家位置（需要外部注入）
+var getPlayerPosition func(uint64) *PlayerPosition
+
+// SetPlayerPositionSetter 设置玩家位置获取函数
+func SetPlayerPositionSetter(fn func(uint64) *PlayerPosition) {
+	getPlayerPosition = fn
 }

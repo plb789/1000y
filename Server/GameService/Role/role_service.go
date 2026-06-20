@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"game-server/Common"
+	common "game-server/Common"
 	"sync"
 	"time"
 )
@@ -48,7 +48,7 @@ func (s *Service) CreateRole(req RoleCreateRequest) (*Role, error) {
 	}
 
 	// 通过DBService API创建角色
-	roleID, err := Common.DBRoleCreate(Common.RoleCreateRequest{
+	roleID, err := common.DBRoleCreate(common.RoleCreateRequest{
 		AccountID:  req.AccountID,
 		Name:       req.Name,
 		Gender:     req.Gender,
@@ -64,7 +64,7 @@ func (s *Service) CreateRole(req RoleCreateRequest) (*Role, error) {
 
 // GetRoleByID 根据ID获取角色
 func (s *Service) GetRoleByID(roleID uint64) (*Role, error) {
-	roleInfo, err := Common.DBRoleGet(roleID)
+	roleInfo, err := common.DBRoleGet(roleID)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +116,7 @@ type RoleNameInfo struct {
 }
 
 func DBRoleGetByName(name string) (*RoleNameInfo, error) {
-	resp, err := Common.DBPost("/api/role/get_by_name", map[string]string{"name": name})
+	resp, err := common.DBPost("/api/role/get_by_name", map[string]string{"name": name})
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +138,7 @@ func DBRoleGetByName(name string) (*RoleNameInfo, error) {
 
 // DBRoleList 获取账号下所有角色
 func DBRoleList(accountID uint64) ([]map[string]interface{}, error) {
-	resp, err := Common.DBPost("/api/role/list", map[string]uint64{"account_id": accountID})
+	resp, err := common.DBPost("/api/role/list", map[string]uint64{"account_id": accountID})
 	if err != nil {
 		return nil, err
 	}
@@ -216,7 +216,7 @@ func (s *Service) UpdateRole(roleID uint64, req RoleUpdateRequest) error {
 	}
 
 	// 通过DBService API更新
-	resp, err := Common.DBPost("/api/role/update", map[string]interface{}{
+	resp, err := common.DBPost("/api/role/update", map[string]interface{}{
 		"id":      roleID,
 		"updates": updates,
 	})
@@ -233,7 +233,7 @@ func (s *Service) UpdateRole(roleID uint64, req RoleUpdateRequest) error {
 
 // UpdateRoleAttributes 批量更新角色属性
 func (s *Service) UpdateRoleAttributes(roleID uint64, req RoleAttributeRequest) error {
-	dbReq := Common.RoleAttributeRequest{}
+	dbReq := common.RoleAttributeRequest{}
 	if req.Hp != nil {
 		dbReq.Hp = req.Hp
 	}
@@ -277,47 +277,48 @@ func (s *Service) UpdateRoleAttributes(roleID uint64, req RoleAttributeRequest) 
 		dbReq.Yuanbao = &yuanbao
 	}
 
-	return Common.DBRoleUpdateAttributes(roleID, dbReq)
+	return common.DBRoleUpdateAttributes(roleID, dbReq)
 }
 
 // DeleteRole 删除角色
 func (s *Service) DeleteRole(roleID uint64, accountID uint64) error {
-	return Common.DBRoleDelete(roleID, accountID)
+	return common.DBRoleDelete(roleID, accountID)
 }
 
 // AddExp 增加经验值(自动处理升级) - 游戏逻辑在GameService中处理
 func (s *Service) AddExp(roleID uint64, exp int64) (bool, uint32, int64, error) {
-	return Common.DBRoleAddExp(roleID, exp)
+	leveledUp, level, newExp, err := common.DBRoleAddExp(roleID, exp)
+	return leveledUp, uint32(level), newExp, err
 }
 
 // AddGold 增加金币
 func (s *Service) AddGold(roleID uint64, gold int64) error {
-	return Common.DBRoleAddGold(roleID, gold)
+	return common.DBRoleAddGold(roleID, gold)
 }
 
 // ConsumeGold 消耗金币
 func (s *Service) ConsumeGold(roleID uint64, gold int64) error {
-	return Common.DBRoleConsumeGold(roleID, gold)
+	return common.DBRoleConsumeGold(roleID, gold)
 }
 
 // ChangeHP 改变生命值
 func (s *Service) ChangeHP(roleID uint64, change int) (int, error) {
-	return Common.DBRoleChangeHP(roleID, change)
+	return common.DBRoleChangeHP(roleID, change)
 }
 
 // ChangeMP 改变内力值
 func (s *Service) ChangeMP(roleID uint64, change int) (int, error) {
-	return Common.DBRoleChangeMP(roleID, change)
+	return common.DBRoleChangeMP(roleID, change)
 }
 
 // ChangeStamina 改变体力值
 func (s *Service) ChangeStamina(roleID uint64, change int) (int, error) {
-	return Common.DBRoleChangeStamina(roleID, change)
+	return common.DBRoleChangeStamina(roleID, change)
 }
 
 // ChangeMap 切换地图
 func (s *Service) ChangeMap(roleID uint64, mapID int, x int, y int) error {
-	return Common.DBRoleChangeMap(roleID, mapID, x, y)
+	return common.DBRoleChangeMap(roleID, mapID, x, y)
 }
 
 // UpdatePosition 更新位置
@@ -327,12 +328,12 @@ func (s *Service) UpdatePosition(roleID uint64, x int, y int) error {
 	if err != nil {
 		return err
 	}
-	return Common.DBRoleChangeMap(roleID, role.MapID, x, y)
+	return common.DBRoleChangeMap(roleID, role.MapID, x, y)
 }
 
 // SetStatus 设置角色状态
 func (s *Service) SetStatus(roleID uint64, status uint8) error {
-	return Common.DBRoleSetStatus(roleID, status)
+	return common.DBRoleSetStatus(roleID, status)
 }
 
 // SetPKMode 设置PK模式
@@ -340,33 +341,33 @@ func (s *Service) SetPKMode(roleID uint64, mode uint8) error {
 	if mode > 3 {
 		return errors.New("无效的PK模式")
 	}
-	return Common.DBRoleSetPKMode(roleID, mode)
+	return common.DBRoleSetPKMode(roleID, mode)
 }
 
 // UpdatePkValue 更新善恶值
 func (s *Service) UpdatePkValue(roleID uint64, change int) error {
-	return Common.DBRoleUpdatePKValue(roleID, change)
+	return common.DBRoleUpdatePKValue(roleID, change)
 }
 
 // RecordKill 记录击杀
 func (s *Service) RecordKill(roleID uint64) error {
-	return Common.DBRoleRecordKill(roleID)
+	return common.DBRoleRecordKill(roleID)
 }
 
 // RecordDeath 记录死亡
 func (s *Service) RecordDeath(roleID uint64) error {
-	return Common.DBRoleRecordDeath(roleID)
+	return common.DBRoleRecordDeath(roleID)
 }
 
 // FullRecovery 完全恢复(满血满蓝)
 func (s *Service) FullRecovery(roleID uint64) error {
-	return Common.DBRoleFullRecovery(roleID)
+	return common.DBRoleFullRecovery(roleID)
 }
 
 // SaveRole 保存角色(手动存档)
 func (s *Service) SaveRole(roleID uint64) error {
 	// 通过DBService记录保存时间
-	resp, err := Common.DBPost("/api/role/save", map[string]uint64{"id": roleID})
+	resp, err := common.DBPost("/api/role/save", map[string]uint64{"id": roleID})
 	if err != nil {
 		return err
 	}
@@ -380,12 +381,12 @@ func (s *Service) SaveRole(roleID uint64) error {
 
 // LoginRecord 记录登录
 func (s *Service) LoginRecord(roleID uint64, ip string) error {
-	return Common.DBRoleLoginRecord(roleID, ip)
+	return common.DBRoleLoginRecord(roleID, ip)
 }
 
 // LogoutRecord 记录登出
 func (s *Service) LogoutRecord(roleID uint64) error {
-	return Common.DBRoleLogoutRecord(roleID)
+	return common.DBRoleLogoutRecord(roleID)
 }
 
 // OnlinePlayerMgr 在线玩家管理

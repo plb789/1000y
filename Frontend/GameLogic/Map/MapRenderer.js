@@ -120,8 +120,8 @@ class MapRenderer {
     const ts = this.tileSize;
 
     // 获取玩家位置用于Z排序
-    const px = playerPos ? playerPos.x : (map.playerX || 10);
-    const py = playerPos ? playerPos.y : (map.playerY || 10);
+    const px = playerPos ? playerPos.x : (map.playerX || 0);
+    const py = playerPos ? playerPos.y : (map.playerY || 0);
 
     // 获取Z排序后的渲染列表
     const renderList = map.getZSortedRenderList(px, py);

@@ -3,7 +3,8 @@ package monster
 import (
 	"errors"
 	common "game-server/Common"
-	battle "game-server/GameService/Battle"
+	"log"
+	"math"
 	"math/rand"
 	"sync"
 	"time"
@@ -50,11 +51,11 @@ type Service struct {
 	monsterID uint64                      // 自增ID
 	npcID     uint64                      // 自增ID
 	mu        sync.RWMutex
-	battleSvc *battle.Service
+	battleSvc BattleServiceInterface // 使用接口避免循环依赖
 }
 
 // NewService 创建服务
-func NewService(battleSvc *battle.Service) *Service {
+func NewService(battleSvc BattleServiceInterface) *Service {
 	return &Service{
 		monsters:  make(map[uint64]*MonsterInstance),
 		npcs:      make(map[uint64]*NPCInstance),
@@ -118,6 +119,18 @@ func (s *Service) GetMonstersByMap(mapID uint32) []*MonsterInstance {
 	return result
 }
 
+// GetAllMonsters 获取所有怪物实例（包括死亡）
+func (s *Service) GetAllMonsters() []*MonsterInstance {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make([]*MonsterInstance, 0, len(s.monsters))
+	for _, m := range s.monsters {
+		result = append(result, m)
+	}
+	return result
+}
+
 // MonsterTakeDamage 怪物受伤
 func (s *Service) MonsterTakeDamage(instanceID uint64, damage int) (int, bool) {
 	s.mu.Lock()
@@ -157,8 +170,8 @@ func (s *Service) MonsterDie(instanceID uint64) (exp int, gold int, drops []uint
 	// 计算经验
 	exp = config.Exp
 
-	// 计算金币
-	gold = battle.CalculateGoldDrop(config.GoldMin, config.GoldMax)
+	// 计算金币（本地实现，避免依赖Battle包）
+	gold = calculateGoldDrop(config.GoldMin, config.GoldMax)
 
 	// 计算掉落
 	if config.DropGroupID != nil {
@@ -171,7 +184,7 @@ func (s *Service) MonsterDie(instanceID uint64) (exp int, gold int, drops []uint
 	// 设置复活时间
 	s.mu.Lock()
 	monster.Status = 4
-	monster.RespawnAt = time.Now().Unix() + int64(base.RespawnTime)
+	monster.RespawnAt = time.Now().Unix() + int64(config.RespawnTime)
 	s.mu.Unlock()
 
 	return exp, gold, drops, nil
@@ -364,4 +377,421 @@ type DropGroup struct {
 
 func (DropGroup) TableName() string {
 	return "drop_group"
+}
+
+// ==================== 全局服务实例 ====================
+
+var (
+	globalService   *Service
+	globalAIService *AIService
+
+	// 位置广播回调（由外部设置，用于通过Gateway广播怪物位置）
+	positionBroadcastFunc func(map[uint32][]MonsterPositionInfo)
+)
+
+// InitService 初始化怪物服务（在main.go中调用）
+func InitService(battleSvc BattleServiceInterface) {
+	globalService = NewService(battleSvc)
+	globalAIService = NewAIService()
+
+	// 设置AI目标位置获取函数
+	SetTargetPositionSetter(func(targetID uint64) *Point {
+		if globalService == nil {
+			return nil
+		}
+		// 尝试从玩家位置获取
+		if x, y, ok := GetPlayerPositionFromMap(targetID); ok {
+			return &Point{X: x, Y: y}
+		}
+		return nil
+	})
+
+	// 设置位置同步回调（将广播给所有客户端）
+	globalAIService.SetPositionSyncCallback(func(positionMap map[uint32][]MonsterPositionInfo) {
+		if positionBroadcastFunc != nil && len(positionMap) > 0 {
+			positionBroadcastFunc(positionMap)
+		}
+	})
+
+	// 启动AI系统
+	globalAIService.Start()
+}
+
+// SetPositionBroadcastFunc 设置位置广播函数（在main.go中调用）
+func SetPositionBroadcastFunc(fn func(map[uint32][]MonsterPositionInfo)) {
+	positionBroadcastFunc = fn
+}
+
+// InitMapMonsters 初始化指定地图的怪物（在loadManagedMaps中调用）
+// 优先级：配置文件 > 算法生成
+func InitMapMonsters(mapID uint32) {
+	if globalService == nil {
+		log.Printf("警告: 怪物服务未初始化，无法生成地图%d的怪物", mapID)
+		return
+	}
+
+	// ========== 方式1：尝试从配置文件加载 ==========
+	spawnConfig := common.GetMapSpawnConfig(mapID)
+	if spawnConfig != nil && len(spawnConfig.SpawnPoints) > 0 {
+		log.Printf("📍 地图%d[%s]: 使用配置文件生成怪物 (%d个生成点)",
+			mapID, spawnConfig.MapName, len(spawnConfig.SpawnPoints))
+		initMonstersFromConfig(mapID, *spawnConfig)
+		return
+	}
+
+	// ========== 方式2：Fallback到算法生成 ==========
+	log.Printf("⚠️ 地图%d: 未找到生成点配置，使用默认算法生成", mapID)
+	initMonstersFromAlgorithm(mapID)
+}
+
+// initMonstersFromConfig 从配置文件生成怪物
+func initMonstersFromConfig(mapID uint32, config common.MapSpawnConfig) {
+	spawnedCount := 0
+	skippedCount := 0
+
+	for _, spawnPoint := range config.SpawnPoints {
+		// 跳过未激活的生成点
+		if !spawnPoint.IsActive {
+			skippedCount++
+			continue
+		}
+
+		// 验证怪物模板是否存在
+		monsterConfig := common.GetMonsterConfig(spawnPoint.BaseMonsterID)
+		if monsterConfig == nil {
+			log.Printf("❌ 生成点[%d-%s]: 怪物模板%d不存在，跳过",
+				spawnPoint.ID, spawnPoint.Name, spawnPoint.BaseMonsterID)
+			skippedCount++
+			continue
+		}
+
+		// 根据配置数量生成怪物
+		for i := 0; i < spawnPoint.Count; i++ {
+			// 计算生成位置（支持随机偏移）
+			x, y := spawnPoint.X, spawnPoint.Y
+			if spawnPoint.SpawnRadius > 0 {
+				x, y = generatePositionWithRadius(
+					spawnPoint.X, spawnPoint.Y,
+					spawnPoint.SpawnRadius,
+				)
+			}
+
+			// 生成怪物实例
+			monster, err := globalService.SpawnMonster(
+				spawnPoint.BaseMonsterID, mapID, x, y,
+			)
+			if err != nil {
+				log.Printf("❌ 生成点[%d]第%d个怪物失败: %v",
+					spawnPoint.ID, i+1, err)
+				continue
+			}
+
+			// 如果有AI类型覆盖，临时修改配置
+			finalConfig := *monsterConfig
+			if spawnPoint.AITypeOverride != nil {
+				finalConfig.AIType = *spawnPoint.AITypeOverride
+			}
+
+			// 注册到AI系统
+			if globalAIService != nil {
+				globalAIService.RegisterMonster(monster, &finalConfig)
+			}
+
+			spawnedCount++
+
+			// 记录详细日志（仅第一个）
+			if i == 0 {
+				log.Printf("  ✅ [%s] %s #%d → (%d,%d) | 数量:%d | 半径:%d格",
+					spawnPoint.Name,
+					finalConfig.Name,
+					monster.ID,
+					x, y,
+					spawnPoint.Count,
+					spawnPoint.SpawnRadius,
+				)
+			}
+		}
+	}
+
+	// 输出统计信息
+	globalSettings := config.GlobalSettings
+	log.Printf("📊 地图%d生成完成: 成功=%d, 跳过=%d | 最大上限=%d | 自动复活=%v",
+		mapID, spawnedCount, skippedCount,
+		globalSettings.MaxMonstersPerMap,
+		globalSettings.AutoRespawn,
+	)
+}
+
+// initMonstersFromAlgorithm 使用算法自动生成（备用方案）
+func initMonstersFromAlgorithm(mapID uint32) {
+	// 获取该地图的所有怪物配置
+	var mapMonsters []common.MonsterBaseConfig
+	for _, m := range common.GameConfig.Monsters {
+		if m.MapID == mapID {
+			mapMonsters = append(mapMonsters, m)
+		}
+	}
+
+	if len(mapMonsters) == 0 {
+		log.Printf("地图%d没有配置怪物", mapID)
+		return
+	}
+
+	// 获取地图配置信息（用于智能分布）
+	mapConfig := getMapConfig(mapID)
+	if mapConfig == nil {
+		log.Printf("警告: 找不到地图%d配置，使用默认参数", mapID)
+		defaultX, defaultY := 500, 500
+		mapConfig = &common.MapBaseConfig{
+			ID:      mapID,
+			Width:   1000,
+			Height:  1000,
+			ReviveX: &defaultX,
+			ReviveY: &defaultY,
+		}
+	}
+
+	// 计算安全区域参数（处理指针类型）
+	centerX := 500
+	centerY := 500
+	if mapConfig.ReviveX != nil {
+		centerX = *mapConfig.ReviveX
+	}
+	if mapConfig.ReviveY != nil {
+		centerY = *mapConfig.ReviveY
+	}
+	mapWidth := mapConfig.Width
+	mapHeight := mapConfig.Height
+
+	margin := int(float64(mapWidth) * 0.05)
+	if margin < 20 {
+		margin = 20
+	}
+
+	safeRadius := int(float64(mapWidth) * 0.08)
+	if safeRadius < 30 {
+		safeRadius = 30
+	}
+
+	spawnedCount := 0
+	for _, monsterConfig := range mapMonsters {
+		count := 3 + rand.Intn(6)
+		if monsterConfig.Type == 1 {
+			count = 1 + rand.Intn(2)
+		} else if monsterConfig.Type == 2 {
+			count = 1
+		}
+
+		var spawnRadius int
+		switch {
+		case monsterConfig.Level <= 2:
+			spawnRadius = 80 + rand.Intn(120)
+		case monsterConfig.Level <= 5:
+			spawnRadius = 150 + rand.Intn(150)
+		default:
+			spawnRadius = 250 + rand.Intn(200)
+		}
+
+		maxRadius := int(math.Min(
+			float64(mapWidth/2-margin),
+			float64(mapHeight/2-margin),
+		))
+		if spawnRadius > maxRadius {
+			spawnRadius = maxRadius
+		}
+
+		for i := 0; i < count; i++ {
+			x, y := generatePositionAroundCenter(centerX, centerY, safeRadius, spawnRadius, margin, mapWidth, mapHeight)
+
+			monster, err := globalService.SpawnMonster(monsterConfig.ID, mapID, x, y)
+			if err != nil {
+				log.Printf("生成怪物失败[%s]: %v", monsterConfig.Name, err)
+				continue
+			}
+
+			if globalAIService != nil {
+				globalAIService.RegisterMonster(monster, &monsterConfig)
+			}
+
+			spawnedCount++
+		}
+	}
+
+	log.Printf("✅ 地图%d算法生成完成: 共%d个怪物 (配置了%d种)",
+		mapID, spawnedCount, len(mapMonsters))
+}
+
+// getMapConfig 获取地图配置
+func getMapConfig(mapID uint32) *common.MapBaseConfig {
+	for _, m := range common.GameConfig.Maps {
+		if m.ID == mapID {
+			return &m
+		}
+	}
+	return nil
+}
+
+// calculateGoldDrop 计算金币掉落（本地实现，避免循环依赖）
+func calculateGoldDrop(minGold, maxGold int) int {
+	if minGold >= maxGold {
+		return minGold
+	}
+	return minGold + rand.Intn(maxGold-minGold+1)
+}
+
+// generatePositionAroundCenter 围绕中心点生成位置（避开中心保护区）
+func generatePositionAroundCenter(centerX, centerY, minRadius, maxRadius, margin, mapWidth, mapHeight int) (int, int) {
+	maxAttempts := 10 // 最大重试次数
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		// 随机角度和距离
+		angle := rand.Float64() * 2 * math.Pi
+		distance := float64(minRadius) + rand.Float64()*float64(maxRadius-minRadius)
+
+		// 极坐标转直角坐标
+		x := centerX + int(distance*math.Cos(angle))
+		y := centerY + int(distance*math.Sin(angle))
+
+		// 边界检查
+		if x < margin {
+			x = margin + rand.Intn(20)
+		}
+		if x > mapWidth-margin {
+			x = mapWidth - margin - rand.Intn(20)
+		}
+		if y < margin {
+			y = margin + rand.Intn(20)
+		}
+		if y > mapHeight-margin {
+			y = mapHeight - margin - rand.Intn(20)
+		}
+
+		// 再次确认不在保护区内
+		distToCenter := math.Sqrt(math.Pow(float64(x-centerX), 2) + math.Pow(float64(y-centerY), 2))
+		if distToCenter >= float64(minRadius) {
+			return x, y
+		}
+	}
+
+	// 如果多次失败，使用安全的默认位置
+	fallbackX := centerX + maxRadius/2 + rand.Intn(50)
+	fallbackY := centerY + rand.Intn(100) - 50
+
+	// 最终边界检查
+	if fallbackX < margin {
+		fallbackX = margin + 50
+	}
+	if fallbackX > mapWidth-margin {
+		fallbackX = mapWidth - margin - 50
+	}
+	if fallbackY < margin {
+		fallbackY = margin + 50
+	}
+	if fallbackY > mapHeight-margin {
+		fallbackY = mapHeight - margin - 50
+	}
+
+	return fallbackX, fallbackY
+}
+
+// generatePositionWithRadius 在指定点周围radius范围内随机生成位置（用于配置文件的spawn_radius）
+func generatePositionWithRadius(centerX, centerY, radius int) (int, int) {
+	if radius <= 0 {
+		return centerX, centerY
+	}
+
+	// 随机角度和距离（在圆内均匀分布）
+	angle := rand.Float64() * 2 * math.Pi
+	distance := rand.Float64() * float64(radius)
+
+	x := centerX + int(distance*math.Cos(angle))
+	y := centerY + int(distance*math.Sin(angle))
+
+	return x, y
+}
+
+// GetService 获取全局怪物服务实例
+func GetService() *Service {
+	return globalService
+}
+
+// GetAIService 获取全局AI服务实例
+func GetAIService() *AIService {
+	return globalAIService
+}
+
+// ========== 接口实现（供Battle包调用）==========
+
+// GetMonsterInfo 实现MonsterServiceInterface接口 - 获取怪物信息
+func (s *Service) GetMonsterInfo(monsterID uint64) (*common.MonsterInfo, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	m, exists := s.monsters[monsterID]
+	if !exists {
+		return nil, false
+	}
+
+	// 转换为标准化的MonsterInfo结构（避免暴露内部实现）
+	info := &common.MonsterInfo{
+		ID:        m.ID,
+		BaseID:    m.BaseID,
+		Name:      m.Name,
+		Level:     m.Level,
+		Type:      m.Type,
+		MapID:     m.MapID,
+		X:         m.X,
+		Y:         m.Y,
+		CurrentHP: m.CurrentHP,
+		MaxHP:     m.MaxHP,
+		Attack:    m.Attack,
+		Defense:   m.Defense,
+		Speed:     m.Speed,
+		Status:    m.Status,
+	}
+	return info, true
+}
+
+// GetPlayerPositionFromMap 从地图服务获取玩家位置（需要外部注入）
+var GetPlayerPositionFromMap func(uint64) (int, int, bool)
+
+// SetPlayerPositionFunc 设置玩家位置获取函数
+func SetPlayerPositionFunc(fn func(uint64) (int, int, bool)) {
+	GetPlayerPositionFromMap = fn
+}
+
+// GMSpawnMonster GM命令：手动生成怪物（用于测试）
+func GMSpawnMonster(baseID uint32, mapID uint32, x, y int, count int) ([]*MonsterInstance, error) {
+	if globalService == nil {
+		return nil, errors.New("怪物服务未初始化")
+	}
+
+	var monsters []*MonsterInstance
+	for i := 0; i < count; i++ {
+		// 如果指定坐标为0，则随机生成
+		spawnX, spawnY := x, y
+		if x == 0 || y == 0 {
+			spawnX = rand.Intn(900) + 50
+			spawnY = rand.Intn(900) + 50
+		}
+
+		monster, err := globalService.SpawnMonster(baseID, mapID, spawnX, spawnY)
+		if err != nil {
+			return monsters, err
+		}
+
+		// 注册到AI系统
+		if globalAIService != nil {
+			config := common.GetMonsterConfig(baseID)
+			if config != nil {
+				globalAIService.RegisterMonster(monster, config)
+			}
+		}
+
+		monsters = append(monsters, monster)
+		log.Printf("🎮 GM生成怪物: %s (实例ID=%d) 在位置(%d,%d)",
+			monster.Name, monster.ID, spawnX, spawnY)
+	}
+
+	return monsters, nil
 }

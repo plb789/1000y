@@ -2,6 +2,8 @@ package common
 
 import (
 	"encoding/json"
+	"fmt"
+	"log"
 	"os"
 )
 
@@ -19,6 +21,7 @@ type ConfigLoader struct {
 	ShopGoods     []ShopGoodsConfig    // 商品配置
 	Announcements []AnnouncementConfig // 公告配置
 	ServerConfigs []ServerConfigItem   // 服务器配置
+	SpawnPoints   SpawnPointsConfig    // 怪物生成点配置（新增）
 }
 
 // DropGroupConfig 掉落组配置
@@ -126,6 +129,11 @@ type ItemBaseConfig struct {
 	Description   string `json:"description"`
 	EquipType     uint8  `json:"equip_type"`  // 装备位置: 1=武器, 2=衣服, 3=头盔, 4=护腕, 5=腰带, 6=鞋子, 7=戒指, 8=项链
 	WeaponType    uint8  `json:"weapon_type"` // 武器类型: 0=徒手, 1=剑, 2=刀, 3=枪, 4=斧, 5=拳 (仅武器有效)
+	HpBonus       int    `json:"hp_bonus"`       // 生命加成(装备)
+	MpBonus       int    `json:"mp_bonus"`       // 内力加成(装备)
+	AttackBonus   int    `json:"attack_bonus"`   // 攻击加成(装备)
+	DefenseBonus  int    `json:"defense_bonus"`  // 防御加成(装备)
+	SpeedBonus    int    `json:"speed_bonus"`    // 速度加成(装备)
 	HpRestore     int    `json:"hp_restore"`
 	MpRestore     int    `json:"mp_restore"`
 	BuffID        uint32 `json:"buff_id"`
@@ -212,6 +220,49 @@ type ServerConfigItem struct {
 	Description string `json:"description"`
 }
 
+// ========== 怪物生成点配置（新增）==========
+
+// SpawnPointsConfig 怪物生成点配置（顶层）
+type SpawnPointsConfig struct {
+	Version     string                    `json:"version"`      // 配置版本号
+	Description string                    `json:"description"`  // 配置描述
+	LastUpdated string                    `json:"last_updated"` // 最后更新时间
+	Maps        map[string]MapSpawnConfig `json:"maps"`         // 地图生成点配置（key=地图ID）
+}
+
+// MapSpawnConfig 单个地图的怪物生成配置
+type MapSpawnConfig struct {
+	MapID          uint32                 `json:"map_id"`          // 地图ID
+	MapName        string                 `json:"map_name"`        // 地图名称
+	SpawnPoints    []SpawnPointConfig     `json:"spawn_points"`    // 生成点列表
+	GlobalSettings MapSpawnGlobalSettings `json:"global_settings"` // 全局设置
+}
+
+// SpawnPointConfig 单个生成点配置
+type SpawnPointConfig struct {
+	ID             uint32 `json:"id"`               // 生成点唯一ID
+	Name           string `json:"name"`             // 生成点名称
+	BaseMonsterID  uint32 `json:"base_monster_id"`  // 基础怪物模板ID
+	MonsterName    string `json:"monster_name"`     // 怪物名称（可选，用于显示）
+	X              int    `json:"x"`                // 中心X坐标
+	Y              int    `json:"y"`                // 中心Y坐标
+	Count          int    `json:"count"`            // 同时存在的最大数量
+	RespawnTime    int    `json:"respawn_time"`     // 复活时间（秒）
+	SpawnRadius    int    `json:"spawn_radius"`     // 生成半径（格），0=精确位置
+	LevelRange     [2]int `json:"level_range"`      // 适用玩家等级范围 [min, max]
+	AITypeOverride *uint8 `json:"ai_type_override"` // AI类型覆盖（null=使用默认值）
+	IsActive       bool   `json:"is_active"`        // 是否激活
+	Description    string `json:"description"`      // 描述说明
+}
+
+// MapSpawnGlobalSettings 地图生成全局设置
+type MapSpawnGlobalSettings struct {
+	MaxMonstersPerMap    int  `json:"max_monsters_per_map"`   // 地图最大怪物数量
+	AutoRespawn          bool `json:"auto_respawn"`           // 是否自动复活
+	RespawnCheckInterval int  `json:"respawn_check_interval"` // 复活检查间隔（秒）
+	DespawnDistance      int  `json:"despawn_distance"`       // 玩家离开多远后消失（格）
+}
+
 // 全局配置实例
 var GameConfig *ConfigLoader
 
@@ -278,6 +329,17 @@ func LoadGameConfig(configPath string) error {
 	// 加载服务器配置
 	if err := loadJSONFile(configPath+"/server_config.json", &GameConfig.ServerConfigs); err != nil {
 		return err
+	}
+
+	// 加载怪物生成点配置（新增）
+	if err := loadJSONFile(configPath+"/monster_spawns.json", &GameConfig.SpawnPoints); err != nil {
+		log.Printf("警告: 加载怪物生成配置失败: %v (将使用默认算法生成)", err)
+		// 不返回错误，使用空配置（后续会fallback到算法生成）
+		GameConfig.SpawnPoints = SpawnPointsConfig{
+			Maps: make(map[string]MapSpawnConfig),
+		}
+	} else {
+		log.Printf("✅ 怪物生成配置加载成功: %d个地图", len(GameConfig.SpawnPoints.Maps))
 	}
 
 	return nil
@@ -451,4 +513,75 @@ func GetServerConfigValue(key string, defaultVal string) string {
 		return defaultVal
 	}
 	return config.Value
+}
+
+// ========== 怪物生成点配置访问函数（新增）==========
+
+// GetMapSpawnConfig 获取指定地图的怪物生成配置
+func GetMapSpawnConfig(mapID uint32) *MapSpawnConfig {
+	if GameConfig == nil || GameConfig.SpawnPoints.Maps == nil {
+		return nil
+	}
+
+	mapKey := fmt.Sprintf("%d", mapID)
+	if config, exists := GameConfig.SpawnPoints.Maps[mapKey]; exists {
+		return &config
+	}
+	return nil
+}
+
+// GetActiveSpawnPointsByMap 获取指定地图的所有激活的生成点
+func GetActiveSpawnPointsByMap(mapID uint32) []SpawnPointConfig {
+	config := GetMapSpawnConfig(mapID)
+	if config == nil {
+		return []SpawnPointConfig{}
+	}
+
+	var activePoints []SpawnPointConfig
+	for _, point := range config.SpawnPoints {
+		if point.IsActive {
+			activePoints = append(activePoints, point)
+		}
+	}
+	return activePoints
+}
+
+// GetAllSpawnPoints 获取所有地图的生成点配置（调试用）
+func GetAllSpawnPoints() map[string]MapSpawnConfig {
+	if GameConfig == nil || GameConfig.SpawnPoints.Maps == nil {
+		return make(map[string]MapSpawnConfig)
+	}
+	return GameConfig.SpawnPoints.Maps
+}
+
+// ========== 共享数据结构（避免循环依赖）==========
+
+// MonsterInfo 怪物运行时信息（供Battle和Monster包共享使用）
+type MonsterInfo struct {
+	ID        uint64 // 实例ID
+	BaseID    uint32 // 基础ID
+	Name      string // 名称
+	Level     uint32 // 等级
+	Type      uint8  // 类型: 0=普通, 1=精英, 2=BOSS
+	MapID     uint32 // 地图ID
+	X         int    // X坐标
+	Y         int    // Y坐标
+	CurrentHP int    // 当前HP
+	MaxHP     int    // 最大HP
+	Attack    int    // 攻击力
+	Defense   int    // 防御力
+	Speed     int    // 速度
+	Status    uint8  // 状态: 0=空闲, 1=巡逻, 2=追击, 3=战斗, 4=死亡
+}
+
+// MonsterAttackResult 怪物攻击结果（供Battle和Monster包共享使用）
+type MonsterAttackResult struct {
+	MonsterID   uint64 `json:"monster_id"`
+	TargetID    uint64 `json:"target_id"`
+	Damage      int    `json:"damage"`
+	IsCrit      bool   `json:"is_crit"`
+	IsMiss      bool   `json:"is_miss"`
+	PlayerHP    int    `json:"player_hp"`
+	PlayerMaxHP int    `json:"player_max_hp"`
+	IsDead      bool   `json:"is_dead"`
 }

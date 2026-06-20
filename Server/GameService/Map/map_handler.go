@@ -11,6 +11,7 @@ import (
 	"time"
 
 	common "game-server/Common"
+	monster "game-server/GameService/Monster"
 
 	"github.com/gin-gonic/gin"
 )
@@ -226,11 +227,16 @@ func (h *Handler) EnterMap(c *gin.Context) {
 		lm.mu.RUnlock()
 	}
 
+	// 获取怪物列表（用于客户端显示）
+	monsterList := h.getMonsterListForMap(req.MapID)
+	log.Printf("EnterMap: 地图%d 怪物数量=%d", req.MapID, len(monsterList))
+
 	c.JSON(http.StatusOK, gin.H{
-		"code": 200,
-		"msg":  "进入成功",
-		"x":    actualX,
-		"y":    actualY,
+		"code":         200,
+		"msg":          "进入成功",
+		"x":            actualX,
+		"y":            actualY,
+		"monster_list": monsterList,
 	})
 }
 
@@ -260,11 +266,23 @@ func (h *Handler) Move(c *gin.Context) {
 		X      int    `json:"x" binding:"required"`
 		Y      int    `json:"y" binding:"required"`
 	}
+	
+	// 读取原始请求体用于调试
+	bodyBytes, _ := io.ReadAll(c.Request.Body)
+	log.Printf("📥 Move: 收到原始请求体: %s", string(bodyBytes))
+	
+	// 重新设置请求体（因为已经读取了）
+	c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+	
 	if err := c.ShouldBindJSON(&req); err != nil {
-		log.Printf("Move: 参数绑定失败 - %v", err)
+		log.Printf("❌ Move: 参数绑定失败 - %v", err)
+		log.Printf("❌ Move: 期望格式: {role_id: number, map_id: number, x: number, y: number}")
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "请求参数错误"})
 		return
 	}
+	
+	log.Printf("✅ Move: 参数绑定成功 - roleID=%d, mapID=%d, x=%d, y=%d", 
+		req.RoleID, req.MapID, req.X, req.Y)
 
 	// 移动玩家
 	result, err := h.service.MovePlayer(req.RoleID, req.MapID, req.X, req.Y)
@@ -481,7 +499,7 @@ func (h *Handler) GetNPCs(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "success", "data": npcs})
 }
 
-// GetMonsters 获取地图怪物
+// GetMonsters 获取地图怪物（返回运行时实例数据）
 func (h *Handler) GetMonsters(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
@@ -490,10 +508,72 @@ func (h *Handler) GetMonsters(c *gin.Context) {
 		return
 	}
 
-	monsters, err := h.service.GetMonstersByMap(uint32(id))
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "获取怪物列表失败"})
+	// 调用 Monster Service 获取运行时实例（包含坐标、HP等动态数据）
+	monsterSvc := monster.GetService()
+	if monsterSvc == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "怪物服务未初始化"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "success", "data": monsters})
+
+	monsters := monsterSvc.GetMonstersByMap(uint32(id))
+	if monsters == nil || len(monsters) == 0 {
+		c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "success", "data": []interface{}{}})
+		return
+	}
+
+	// 统一转换为客户端友好的格式（避免 Go 结构体默认的大写字段名）
+	result := make([]interface{}, 0, len(monsters))
+	for _, m := range monsters {
+		if m.Status == 4 { // 跳过死亡怪物
+			continue
+		}
+		result = append(result, map[string]interface{}{
+			"id":      m.ID,
+			"base_id": m.BaseID,
+			"name":    m.Name,
+			"x":       m.X,
+			"y":       m.Y,
+			"hp":      m.CurrentHP,
+			"max_hp":  m.MaxHP,
+			"level":   m.Level,
+			"type":    m.Type,
+			"status":  m.Status,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "success", "data": result})
+}
+
+// getMonsterListForMap 获取指定地图的怪物列表（用于EnterMap响应）
+func (h *Handler) getMonsterListForMap(mapID uint32) []interface{} {
+	monsterSvc := monster.GetService()
+	if monsterSvc == nil {
+		return nil
+	}
+
+	monsters := monsterSvc.GetMonstersByMap(mapID)
+	if monsters == nil || len(monsters) == 0 {
+		return nil
+	}
+
+	result := make([]interface{}, 0, len(monsters))
+	for _, m := range monsters {
+		if m.Status == 4 { // 跳过死亡怪物
+			continue
+		}
+		result = append(result, map[string]interface{}{
+			"id":      m.ID,
+			"base_id": m.BaseID,
+			"name":    m.Name,
+			"x":       m.X,
+			"y":       m.Y,
+			"hp":      m.CurrentHP,
+			"max_hp":  m.MaxHP,
+			"level":   m.Level,
+			"type":    m.Type,
+			"status":  m.Status,
+		})
+	}
+
+	return result
 }

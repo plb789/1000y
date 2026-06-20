@@ -143,6 +143,7 @@ type RoleInfo struct {
 	MapID      uint32 `json:"map_id"`
 	MapX       int    `json:"map_x"`
 	MapY       int    `json:"map_y"`
+	Status     uint8  `json:"status"` // 状态: 0=正常, 1=打坐, 2=死亡, 3=在线
 }
 
 // GetRoleInfo 获取角色信息

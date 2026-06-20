@@ -102,39 +102,42 @@ type Message struct {
 
 // PacketID 消息命令ID
 const (
-	CmdLogin        uint16 = 1001 // 登录
-	CmdLogout       uint16 = 1002 // 登出
-	CmdHeartbeat    uint16 = 1003 // 心跳
-	CmdRegister     uint16 = 1004 // 注册
-	CmdMove         uint16 = 2001 // 移动
-	CmdAttack       uint16 = 2002 // 攻击
-	CmdUseSkill     uint16 = 2003 // 使用技能
-	CmdChat         uint16 = 2004 // 聊天
-	CmdPickup       uint16 = 2005 // 拾取
-	CmdUseItem      uint16 = 2006 // 使用物品
-	CmdEquip        uint16 = 2007 // 装备
-	CmdTrade        uint16 = 2008 // 交易
-	CmdDamage       uint16 = 2009 // 伤害
-	CmdDeath        uint16 = 2010 // 死亡
-	CmdRespawn      uint16 = 2011 // 复活
-	CmdLevelUp      uint16 = 2012 // 升级
-	CmdBuff         uint16 = 2013 // 增益
-	CmdDeBuff       uint16 = 2014 // 减益
-	CmdEnterMap     uint16 = 3001 // 进入地图
-	CmdLeaveMap     uint16 = 3002 // 离开地图
-	CmdMapPlayer    uint16 = 3003 // 地图玩家列表
-	CmdOnlineCount  uint16 = 3004 // 在线人数广播
-	CmdNpcTalk      uint16 = 3005 // NPC对话
-	CmdNpcTrade     uint16 = 3006 // NPC交易
-	CmdMapEvent     uint16 = 3007 // 地图事件
-	CmdSkillLearn   uint16 = 4001 // 学习武学
-	CmdSkillUpgrade uint16 = 4002 // 升级武学
-	CmdRoleInfo     uint16 = 5001 // 角色信息
-	CmdRoleAttrib   uint16 = 5002 // 角色属性
-	CmdSync         uint16 = 5003 // 属性同步
-	CmdRoleList     uint16 = 5004 // 角色列表
-	CmdRoleCreate   uint16 = 5005 // 创建角色
-	CmdRoleSelect   uint16 = 5006 // 选择角色
+	CmdLogin                 uint16 = 1001 // 登录
+	CmdLogout                uint16 = 1002 // 登出
+	CmdHeartbeat             uint16 = 1003 // 心跳
+	CmdRegister              uint16 = 1004 // 注册
+	CmdMove                  uint16 = 2001 // 移动
+	CmdAttack                uint16 = 2002 // 攻击
+	CmdUseSkill              uint16 = 2003 // 使用技能
+	CmdChat                  uint16 = 2004 // 聊天
+	CmdPickup                uint16 = 2005 // 拾取
+	CmdUseItem               uint16 = 2006 // 使用物品
+	CmdEquip                 uint16 = 2007 // 装备
+	CmdTrade                 uint16 = 2008 // 交易
+	CmdDamage                uint16 = 2009 // 伤害
+	CmdDeath                 uint16 = 2010 // 死亡
+	CmdRespawn               uint16 = 2011 // 复活
+	CmdLevelUp               uint16 = 2012 // 升级
+	CmdBuff                  uint16 = 2013 // 增益
+	CmdDeBuff                uint16 = 2014 // 减益
+	CmdEnterMap              uint16 = 3001 // 进入地图
+	CmdLeaveMap              uint16 = 3002 // 离开地图
+	CmdMapPlayer             uint16 = 3003 // 地图玩家列表
+	CmdOnlineCount           uint16 = 3004 // 在线人数广播
+	CmdNpcTalk               uint16 = 3005 // NPC对话
+	CmdNpcTrade              uint16 = 3006 // NPC交易
+	CmdMapEvent              uint16 = 3007 // 地图事件
+	CmdMonsterPositionUpdate uint16 = 3101 // 怪物位置同步
+	CmdMonsterSpawn          uint16 = 3102 // 怪物生成
+	CmdMonsterDeath          uint16 = 3103 // 怪物死亡
+	CmdSkillLearn            uint16 = 4001 // 学习武学
+	CmdSkillUpgrade          uint16 = 4002 // 升级武学
+	CmdRoleInfo              uint16 = 5001 // 角色信息
+	CmdRoleAttrib            uint16 = 5002 // 角色属性
+	CmdSync                  uint16 = 5003 // 属性同步
+	CmdRoleList              uint16 = 5004 // 角色列表
+	CmdRoleCreate            uint16 = 5005 // 创建角色
+	CmdRoleSelect            uint16 = 5006 // 选择角色
 )
 
 // NewClientManager 创建客户端管理器
@@ -240,12 +243,14 @@ func (cm *ClientManager) sendMessage(msg *Message) {
 			}
 		}
 	} else {
-		// 广播
+		// 广播 - 发送给所有连接的客户端
 		for _, client := range cm.clients {
-			if client.ID == msg.From {
+			// 排除消息发送者自己（避免回显）
+			if client.ID != msg.From {
 				select {
 				case client.Send <- msg.Data:
 				default:
+					log.Printf("警告: 客户端 %d 发送通道已满，丢弃消息", client.ID)
 				}
 			}
 		}
@@ -801,30 +806,23 @@ func (c *Client) handleEnterMap(body []byte) {
 		log.Printf("广播完成")
 	}
 
-	// 先向新玩家发送当前地图视野范围内的其他玩家列表
+	// 先向新玩家发送当前地图的所有其他玩家列表（不使用视野过滤，确保完整同步）
 	existingPlayers := GlobalManager.GetMapPlayers(req.MapID)
 	log.Printf("当前地图%d有%d个玩家", req.MapID, len(existingPlayers))
 
 	if len(existingPlayers) > 1 { // 有其他玩家
 		playerList := make([]map[string]interface{}, 0)
-		viewRangeSq := VIEW_RANGE * VIEW_RANGE
 
 		for _, p := range existingPlayers {
 			if p.ID != c.ID {
-				// 只添加视野范围内的玩家
-				dx := p.X - c.X
-				dy := p.Y - c.Y
-				distanceSq := dx*dx + dy*dy
-
-				if distanceSq <= viewRangeSq {
-					playerList = append(playerList, map[string]interface{}{
-						"role_id": p.ID,
-						"name":    p.Name,
-						"map_id":  p.MapID,
-						"x":       p.X,
-						"y":       p.Y,
-					})
-				}
+				// 发送同地图所有玩家（不限制视野范围，防止坐标未初始化导致漏发）
+				playerList = append(playerList, map[string]interface{}{
+					"role_id": p.ID,
+					"name":    p.Name,
+					"map_id":  p.MapID,
+					"x":       p.X,
+					"y":       p.Y,
+				})
 			}
 		}
 		if len(playerList) > 0 {
@@ -834,6 +832,7 @@ func (c *Client) handleEnterMap(body []byte) {
 					"players": playerList,
 				}),
 			})
+			log.Printf("发送地图玩家列表给玩家%d: 共%d个玩家", c.ID, len(playerList))
 		}
 	}
 
@@ -851,6 +850,40 @@ func (c *Client) handleEnterMap(body []byte) {
 		}),
 	})
 	log.Printf("广播完成: mapID=%d, 当前在线玩家数=%d", c.MapID, len(GlobalManager.GetMapPlayers(c.MapID)))
+
+	// 双重保障：如果 notifyGameServiceEnterMap 还没发送怪物列表，这里再发一次
+	// （通常同步调用已经发送过了，这里是容错机制）
+	if c.Registered {
+		go func() {
+			time.Sleep(100 * time.Millisecond) // 等待 100ms 确保 GameService 已处理完
+			instance := common.GetInstanceByMapID(c.MapID)
+			if instance == nil {
+				return
+			}
+
+			client := &http.Client{Timeout: 3 * time.Second}
+			resp, err := client.Get(instance.URL + fmt.Sprintf("/api/map/%d/monsters", c.MapID))
+			if err != nil || resp.StatusCode != http.StatusOK {
+				return
+			}
+			defer resp.Body.Close()
+
+			var result map[string]interface{}
+			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+				return
+			}
+
+			if monsters, ok := result["data"].([]interface{}); ok && len(monsters) > 0 {
+				log.Printf("handleEnterMap 补充推送: 地图%d 有 %d 个怪物", c.MapID, len(monsters))
+				GlobalManager.SendToClient(c.ID, &Message{
+					Type: CmdSync,
+					Data: mustMarshal(map[string]interface{}{
+						"monster_list": monsters,
+					}),
+				})
+			}
+		}()
+	}
 }
 
 func (c *Client) handleLogout() {
@@ -1605,8 +1638,8 @@ func (c *Client) handleRoleSelect(body []byte) {
 		"gold":    role.Gold,
 	}))
 
-	// 通知 GameService 进入地图
-	go c.notifyGameServiceEnterMap()
+	// 通知 GameService 进入地图（同步执行，确保怪物列表在 EnterMap 之前准备好）
+	c.notifyGameServiceEnterMap()
 }
 
 // notifyGameServiceEnterMap 通知 GameService 玩家进入地图
@@ -1641,7 +1674,7 @@ func (c *Client) notifyGameServiceEnterMap() {
 	}
 	defer resp.Body.Close()
 
-	// 解析响应，获取实际的坐标
+	// 解析响应，获取实际的坐标和怪物列表
 	if resp.StatusCode == http.StatusOK {
 		var result map[string]interface{}
 		if err := json.NewDecoder(resp.Body).Decode(&result); err == nil {
@@ -1651,6 +1684,22 @@ func (c *Client) notifyGameServiceEnterMap() {
 			if y, ok := result["y"].(float64); ok {
 				c.Y = int(y)
 			}
+
+			// 提取怪物列表并推送给客户端
+			if monsterList, ok := result["monster_list"].([]interface{}); ok && len(monsterList) > 0 {
+				log.Printf("玩家 %d 进入地图 %d，收到 %d 个怪物", c.ID, c.MapID, len(monsterList))
+
+				// 发送怪物列表给客户端
+				GlobalManager.SendToClient(c.ID, &Message{
+					Type: CmdSync, // 使用同步消息类型
+					Data: mustMarshal(map[string]interface{}{
+						"monster_list": monsterList,
+					}),
+				})
+			} else {
+				log.Printf("玩家 %d 进入地图 %d，没有怪物或怪物列表为空", c.ID, c.MapID)
+			}
+
 			log.Printf("玩家 %d 进入地图 %d，实际坐标: x=%d, y=%d", c.ID, c.MapID, c.X, c.Y)
 		}
 	}
@@ -1875,12 +1924,11 @@ func handleInternalBroadcast(w http.ResponseWriter, r *http.Request) {
 	// 根据MsgType获取命令码
 	cmd := getMsgTypeCmd(req.MsgType)
 
-	// 发送到广播通道（To=0表示广播）
-	GlobalManager.broadcast <- &Message{
-		To:   0, // 0表示广播
+	// 使用 BroadcastToMap 只广播给同地图玩家（更高效）
+	GlobalManager.BroadcastToMap(req.MapID, &Message{
 		Type: cmd,
 		Data: msgData,
-	}
+	})
 
 	log.Printf("广播消息到地图: mapID=%d, msgType=%s, cmd=%d", req.MapID, req.MsgType, cmd)
 	w.WriteHeader(http.StatusOK)
@@ -1948,6 +1996,12 @@ func getMsgTypeCmd(msgType string) uint16 {
 		return CmdDeBuff
 	case "map_event":
 		return CmdMapEvent
+	case "monster_position_update":
+		return CmdMonsterPositionUpdate
+	case "monster_spawn":
+		return CmdMonsterSpawn
+	case "monster_death":
+		return CmdMonsterDeath
 	default:
 		return 0
 	}

@@ -119,7 +119,7 @@ class Game {
     if (window.ParticleSystem) {
       this.particleSystem = new window.ParticleSystem(this.ui.canvas);
     }
-    
+
     // 初始化特效管理器
     if (window.EffectManager) {
       this.effectManager = window.EffectManager;
@@ -127,10 +127,22 @@ class Game {
         this.effectManager.setParticleSystem(this.particleSystem);
       }
     }
-    
+
     // 初始化音效系统
     if (window.SoundManager) {
       this.soundManager = window.SoundManager;
+    }
+    
+    // 初始化战斗系统
+    if (window.BattleSystem) {
+      this.battleSystem = new window.BattleSystem(this);
+      
+      // 设置点击怪物回调（自动攻击）
+      this.battleSystem.onMonsterClick = (monster) => {
+        console.log(`选中怪物: ${monster.name}`);
+        // 可以在这里显示怪物信息面板
+        this.showMonsterInfo(monster);
+      };
     }
     
     // UI管理器已自动初始化
@@ -403,6 +415,13 @@ class Game {
         if (this.state === 'playing') {
           this.updateOtherPlayers(deltaTime);
         }
+        
+        // 渲染战斗系统（怪物、血条、伤害飘字）
+        if (this.battleSystem && this.state === 'playing') {
+          const tileSize = this.mapEngine?.tileSize || 48;
+          this.battleSystem.render(this.ui.canvas.getContext('2d'), tileSize);
+        }
+        
         // 绘制其他玩家
         this.renderPlayers();
       } catch (e) {
@@ -410,16 +429,24 @@ class Game {
       }
     };
     
-    // 设置移动前检查回调，用于玩家间碰撞检测
+    // 设置移动前检查回调，用于玩家和怪物碰撞检测
     this.mapEngine.onBeforeMove = (path) => {
-      // 过滤掉路径上被其他玩家占据的格子
+      // 过滤掉路径上被其他玩家或怪物占据的格子
       if (!path || path.length === 0) return path;
-      
+
       const filteredPath = path.filter(point => {
         // 检查是否有其他玩家在这个格子
         for (const [id, player] of this.players) {
           if (player.x === point.x && player.y === point.y) {
             return false; // 这个点被其他玩家占据，跳过
+          }
+        }
+        // 检查是否有活着的怪物在这个格子
+        if (this.battleSystem && this.battleSystem.monsters) {
+          for (const [id, monster] of this.battleSystem.monsters) {
+            if (monster.status !== 4 && monster.x === point.x && monster.y === point.y) {
+              return false; // 这个点被怪物占据，跳过
+            }
           }
         }
         return true;
@@ -450,12 +477,20 @@ class Game {
       return filteredPath;
     };
     
-    // 设置玩家阻挡检查回调
+    // 设置玩家阻挡检查回调（玩家 + 怪物）
     this.mapEngine.onPlayerBlocked = (x, y) => {
       // 检查是否有其他玩家在这个格子
       for (const [id, player] of this.players) {
         if (player.x === x && player.y === y) {
-          return true; // 被阻挡
+          return true; // 被玩家阻挡
+        }
+      }
+      // 检查是否有活着的怪物在这个格子
+      if (this.battleSystem && this.battleSystem.monsters) {
+        for (const [id, monster] of this.battleSystem.monsters) {
+          if (monster.status !== 4 && monster.x === x && monster.y === y) {
+            return true; // 被怪物阻挡
+          }
         }
       }
       return false;
@@ -500,19 +535,112 @@ class Game {
       }
     };
     
-    // 设置玩家移动回调，用于更新小地图
-    // 添加节流：只在玩家位置改变时更新小地图
+    // 设置玩家移动回调（带服务端碰撞检测验证）
+    this.lastMoveTime = 0; // 上次移动验证时间
+    this.moveValidationPending = false; // 是否有待处理的验证
+    this.isMovementBlocked = false; // 当前是否被阻挡
+    
     this.mapEngine.onPlayerMove = (x, y) => {
-      if (this.player.x !== x || this.player.y !== y) {
+      // 未进入游戏前不处理移动（防止登录页面发送无效请求）
+      if (this.state !== 'playing') return;
+      
+      if (this.player.x === x && this.player.y === y) {
+        this.isMovementBlocked = false; // 位置没变，解除阻挡
+        return;
+      }
+      
+      const now = Date.now();
+      
+      // 节流：每150ms最多发送一次验证请求
+      if (now - this.lastMoveTime < 150 || this.moveValidationPending) {
+        return; // 等待上一次验证完成
+      }
+      
+      // 标记为待验证状态（不预更新位置！）
+      this.lastMoveTime = now;
+      this.moveValidationPending = true;
+      
+      const targetX = Math.floor(x);
+      const targetY = Math.floor(y);
+      
+      console.log(`🚶 发送移动验证: (${this.player.x},${this.player.y}) → (${targetX},${targetY})`);
+      
+      const requestBody = {
+        role_id: this.player.id,
+        map_id: this.currentMap?.id || 1,
+        x: targetX,
+        y: targetY
+      };
+      
+      // 先验证，通过后才移动（避免回滚卡顿）
+      fetch('http://localhost:8082/api/map/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+      })
+      .then(async (response) => {
+        this.moveValidationPending = false;
+        
+        let result;
+        try {
+          result = await response.json();
+        } catch (e) {
+          result = { success: true };
+        }
+        
+        if (!response.ok || (result && !result.success && result.code !== 200)) {
+          // ❌ 被阻挡：保持原地不动，显示提示
+          console.warn(`🛡️ 移动被阻挡: ${result?.msg}`);
+          
+          this.isMovementBlocked = true;
+          
+          // 显示阻挡提示（在目标位置显示）
+          this.showFloatingText('⛔ 前方有障碍', x, y, '#FF6600');
+          
+          // 停止移动（防止继续尝试）
+          if (this.mapEngine && this.mapEngine.stopMoving) {
+            this.mapEngine.stopMoving();
+          }
+          return;
+        }
+        
+        // ✅ 验证通过：更新位置
+        this.isMovementBlocked = false;
         this.player.x = x;
         this.player.y = y;
-        // 节流：小地图更新频率限制为每200ms一次
-        if (!this.minimapUpdateTimer) {
-          this.minimapUpdateTimer = setTimeout(() => {
-            this.renderMiniMap();
-            this.minimapUpdateTimer = null;
-          }, 200);
+        
+        // 同步位置到网关服务（更新视野范围计算用的位置）
+        if (window.GameWS && window.GameWS.send) {
+          window.GameWS.send(Protocol.CMD_MOVE, {
+            x: targetX,
+            y: targetY
+          });
         }
+        
+        console.log(`✅ 移动成功: (${targetX},${targetY})`);
+      })
+      .catch(error => {
+        this.moveValidationPending = false;
+        console.error('❌ 验证请求失败:', error.message);
+        // 网络错误时允许本地移动（离线容错）
+        this.player.x = x;
+        this.player.y = y;
+        
+        // 同步位置到网关服务
+        if (window.GameWS && window.GameWS.send) {
+          window.GameWS.send(Protocol.CMD_MOVE, {
+            x: targetX,
+            y: targetY
+          });
+        }
+      });
+      
+      // 更新小地图
+      if (!this.minimapUpdateTimer) {
+        this.minimapUpdateTimer = setTimeout(() => {
+          this.renderMiniMap();
+          this.minimapUpdateTimer = null;
+        }, 200);
       }
     };
     // FPS 更新回调
@@ -1270,9 +1398,123 @@ class Game {
     ctx.beginPath();
     ctx.arc(selfDrawX, selfDrawY, 3, 0, Math.PI * 2);
     ctx.fill();
+    
+    // ===== 绘制怪物（红色小点）=====
+    this.drawMiniMapMonsters(ctx, selfDrawX, selfDrawY, scale);
+    
+    // ===== 添加坐标显示 =====
+    this.drawMiniMapCoordinates(ctx, canvasWidth, canvasHeight);
+  }
+  
+  /**
+   * 在小地图上绘制怪物
+   */
+  drawMiniMapMonsters(ctx, selfDrawX, selfDrawY, scale) {
+    if (!this.battleSystem || !this.battleSystem.monsters) return;
+    
+    const monsters = this.battleSystem.monsters;
+    if (monsters.size === 0) return;
+    
+    ctx.save();
+    
+    // 怪物颜色：普通=红色，精英=紫色，BOSS=深红
+    const monsterColors = {
+      0: '#FF4444', // 普通 - 红色
+      1: '#AA44FF', // 精英 - 紫色  
+      2: '#CC0000'  // BOSS - 深红色
+    };
+    
+    monsters.forEach((monster, id) => {
+      if (monster.status === 4) return; // 跳过死亡怪物
+      
+      // 使用平滑后的渲染坐标（与主地图一致）
+      const renderPos = this.battleSystem.getMonsterRenderPos(monster);
+      
+      // 跳过坐标无效的怪物
+      if (!renderPos || renderPos.x === undefined || renderPos.y === undefined ||
+          renderPos.x === null || renderPos.y === null) {
+        return;
+      }
+      
+      // 计算怪物相对于玩家的偏移（使用渲染坐标）
+      const dx = renderPos.x - this.player.x;
+      const dy = renderPos.y - this.player.y;
+      
+      // 计算小地图上的绝对位置
+      const miniX = selfDrawX + dx * scale;
+      const miniY = selfDrawY + dy * scale;
+      
+      // 只绘制视野范围内的怪物（稍微放大范围）
+      if (miniX < -10 || miniX > ctx.canvas.width + 10 ||
+          miniY < -10 || miniY > ctx.canvas.height + 10) {
+        return;
+      }
+      
+      // 选择颜色
+      const color = monsterColors[monster.type] || monsterColors[0];
+      
+      // 绘制怪物点（比玩家稍大一点以区分）
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(miniX, miniY, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // BOSS或精英加边框突出显示
+      if (monster.type >= 1) {
+        ctx.strokeStyle = '#FFF';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(miniX, miniY, 3, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    });
+    
+    ctx.restore();
+  }
+  
+  /**
+   * 绘制小地图坐标信息（地图名称 + 当前坐标）
+   */
+  drawMiniMapCoordinates(ctx, canvasWidth, canvasHeight) {
+    const mapName = this.currentMap?.name || `地图${this.player.mapId || 1}`;
+    const coordText = `${mapName} 当前坐标 ${Math.round(this.player.x)}:${Math.round(this.player.y)}`;
+    
+    ctx.save();
+    
+    // 设置文字样式
+    ctx.font = 'bold 11px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    
+    // 文字背景（半透明黑色，提高可读性）
+    const textMetrics = ctx.measureText(coordText);
+    const textWidth = textMetrics.width;
+    const textHeight = 14;
+    const paddingX = 8;
+    const paddingY = 4;
+    const bgX = (canvasWidth - textWidth) / 2 - paddingX;
+    const bgY = canvasHeight - textHeight - paddingY * 2;
+    
+    // 绘制背景
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.fillRect(bgX, bgY, textWidth + paddingX * 2, textHeight + paddingY * 2);
+    
+    // 绘制边框
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bgX, bgY, textWidth + paddingX * 2, textHeight + paddingY * 2);
+    
+    // 绘制文字（白色）
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(coordText, canvasWidth / 2, canvasHeight - textHeight - paddingY);
+    
+    ctx.restore();
   }
   
   handleMessage(cmd, data) {
+    // 调试：打印所有收到的消息（临时）
+    console.log(`📨 收到消息 cmd=${cmd}, data=`, JSON.stringify(data).substring(0, 200));
+    
     switch (cmd) {
       case Protocol.CMD_LOGIN:
         this.handleLoginResponse(data);
@@ -1354,13 +1596,17 @@ class Game {
         this.handleMapEvent(data);
         break;
         
+      case Protocol.CMD_MONSTER_POSITION_UPDATE:
+        this.handleMonsterPositionUpdate(data);
+        break;
+        
       default:
         console.log('未知消息:', cmd, data);
     }
   }
   
   handleMoveMessage(data) {
-    if (data.role_id === this.player.id) {
+    if (data.role_id == this.player.id) {
       // 自己的移动 - 服务器广播回来的当前位置
       this.player.x = data.x || 0;
       this.player.y = data.y || 0;
@@ -1835,6 +2081,66 @@ class Game {
   }
   
   /**
+   * 处理怪物位置更新（服务端AI同步）
+   */
+  handleMonsterPositionUpdate(data) {
+    if (!this.battleSystem || !data.monsters) return;
+    
+    console.log(`📍 收到怪物位置同步: 地图${data.map_id}, ${data.monsters.length}个怪物`);
+    
+    let updatedCount = 0;
+    let missingCount = 0;
+    const now = Date.now();
+    
+    // 更新每个怪物的位置和状态（使用平滑移动系统）
+    data.monsters.forEach(monsterData => {
+      const monster = this.battleSystem.monsters.get(monsterData.instance_id);
+      
+      if (monster) {
+        // ✅ 碰撞检测：防止怪物位置与玩家重叠
+        if (monsterData.x === this.player.x && monsterData.y === this.player.y) {
+          console.log(`  🛡️ 怪物#${monsterData.instance_id} 位置(${monsterData.x},${monsterData.y})与玩家重叠，拒绝更新`);
+          // 保持怪物当前位置不变，只更新血量和状态
+        } else {
+          // 使用平滑移动更新位置
+          const oldX = monster.x;
+          const oldY = monster.y;
+
+          // 调用BattleSystem的平滑移动方法
+          this.battleSystem.updateMonsterPosition(monster, monsterData.x, monsterData.y, now);
+
+          // 记录位置变化（调试用）
+          if (oldX !== monsterData.x || oldY !== monsterData.y) {
+            console.log(`  🔄 怪物#${monsterData.instance_id} 位置更新: (${oldX},${oldY}) → (${monsterData.x},${monsterData.y}) [平滑移动中]`);
+          }
+        }
+        
+        // 更新血量（如果变化）
+        if (monsterData.hp !== undefined && monsterData.hp !== monster.hp) {
+          monster.hp = monsterData.hp;
+          if (monster.hp <= 0) {
+            monster.status = 4; // 标记为死亡
+            console.log(`💀 怪物 ${monster.name} 已死亡（位置同步）`);
+          }
+        }
+        
+        // 更新AI状态（用于调整移动速度）
+        if (monsterData.state !== undefined) {
+          monster.aiState = monsterData.state;
+        }
+        
+        updatedCount++;
+      } else {
+        // ⚠️ 怪物不存在于本地，尝试从同步数据创建
+        console.log(`  ⚠️ 未知怪物 instance_id=${monsterData.instance_id}, 尝试创建...`);
+        missingCount++;
+      }
+    });
+    
+    console.log(`✅ 同步完成: 更新=${updatedCount}, 缺失=${missingCount}`);
+  }
+  
+  /**
    * 触发地图事件特效
    */
   triggerMapEventEffect(eventType, x, y) {
@@ -1860,10 +2166,10 @@ class Game {
     console.log('this.players:', this.players);
     
     data.players.forEach(player => {
-      if (player.role_id === this.player.id) return; // 跳过自己
+      if (player.role_id == this.player.id) return; // 跳过自己（使用宽松比较防止类型不一致）
       
-      const px = player.x || 10;
-      const py = player.y || 10;
+      const px = player.x || 0;
+      const py = player.y || 0;
       const tileSize = this.mapEngine?.tileSize || 48;
       this.players.set(player.role_id, {
         id: player.role_id,
@@ -1880,14 +2186,25 @@ class Game {
   }
   
   handleEnterMap(data) {
+    console.log('handleEnterMap 收到完整数据:', JSON.stringify(data));
+    
     // 如果是自己的进入地图响应，使用服务端返回的坐标更新位置
-    if (data.role_id === this.player.id) {
+    if (data.role_id == this.player.id) {
       console.log(`进入地图响应: 服务端返回位置 (${data.x}, ${data.y})，客户端当前位置 (${this.player.x}, ${this.player.y})`);
       // 使用服务端返回的坐标更新玩家位置
       if (data.x !== undefined) this.player.x = data.x;
       if (data.y !== undefined) this.player.y = data.y;
       // 同步到地图引擎
       this.syncPlayerPosition();
+      
+      // 处理服务端推送的怪物列表
+      if (data.monster_list && Array.isArray(data.monster_list)) {
+        console.log(`进入地图: 收到 ${data.monster_list.length} 个怪物`);
+        this.handleMonsterList({ monsters: data.monster_list });
+      } else {
+        console.log('进入地图: 没有收到怪物列表或格式错误', data.monster_list);
+      }
+      
       return;
     }
     
@@ -1897,10 +2214,10 @@ class Game {
     this.players.set(data.role_id, {
       id: data.role_id,
       name: data.name || `玩家${data.role_id}`,
-      x: data.x || 10,
-      y: data.y || 10,
-      lastScreenX: (data.x || 10) * tileSize, // 初始化屏幕位置
-      lastScreenY: (data.y || 10) * tileSize,
+      x: data.x || 0,
+      y: data.y || 0,
+      lastScreenX: (data.x || 0) * tileSize, // 初始化屏幕位置
+      lastScreenY: (data.y || 0) * tileSize,
       hp: data.hp || 100,
       maxHp: data.maxHp || 100
     });
@@ -1909,6 +2226,7 @@ class Game {
   }
   
   handleLeaveMap(data) {
+    if (data.role_id == this.player.id) return; // 不删除自己
     this.players.delete(data.role_id);
     this.addChatMessage('系统', `${data.name || '玩家'}离开了地图`, 'system');
     
@@ -1947,6 +2265,12 @@ class Game {
       this.player.x = data.x;
       this.player.y = data.y;
       this.syncPlayerPosition();
+    }
+    
+    // 处理服务端推送的怪物列表（通过同步消息）
+    if (data.monster_list && Array.isArray(data.monster_list)) {
+      console.log(`收到同步消息: 怪物列表更新，数量=${data.monster_list.length}`);
+      this.handleMonsterList({ monsters: data.monster_list });
     }
 
     this.updatePlayerUI();
@@ -2027,8 +2351,38 @@ class Game {
     const clickY = e.clientY - rect.top;
     
     // 计算点击的地图坐标（考虑摄像机偏移）
-    const tileX = Math.floor((clickX + this.mapEngine.camera.offsetX) / (this.currentMap?.tileWidth || 32));
-    const tileY = Math.floor((clickY + this.mapEngine.camera.offsetY) / (this.currentMap?.tileHeight || 32));
+    const tileSize = this.mapEngine?.tileSize || 48;
+    const tileX = Math.floor((clickX + this.mapEngine.camera.offsetX) / tileSize);
+    const tileY = Math.floor((clickY + this.mapEngine.camera.offsetY) / tileSize);
+    
+    // 优先检查是否点击到怪物
+    if (this.battleSystem) {
+      const clickedMonster = this.battleSystem.handleClick(tileX, tileY);
+      if (clickedMonster) {
+        console.log(`点击怪物: ${clickedMonster.name}`);
+        // 如果距离足够近，自动发起攻击
+        if (this.isInAttackRange(clickedMonster)) {
+          this.attackTarget(clickedMonster.id);
+        } else {
+          // 先移动到怪物附近
+          this.moveToTarget(clickedMonster.x, clickedMonster.y);
+          this.showFloatingText(`接近目标...`, tileX, tileY, '#FFFF00');
+        }
+        return; // 点击了怪物，不进行移动
+      }
+      
+      // 检查是否点击了掉落物品
+      if (this.battleSystem.droppedItems && this.battleSystem.droppedItems.length > 0) {
+        const nearbyItem = this.battleSystem.checkPickupRange(this.player.x, this.player.y);
+        if (nearbyItem || this.isNearDroppedItem(tileX, tileY)) {
+          const itemToPickup = nearbyItem || this.getDroppedItemAt(tileX, tileY);
+          if (itemToPickup) {
+            this.pickupDroppedItem(itemToPickup);
+            return; // 拾取了物品，不进行移动
+          }
+        }
+      }
+    }
     
     // 简单移动到点击位置
     this.tryMove(tileX, tileY);
@@ -2044,6 +2398,15 @@ class Game {
     for (const [id, player] of this.players) {
       if (player.x === newX && player.y === newY) {
         return; // 玩家碰撞
+      }
+    }
+
+    // 检查怪物碰撞 - 目标位置是否有活着的怪物
+    if (this.battleSystem && this.battleSystem.monsters) {
+      for (const [id, monster] of this.battleSystem.monsters) {
+        if (monster.status !== 4 && monster.x === newX && monster.y === newY) {
+          return; // 怪物碰撞
+        }
       }
     }
     
@@ -2093,9 +2456,175 @@ class Game {
     // 设置冷却
     const cooldown = skillId === 0 ? 1000 : 3000;
     this.skillCooldowns.set(skillId, Date.now() + cooldown);
+  }
+  
+  /**
+   * 检查目标是否在攻击范围内
+   */
+  isInAttackRange(target) {
+    const distance = Math.hypot(this.player.x - target.x, this.player.y - target.y);
+    return distance <= 1.5; // 近战攻击范围1.5格
+  }
+  
+  /**
+   * 发起攻击（攻击选中的目标）
+   */
+  attackTarget(targetId) {
+    if (this.battleSystem) {
+      this.battleSystem.attack(targetId);
+    }
+  }
+  
+  /**
+   * 检查是否靠近掉落物品
+   */
+  isNearDroppedItem(tileX, tileY) {
+    if (!this.battleSystem || !this.battleSystem.droppedItems) return false;
     
-    // 更新UI
-    this.updateSkillUI();
+    for (const item of this.battleSystem.droppedItems) {
+      const dx = Math.abs(item.x - tileX);
+      const dy = Math.abs(item.y - tileY);
+      if (dx <= 1 && dy <= 1) {
+        return true;
+      }
+    }
+    return false;
+  }
+  
+  /**
+   * 获取指定位置的掉落物品
+   */
+  getDroppedItemAt(tileX, tileY) {
+    if (!this.battleSystem || !this.battleSystem.droppedItems) return null;
+    
+    for (const item of this.battleSystem.droppedItems) {
+      const dx = Math.abs(item.x - tileX);
+      const dy = Math.abs(item.y - tileY);
+      if (dx <= 1 && dy <= 1) {
+        return item;
+      }
+    }
+    return null;
+  }
+  
+  /**
+   * 拾取掉落物品
+   */
+  async pickupDroppedItem(item) {
+    if (!item || !this.battleSystem) return;
+    
+    // 检查距离，如果太远先移动过去
+    const distance = Math.hypot(this.player.x - item.x, this.player.y - item.y);
+    if (distance > 1.5) {
+      this.moveToTarget(item.x, item.y);
+      this.showFloatingText('移动拾取...', this.player.x, this.player.y, '#FFFF00');
+      return;
+    }
+    
+    // 执行拾取
+    await this.battleSystem.pickupItem(item);
+  }
+  
+  /**
+   * 移动到目标位置附近
+   */
+  moveToTarget(targetX, targetY) {
+    // 计算目标附近的可移动位置（距离目标1格）
+    // 这里简化处理，直接移动到目标位置（会在接近时自动停止）
+    this.tryMove(targetX, targetY);
+  }
+  
+  /**
+   * 显示怪物信息面板
+   */
+  showMonsterInfo(monster) {
+    if (!monster) return;
+    
+    console.log(`=== 怪物信息 ===`);
+    console.log(`名称: ${monster.name}`);
+    console.log(`等级: ${monster.level || 1}`);
+    console.log(`血量: ${monster.hp}/${monster.maxHp}`);
+    
+    // 可以在UI上显示怪物信息（TODO：实现怪物信息面板UI）
+    // 暂时使用浮动文字显示
+    const typeNames = {0: '普通', 1: '精英', 2: 'BOSS'};
+    this.showFloatingText(
+      `[${typeNames[monster.type] || '普通'}] Lv.${monster.level || 1} ${monster.name}`,
+      monster.x,
+      monster.y - 1.5,
+      monster.type === 2 ? '#FF0000' : (monster.type === 1 ? '#9B59B6' : '#FFFFFF')
+    );
+  }
+  
+  /**
+   * 显示浮动文字
+   */
+  showFloatingText(text, x, y, color = '#FFFFFF') {
+    if (!this.uiManager) return;
+    
+    // 使用UIManager的toast或自定义飘字
+    if (this.uiManager.showFloatingText) {
+      this.uiManager.showFloatingText({
+        text: text,
+        x: x,
+        y: y,
+        color: color,
+        duration: 1500
+      });
+    } else {
+      // 回退方案：使用控制台输出
+      console.log(`[浮动文字] ${text} at (${x}, ${y})`);
+    }
+  }
+  
+  /**
+   * 处理服务端推送的怪物列表
+   */
+  handleMonsterList(data) {
+    if (this.battleSystem && data.monsters) {
+      this.battleSystem.updateMonsters(data.monsters);
+    }
+  }
+  
+  /**
+   * 处理战斗结果（从WebSocket接收）
+   */
+  handleBattleResult(data) {
+    if (!data) return;
+    
+    switch (data.cmd || data.type) {
+      case 'damage':
+      case 'attack_result':
+        // 伤害结果
+        if (this.battleSystem) {
+          this.battleSystem.handleDamageResult(data);
+        }
+        
+        // 更新玩家自身血量（如果被攻击）
+        if (data.target_id === this.player.id) {
+          this.player.hp = data.current_hp || this.player.hp;
+          if (data.is_dead) {
+            this.onPlayerDeath();
+          }
+          this.updatePlayerUI();
+        }
+        break;
+        
+      case 'monster_list':
+        // 怪物列表更新
+        this.handleMonsterList(data);
+        break;
+        
+      case 'exp_gain':
+        // 经验获取
+        console.log(`获得经验: ${data.exp}`);
+        this.player.exp = (this.player.exp || 0) + (data.exp || 0);
+        this.updatePlayerUI();
+        break;
+        
+      default:
+        console.log('未知战斗消息:', data);
+    }
   }
   
   /**
@@ -2205,6 +2734,14 @@ class Game {
         if (this.effectSettings.enableParticles && this.effectManager) {
           this.effectManager.update(deltaTime);
         }
+        
+        // 更新怪物平滑移动系统
+        if (this.battleSystem) {
+          this.battleSystem.update(deltaTime);
+        }
+        
+        // 实时更新小地图（显示怪物平滑移动）
+        this.renderMiniMap();
       }
       
       requestAnimationFrame(loop);
@@ -2314,6 +2851,9 @@ class Game {
     
     // 绘制其他玩家（仅视野范围内）
     this.players.forEach(player => {
+      // 防御性检查：绝对不渲染自己（防止role_id类型不一致导致的重复渲染）
+      if (player.id == this.player.id) return;
+
       // 视野裁剪：跳过视野外的玩家，减少绘制
       if (player.x < minX || player.x > maxX || player.y < minY || player.y > maxY) {
         return;
@@ -2477,6 +3017,11 @@ const Protocol = window.Protocol = {
   CMD_NPC_TALK: 3005,
   CMD_NPC_TRADE: 3006,
   CMD_MAP_EVENT: 3007,
+  
+  // 怪物相关 3101-3120
+  CMD_MONSTER_POSITION_UPDATE: 3101, // 怪物位置同步
+  CMD_MONSTER_SPAWN: 3102,          // 怪物生成
+  CMD_MONSTER_DEATH: 3103,          // 怪物死亡
   
   // 武学相关 4001-4020
   CMD_SKILL_LEARN: 4001,

@@ -2,6 +2,7 @@ package gamemap
 
 import (
 	"errors"
+	"fmt"
 	common "game-server/Common"
 	"log"
 	"sync"
@@ -9,6 +10,19 @@ import (
 
 // 全局地图服务实例
 var globalService *Service
+
+// 全局实体碰撞检测器（由main.go注入）
+var globalEntityChecker interface {
+	CheckMonsterCollision(mapID uint32, x, y int, playerID uint64) (bool, uint64)
+}
+
+// SetEntityChecker 注入实体碰撞检测器
+func SetEntityChecker(checker interface {
+	CheckMonsterCollision(mapID uint32, x, y int, playerID uint64) (bool, uint64)
+}) {
+	globalEntityChecker = checker
+	log.Printf("✅ 地图服务: 实体碰撞检测器已注入")
+}
 
 // GetService 获取全局地图服务实例
 func GetService() *Service {
@@ -403,8 +417,23 @@ func (s *Service) UpdatePlayerPosition(roleID uint64, mapID uint32, x, y int) er
 		player.Y = y
 		return nil
 	}
-
 	return errors.New("玩家不在此地图")
+}
+
+// GetPlayerPosition 获取玩家当前位置（用于路径验证）
+func (s *Service) GetPlayerPosition(mapID uint32, roleID uint64) (*PlayerInstance, bool) {
+	lm, ok := s.GetLoadedMap(mapID)
+	if !ok {
+		return nil, false
+	}
+
+	lm.mu.RLock()
+	defer lm.mu.RUnlock()
+
+	if player, exists := lm.Players[roleID]; exists {
+		return player, true
+	}
+	return nil, false
 }
 
 // MovePlayerResult 移动结果
@@ -414,28 +443,140 @@ type MovePlayerResult struct {
 	Y       int
 }
 
-// MovePlayer 移动玩家
+// MovePlayer 移动玩家（带完整碰撞检测和路径插值验证）
 func (s *Service) MovePlayer(roleID uint64, mapID uint32, x, y int) (*MovePlayerResult, error) {
-	// 检查位置是否合法
+	log.Printf("🚶 MovePlayer: 玩家 %d 请求移动到 地图%d (%d,%d)", roleID, mapID, x, y)
+
+	// 0. 获取玩家当前位置（用于路径插值）
+	var startX, startY int
+	if player, exists := s.GetPlayerPosition(mapID, roleID); exists {
+		startX = player.X
+		startY = player.Y
+		log.Printf("📍 MovePlayer: 起始位置 (%d,%d) → 目标 (%d,%d)", startX, startY, x, y)
+	} else {
+		// 新玩家，从目标位置开始
+		startX = x
+		startY = y
+	}
+
+	// 1. 路径插值验证：检查起点→终点的所有中间点
+	if startX != x || startY != y {
+		pathBlocked, blockedX, blockedY, blockerID := s.validatePath(mapID, roleID, startX, startY, x, y)
+		if pathBlocked {
+			log.Printf("🛡️ MovePlayer: 路径被阻挡! 在(%d,%d)处被实体 %d 阻挡",
+				blockedX, blockedY, blockerID)
+
+			// 返回路径上最后一个安全点作为建议位置
+			return &MovePlayerResult{
+				Success: false,
+				X:       blockedX,
+				Y:       blockedY,
+			}, errors.New(fmt.Sprintf("移动路径被阻挡在(%d,%d)，无法到达目标", blockedX, blockedY))
+		}
+	}
+
+	// 2. 检查目标位置是否合法（地图瓦片碰撞）
 	if s.IsPositionBlocked(mapID, x, y) {
+		log.Printf("❌ MovePlayer: 位置被地图瓦片阻挡 - 玩家 %d → (%d,%d)", roleID, x, y)
 		return &MovePlayerResult{Success: false, X: x, Y: y}, errors.New("位置被阻挡")
 	}
 
-	// 更新玩家位置
+	// 3. 检查怪物碰撞（防止穿怪）- 双重保险
+	if globalEntityChecker != nil {
+		hasCollision, monsterID := globalEntityChecker.CheckMonsterCollision(mapID, x, y, roleID)
+		if hasCollision {
+			log.Printf("🛡️ MovePlayer: 玩家 %d 被怪物 %d 阻挡! 目标位置(%d,%d)被占用",
+				roleID, monsterID, x, y)
+			return &MovePlayerResult{Success: false, X: x, Y: y}, errors.New("位置有怪物阻挡")
+		}
+	}
+
+	// 4. 更新玩家位置
 	if err := s.UpdatePlayerPosition(roleID, mapID, x, y); err != nil {
 		// 如果玩家不在地图中，尝试先进入地图
 		if err.Error() == "玩家不在此地图" {
+			log.Printf("⚠️ MovePlayer: 玩家 %d 不在地图%d，尝试进入...", roleID, mapID)
 			if enterErr := s.EnterMap(roleID, mapID, x, y); enterErr != nil {
+				log.Printf("❌ MovePlayer: 进入地图失败 - %v", enterErr)
 				return &MovePlayerResult{Success: false, X: x, Y: y}, enterErr
 			}
 		} else {
+			log.Printf("❌ MovePlayer: 更新位置失败 - %v", err)
 			return &MovePlayerResult{Success: false, X: x, Y: y}, err
 		}
 	}
 
+	log.Printf("✅ MovePlayer: 玩家 %d 移动成功 → 地图%d (%d,%d)", roleID, mapID, x, y)
+
 	// 注意：不再每次移动都写数据库，只在离开地图时保存
 
 	return &MovePlayerResult{Success: true, X: x, Y: y}, nil
+}
+
+// validatePath 验证移动路径上的所有点（Bresenham直线算法 + 碰撞检测）
+func (s *Service) validatePath(mapID uint32, roleID uint64, x0, y0, x1, y1 int) (bool, int, int, uint64) {
+	// 使用Bresenham直线算法获取路径上的所有整数坐标点
+	points := getLinePoints(x0, y0, x1, y1)
+
+	log.Printf("🔍 路径验证: 共 %d 个检查点", len(points))
+
+	// 跳过起点（已经在当前位置，肯定是安全的）
+	for i := 1; i < len(points); i++ {
+		px, py := points[i].x, points[i].y
+
+		// 检查地图瓦片碰撞
+		if s.IsPositionBlocked(mapID, px, py) {
+			log.Printf("❌ 路径点(%d,%d): 地图瓦片阻挡", px, py)
+			return true, px, py, 0
+		}
+
+		// 检查实体碰撞（怪物/其他玩家）
+		if globalEntityChecker != nil {
+			hasCollision, entityID := globalEntityChecker.CheckMonsterCollision(mapID, px, py, roleID)
+			if hasCollision {
+				log.Printf("🛡️ 路径点(%d,%d): 被实体 %d 阻挡", px, py, entityID)
+				return true, px, py, entityID
+			}
+		}
+	}
+
+	return false, 0, 0, 0 // 路径畅通
+}
+
+// getLinePoints Bresenham直线算法：获取两点间的所有整数坐标点
+func getLinePoints(x0, y0, x1, y1 int) []struct{ x, y int } {
+	var points []struct{ x, y int }
+
+	dx := abs(x1 - x0)
+	dy := abs(y1 - y0)
+	sx, sy := 1, 1
+	if x0 > x1 {
+		sx = -1
+	}
+	if y0 > y1 {
+		sy = -1
+	}
+	err := dx - dy
+
+	for {
+		points = append(points, struct{ x, y int }{x0, y0})
+
+		if x0 == x1 && y0 == y1 {
+			break
+		}
+
+		e2 := 2 * err
+		if e2 > -dy {
+			err -= dy
+			x0 += sx
+		}
+		if e2 < dx {
+			err += dx
+			y0 += sy
+		}
+	}
+
+	return points
 }
 
 // GetPlayersInView 获取视野范围内的玩家
@@ -457,6 +598,38 @@ func (s *Service) GetPlayersInView(mapID uint32, centerX, centerY, viewRange int
 		}
 	}
 	return result
+}
+
+// GetAllPlayersInMap 获取地图上所有玩家（用于碰撞检测）
+func (s *Service) GetAllPlayersInMap(mapID uint32) []PlayerInstance {
+	if mapID == 0 {
+		// 如果mapID为0，返回所有地图的所有玩家（性能较差，仅用于特殊情况）
+		var allPlayers []PlayerInstance
+		s.mu.RLock()
+		for _, lm := range s.loadedMaps {
+			lm.mu.RLock()
+			for _, p := range lm.Players {
+				allPlayers = append(allPlayers, *p)
+			}
+			lm.mu.RUnlock()
+		}
+		s.mu.RUnlock()
+		return allPlayers
+	}
+
+	lm, ok := s.GetLoadedMap(mapID)
+	if !ok {
+		return nil
+	}
+
+	lm.mu.RLock()
+	defer lm.mu.RUnlock()
+
+	players := make([]PlayerInstance, 0, len(lm.Players))
+	for _, p := range lm.Players {
+		players = append(players, *p)
+	}
+	return players
 }
 
 // GetMapInfo 获取地图信息(包含在线玩家数)

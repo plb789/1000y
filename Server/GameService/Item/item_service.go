@@ -2,7 +2,7 @@ package item
 
 import (
 	"errors"
-	"game-server/Common"
+	common "game-server/Common"
 	"time"
 )
 
@@ -20,7 +20,7 @@ func NewService() *Service {
 
 // GetItemBase 获取道具基础信息
 func (s *Service) GetItemBase(itemID uint32) (map[string]interface{}, error) {
-	config := Common.GetItemConfig(itemID)
+	config := common.GetItemConfig(itemID)
 	if config == nil {
 		return nil, errors.New("道具不存在")
 	}
@@ -37,8 +37,8 @@ func (s *Service) GetItemBase(itemID uint32) (map[string]interface{}, error) {
 		"equip_type":     config.EquipType,
 		"hp_bonus":       config.HpBonus,
 		"mp_bonus":       config.MpBonus,
-		"attack_bonus":    config.AttackBonus,
-		"defense_bonus":   config.DefenseBonus,
+		"attack_bonus":   config.AttackBonus,
+		"defense_bonus":  config.DefenseBonus,
 		"speed_bonus":    config.SpeedBonus,
 		"hp_restore":     config.HpRestore,
 		"mp_restore":     config.MpRestore,
@@ -55,7 +55,7 @@ func (s *Service) GetItemBase(itemID uint32) (map[string]interface{}, error) {
 // GetAllItems 获取所有道具基础信息
 func (s *Service) GetAllItems() ([]map[string]interface{}, error) {
 	var result []map[string]interface{}
-	for _, config := range Common.GetAllItemConfig() {
+	for _, config := range common.GetAllItemConfig() {
 		result = append(result, map[string]interface{}{
 			"id":             config.ID,
 			"name":           config.Name,
@@ -69,8 +69,8 @@ func (s *Service) GetAllItems() ([]map[string]interface{}, error) {
 			"equip_type":     config.EquipType,
 			"hp_bonus":       config.HpBonus,
 			"mp_bonus":       config.MpBonus,
-			"attack_bonus":    config.AttackBonus,
-			"defense_bonus":   config.DefenseBonus,
+			"attack_bonus":   config.AttackBonus,
+			"defense_bonus":  config.DefenseBonus,
 			"speed_bonus":    config.SpeedBonus,
 			"hp_restore":     config.HpRestore,
 			"mp_restore":     config.MpRestore,
@@ -89,7 +89,7 @@ func (s *Service) GetAllItems() ([]map[string]interface{}, error) {
 // GetItemsByType 获取指定类型道具
 func (s *Service) GetItemsByType(itemType uint8) ([]map[string]interface{}, error) {
 	var result []map[string]interface{}
-	for _, config := range Common.GetAllItemConfig() {
+	for _, config := range common.GetAllItemConfig() {
 		if config.Type == itemType {
 			result = append(result, map[string]interface{}{
 				"id":             config.ID,
@@ -104,8 +104,8 @@ func (s *Service) GetItemsByType(itemType uint8) ([]map[string]interface{}, erro
 				"equip_type":     config.EquipType,
 				"hp_bonus":       config.HpBonus,
 				"mp_bonus":       config.MpBonus,
-				"attack_bonus":    config.AttackBonus,
-				"defense_bonus":   config.DefenseBonus,
+				"attack_bonus":   config.AttackBonus,
+				"defense_bonus":  config.DefenseBonus,
 				"speed_bonus":    config.SpeedBonus,
 				"hp_restore":     config.HpRestore,
 				"mp_restore":     config.MpRestore,
@@ -125,17 +125,17 @@ func (s *Service) GetItemsByType(itemType uint8) ([]map[string]interface{}, erro
 // AddItem 添加道具到背包
 // 返回: 成功添加的格子索引, 错误信息
 func (s *Service) AddItem(roleID uint64, itemID uint32, count uint32, isBind uint8) (int, error) {
-	return Common.DBItemAdd(roleID, itemID, count, isBind)
+	return common.DBItemAdd(roleID, itemID, count, isBind)
 }
 
 // GetBagItems 获取角色背包所有物品
 func (s *Service) GetBagItems(roleID uint64) ([]map[string]interface{}, error) {
-	return Common.DBItemGetBag(roleID)
+	return common.DBItemGetBag(roleID)
 }
 
 // GetBagItemByGrid 获取指定格子的物品
 func (s *Service) GetBagItemByGrid(roleID uint64, gridIndex int) (*map[string]interface{}, error) {
-	bagItems, err := Common.DBItemGetBag(roleID)
+	bagItems, err := common.DBItemGetBag(roleID)
 	if err != nil {
 		return nil, err
 	}
@@ -150,47 +150,52 @@ func (s *Service) GetBagItemByGrid(roleID uint64, gridIndex int) (*map[string]in
 
 // MoveItem 移动物品(整理背包)
 func (s *Service) MoveItem(roleID uint64, fromGrid, toGrid int) error {
-	return Common.DBItemMove(roleID, fromGrid, toGrid)
+	return common.DBItemMove(roleID, fromGrid, toGrid)
 }
 
 // SplitItem 拆分物品
 func (s *Service) SplitItem(roleID uint64, gridIndex int, count uint32) error {
-	return Common.DBItemSplit(roleID, gridIndex, count)
+	return common.DBItemSplit(roleID, gridIndex, count)
 }
 
 // UseItem 使用道具
 func (s *Service) UseItem(roleID uint64, gridIndex int) error {
-	return Common.DBItemUse(roleID, gridIndex)
+	return common.DBItemUse(roleID, gridIndex)
 }
 
 // DiscardItem 丢弃物品
 func (s *Service) DiscardItem(roleID uint64, gridIndex int) error {
-	return Common.DBItemDiscard(roleID, gridIndex)
+	return common.DBItemDiscard(roleID, gridIndex)
+}
+
+// DestroyItem 销毁物品(不可恢复，与丢弃语义一致，由DBService处理)
+func (s *Service) DestroyItem(roleID uint64, gridIndex int) error {
+	return common.DBItemDiscard(roleID, gridIndex)
 }
 
 // SellItem 出售物品
 func (s *Service) SellItem(roleID uint64, gridIndex int) (int, error) {
-	return Common.DBItemSell(roleID, gridIndex)
+	return common.DBItemSell(roleID, gridIndex)
 }
 
 // EquipItem 穿戴装备
 func (s *Service) EquipItem(roleID uint64, bagItemID uint64) error {
-	return Common.DBItemEquip(roleID, bagItemID)
+	return common.DBItemEquip(roleID, bagItemID)
 }
 
 // UnequipItem 卸下装备
 func (s *Service) UnequipItem(roleID uint64, equipType uint8) error {
-	return Common.DBItemUnequip(roleID, equipType)
+	return common.DBItemUnequip(roleID, equipType)
 }
 
 // GetEquippedItems 获取已穿戴装备
 func (s *Service) GetEquippedItems(roleID uint64) ([]map[string]interface{}, error) {
-	return Common.DBItemGetEquipped(roleID)
+	return common.DBItemGetEquipped(roleID)
 }
 
 // GetEquipmentByType 获取指定位置的装备
 func (s *Service) GetEquipmentByType(roleID uint64, equipType uint8) (*map[string]interface{}, error) {
-	equips, err := Common.DBItemGetEquipped(roleID)
+	equips, err := common.DBItemGetEquipped(roleID)
 	if err != nil {
 		return nil, err
 	}
@@ -205,19 +210,19 @@ func (s *Service) GetEquipmentByType(roleID uint64, equipType uint8) (*map[strin
 
 // GetEmptySlotCount 获取背包空位数
 func (s *Service) GetEmptySlotCount(roleID uint64) (int, error) {
-	return Common.DBItemGetEmptyCount(roleID)
+	return common.DBItemGetEmptyCount(roleID)
 }
 
 // ClearBag 清空背包(通过DBService API)
 func (s *Service) ClearBag(roleID uint64) error {
-	bagItems, err := Common.DBItemGetBag(roleID)
+	bagItems, err := common.DBItemGetBag(roleID)
 	if err != nil {
 		return err
 	}
 
 	for _, item := range bagItems {
 		if gridIndex, ok := item["grid_index"].(float64); ok {
-			Common.DBItemDiscard(roleID, int(gridIndex))
+			common.DBItemDiscard(roleID, int(gridIndex))
 		}
 	}
 	return nil
@@ -225,7 +230,7 @@ func (s *Service) ClearBag(roleID uint64) error {
 
 // findEmptySlot 查找空格子
 func (s *Service) findEmptySlot(roleID uint64) (int, error) {
-	bagItems, err := Common.DBItemGetBag(roleID)
+	bagItems, err := common.DBItemGetBag(roleID)
 	if err != nil {
 		return -1, err
 	}
@@ -250,20 +255,20 @@ func (s *Service) findEmptySlot(roleID uint64) (int, error) {
 
 // GetItemBaseInfo 获取道具基础信息(内部转换用)
 type ItemBaseInfo struct {
-	ID           uint32  `json:"id"`
-	Name         string  `json:"name"`
-	Type         uint8   `json:"type"`
-	Quality      uint8   `json:"quality"`
-	LevelReq     uint32  `json:"level_req"`
-	StackMax     uint32  `json:"stack_max"`
-	Price        int     `json:"price"`
-	HpRestore    int     `json:"hp_restore"`
-	MpRestore    int     `json:"mp_restore"`
-	IsDropable   bool    `json:"is_dropable"`
-	IsSellable   bool    `json:"is_sellable"`
+	ID            uint32 `json:"id"`
+	Name          string `json:"name"`
+	Type          uint8  `json:"type"`
+	Quality       uint8  `json:"quality"`
+	LevelReq      uint32 `json:"level_req"`
+	StackMax      uint32 `json:"stack_max"`
+	Price         int    `json:"price"`
+	HpRestore     int    `json:"hp_restore"`
+	MpRestore     int    `json:"mp_restore"`
+	IsDropable    bool   `json:"is_dropable"`
+	IsSellable    bool   `json:"is_sellable"`
 	IsDestroyable bool   `json:"is_destroyable"`
-	EquipType    uint8   `json:"equip_type"`
-	Description  string  `json:"description"`
+	EquipType     uint8  `json:"equip_type"`
+	Description   string `json:"description"`
 }
 
 // GetBagItemInfo 获取背包物品信息(内部转换用)
