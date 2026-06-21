@@ -34,7 +34,8 @@ class Game {
       pkMode: 0,    // PK模式: 0=和平, 1=队伍, 2=帮派, 3=全体
       pkValue: 0,   // PK值（红名程度）
       weaponId: 0,  // 装备武器ID
-      isDead: false // 是否死亡（死亡时禁止移动和攻击）
+      isDead: false, // 是否死亡（死亡时禁止移动和攻击）
+      gender: 0     // 性别: 0=男, 1=女
     };
 
     // 角色列表
@@ -172,6 +173,16 @@ class Game {
     // 初始化背包
     if (window.Inventory) {
       this.inventory = new window.Inventory(this);
+    }
+
+    // 初始化HUD系统
+    if (window.HUDSystem) {
+      this.hudSystem = new window.HUDSystem(this);
+    }
+
+    // 初始化任务系统
+    if (window.QuestSystem) {
+      this.questSystem = new window.QuestSystem(this);
     }
     
     // 特效设置
@@ -421,6 +432,15 @@ class Game {
   
   initMapEngine() {
     this.mapEngine = new MapEngine(this.ui.canvas);
+
+    // 初始化卡通人形角色渲染器
+    if (window.CharacterRenderer) {
+      this.mapEngine.characterRenderer = new CharacterRenderer();
+      // 保存引用以便触发攻击动画
+      this.characterRenderer = this.mapEngine.characterRenderer;
+      // 异步加载角色资源清单（找不到则自动降级到矢量模式）
+      this.characterRenderer.loadResources();
+    }
 
     // 绑定画布鼠标事件：悬停显示目标详情，点击选中目标或移动
     this.bindCanvasTargetEvents();
@@ -828,6 +848,32 @@ class Game {
     
     // 初始化外观选项
     this.initAppearanceOptions();
+
+    // 初始化性别选择高亮
+    this.initGenderOptions();
+  }
+
+  /**
+   * 初始化性别选择交互
+   */
+  initGenderOptions() {
+    const options = document.querySelectorAll('.gender-option');
+    options.forEach(opt => {
+      // 默认选中"男"
+      const isChecked = opt.dataset.gender === '0';
+      opt.classList.toggle('selected', isChecked);
+      if (isChecked) {
+        const radio = opt.querySelector('input[type="radio"]');
+        if (radio) radio.checked = true;
+      }
+      // 绑定点击事件
+      opt.onclick = () => {
+        options.forEach(o => o.classList.remove('selected'));
+        opt.classList.add('selected');
+        const radio = opt.querySelector('input[type="radio"]');
+        if (radio) radio.checked = true;
+      };
+    });
   }
   
   initAppearanceOptions() {
@@ -942,6 +988,7 @@ class Game {
       this.player.mapId = data.map_id || 1;
       this.player.x = data.x || 0;
       this.player.y = data.y || 0;
+      this.player.gender = data.gender || 0; // 性别: 0=男, 1=女
       
       // 进入游戏
       this.enterGame();
@@ -1629,10 +1676,102 @@ class Game {
       case Protocol.CMD_MONSTER_DEATH:
         this.handleMonsterDeath(data);
         break;
-        
+
+      case Protocol.CMD_ROLE_INFO:
+        this.handleRoleInfo(data);
+        break;
+
+      case Protocol.CMD_ROLE_ATTRIB:
+        this.handleRoleAttrib(data);
+        break;
+
+      case Protocol.CMD_QUEST_LIST:
+        if (this.questSystem) this.questSystem.handleQuestList(data);
+        break;
+
+      case Protocol.CMD_QUEST_PROGRESS:
+        if (this.questSystem) this.questSystem.handleQuestProgress(data);
+        break;
+
+      case Protocol.CMD_QUEST_REWARD:
+        // 奖励领取结果
+        if (data.code === 0) {
+          if (this.uiManager?.toast) {
+            this.uiManager.toast('任务奖励已领取', 'success', 2000);
+          }
+          // 更新玩家数据
+          if (data.exp_gain) this.player.exp = (this.player.exp || 0) + data.exp_gain;
+          if (data.gold_gain) this.player.gold = (this.player.gold || 0) + data.gold_gain;
+          this.updatePlayerUI();
+        }
+        break;
+
       default:
         console.log('未知消息:', cmd, data);
     }
+  }
+
+  /**
+   * 处理服务端推送的角色信息
+   */
+  handleRoleInfo(data) {
+    if (!data) return;
+    // 更新玩家基础信息
+    if (data.name) this.player.name = data.name;
+    if (data.level) this.player.level = data.level;
+    if (data.gold !== undefined) this.player.gold = data.gold;
+    if (data.exp !== undefined) this.player.exp = data.exp;
+    if (data.max_exp !== undefined) this.player.maxExp = data.max_exp;
+    if (data.pk_mode !== undefined) this.player.pkMode = data.pk_mode;
+    if (data.pk_value !== undefined) this.player.pkValue = data.pk_value;
+
+    // 更新技能列表
+    if (data.skills) {
+      this.player.skills = data.skills;
+      if (this.skillBar) {
+        this.skillBar.setSkills(data.skills);
+      }
+    }
+
+    // 更新背包数据
+    if (data.bag_items !== undefined) {
+      if (this.inventory) {
+        this.inventory.items = data.bag_items || [];
+        this.inventory.refreshItems();
+      }
+    }
+
+    // 更新装备数据
+    if (data.equipped_items !== undefined) {
+      this.player.equippedItems = data.equipped_items || [];
+      if (this.inventory) {
+        this.inventory.equipments = data.equipped_items || [];
+        this.inventory.refreshEquipments();
+        this.inventory.updateAttributes();
+      }
+    }
+
+    this.updatePlayerUI();
+  }
+
+  /**
+   * 处理服务端推送的角色属性
+   */
+  handleRoleAttrib(data) {
+    if (!data) return;
+    // 更新战斗属性
+    if (data.hp !== undefined) this.player.hp = data.hp;
+    if (data.max_hp !== undefined) this.player.maxHp = data.max_hp;
+    if (data.mp !== undefined) this.player.mp = data.mp;
+    if (data.max_mp !== undefined) this.player.maxMp = data.max_mp;
+    if (data.attack !== undefined) this.player.attack = data.attack;
+    if (data.defense !== undefined) this.player.defense = data.defense;
+    if (data.speed !== undefined) this.player.speed = data.speed;
+    if (data.hit !== undefined) this.player.hit = data.hit;
+    if (data.dodge !== undefined) this.player.dodge = data.dodge;
+    if (data.crit !== undefined) this.player.crit = data.crit;
+
+    this.updatePlayerUI();
   }
   
   handleMoveMessage(data) {
@@ -2373,6 +2512,11 @@ class Game {
         this.battleSystem.showDrops(drops, monster.x, monster.y);
       }
 
+      // 通知任务系统击杀怪物（用于击杀类任务进度）
+      if (killerId === this.player.id && this.questSystem) {
+        this.questSystem.onMonsterKilled(monster.baseId || monsterId);
+      }
+
       // 延迟移除死亡怪物（3秒后）
       // 怪物复活时服务端会通过 monster_spawn 消息通知前端重新创建
       setTimeout(() => {
@@ -2903,6 +3047,15 @@ class Game {
     // 播放技能音效
     this.playSkillSound(skillId);
 
+    // 触发角色施法动画（技能ID>0 时为施法，=0 时为普通攻击挥砍）
+    if (this.characterRenderer) {
+      if (skillId > 0) {
+        this.characterRenderer.playCast();
+      } else {
+        this.characterRenderer.playAttack();
+      }
+    }
+
     // 设置冷却（普通攻击1秒，技能3秒）
     const cooldown = skillId === 0 ? 1000 : 3000;
     this.skillCooldowns.set(skillId, Date.now() + cooldown);
@@ -3340,21 +3493,37 @@ class Game {
   }
   
   updatePlayerUI() {
-    this.ui.roleName.textContent = this.player.name || '游客';
-    this.ui.roleLevel.textContent = `Lv.${this.player.level}`;
-    this.ui.roleGold.textContent = `💰 ${this.player.gold}`;
-    this.ui.roleHP.textContent = `❤️ ${this.player.hp}/${this.player.maxHp}`;
-    this.ui.roleMP.textContent = `💧 ${this.player.mp}/${this.player.maxMp}`;
+    // 优先使用 HUD 系统更新（如果可用）
+    if (this.hudSystem) {
+      this.hudSystem.update();
+    }
+
+    // 兼容旧UI元素
+    if (this.ui) {
+      if (this.ui.roleName) this.ui.roleName.textContent = this.player.name || '游客';
+      if (this.ui.roleLevel) this.ui.roleLevel.textContent = `Lv.${this.player.level}`;
+      if (this.ui.roleGold) this.ui.roleGold.textContent = `💰 ${this.player.gold}`;
+      if (this.ui.roleHP) this.ui.roleHP.textContent = `❤️ ${this.player.hp}/${this.player.maxHp}`;
+      if (this.ui.roleMP) this.ui.roleMP.textContent = `💧 ${this.player.mp}/${this.player.maxMp}`;
+    }
     
-    // 属性面板
-    document.getElementById('attrHP').textContent = `${this.player.hp}/${this.player.maxHp}`;
-    document.getElementById('attrMP').textContent = `${this.player.mp}/${this.player.maxMp}`;
-    document.getElementById('attrAttack').textContent = this.player.attack;
-    document.getElementById('attrDefense').textContent = this.player.defense;
-    document.getElementById('attrSpeed').textContent = this.player.speed;
-    document.getElementById('attrHit').textContent = this.player.hit;
-    document.getElementById('attrDodge').textContent = this.player.dodge;
-    document.getElementById('attrCrit').textContent = this.player.crit + '%';
+    // 属性面板（兼容旧元素）
+    const attrHP = document.getElementById('attrHP');
+    if (attrHP) attrHP.textContent = `${this.player.hp}/${this.player.maxHp}`;
+    const attrMP = document.getElementById('attrMP');
+    if (attrMP) attrMP.textContent = `${this.player.mp}/${this.player.maxMp}`;
+    const attrAttack = document.getElementById('attrAttack');
+    if (attrAttack) attrAttack.textContent = this.player.attack;
+    const attrDefense = document.getElementById('attrDefense');
+    if (attrDefense) attrDefense.textContent = this.player.defense;
+    const attrSpeed = document.getElementById('attrSpeed');
+    if (attrSpeed) attrSpeed.textContent = this.player.speed;
+    const attrHit = document.getElementById('attrHit');
+    if (attrHit) attrHit.textContent = this.player.hit;
+    const attrDodge = document.getElementById('attrDodge');
+    if (attrDodge) attrDodge.textContent = this.player.dodge;
+    const attrCrit = document.getElementById('attrCrit');
+    if (attrCrit) attrCrit.textContent = this.player.crit + '%';
   }
   
   startGameLoop() {
@@ -3529,12 +3698,33 @@ class Game {
       ctx.beginPath();
       ctx.arc(screenX + tileSize / 2, screenY + tileSize / 2, tileSize / 3, 0, Math.PI * 2);
       ctx.fill();
-      
-      // 名字
-      ctx.fillStyle = '#fff';
-      ctx.font = '12px Microsoft YaHei';
-      ctx.textAlign = 'center';
-      ctx.fillText(player.name, screenX + tileSize / 2, screenY - 5);
+
+      // 使用卡通人形渲染器绘制其他玩家（如果可用）
+      if (this.characterRenderer) {
+        const cx = screenX + tileSize / 2;
+        const cy = screenY + tileSize - 2;
+        // 复用渲染器绘制（不改变自身状态，使用临时状态）
+        const savedState = this.characterRenderer.state;
+        const savedDir = this.characterRenderer.direction;
+        const savedTime = this.characterRenderer.stateTime;
+        this.characterRenderer.state = 'idle';
+        this.characterRenderer.draw(ctx, cx, cy, tileSize, {
+          gender: player.gender || 0,
+          name: player.name,
+          isSelf: false,
+          isMoving: false
+        });
+        // 恢复自身状态
+        this.characterRenderer.state = savedState;
+        this.characterRenderer.direction = savedDir;
+        this.characterRenderer.stateTime = savedTime;
+      } else {
+        // 名字（无渲染器时显示）
+        ctx.fillStyle = '#fff';
+        ctx.font = '12px Microsoft YaHei';
+        ctx.textAlign = 'center';
+        ctx.fillText(player.name, screenX + tileSize / 2, screenY - 5);
+      }
       
       // 条件血条：仅在被怪物攻击后5秒内显示
       if (player.lastAttackedTime && (Date.now() - player.lastAttackedTime < 5000)) {
@@ -3743,7 +3933,15 @@ const Protocol = window.Protocol = {
   CMD_SYNC: 5003,
   CMD_ROLE_LIST: 5004,
   CMD_ROLE_CREATE: 5005,
-  CMD_ROLE_SELECT: 5006
+  CMD_ROLE_SELECT: 5006,
+
+  // 任务相关 6001-6020
+  CMD_QUEST_LIST: 6001,        // 任务列表
+  CMD_QUEST_ACCEPT: 6002,     // 接取任务
+  CMD_QUEST_COMPLETE: 6003,   // 完成任务
+  CMD_QUEST_ABANDON: 6004,    // 放弃任务
+  CMD_QUEST_PROGRESS: 6005,   // 任务进度更新
+  CMD_QUEST_REWARD: 6006      // 领取奖励
 };
 
 // 游戏单例

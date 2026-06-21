@@ -28,7 +28,26 @@ class BattleSystem {
     // ===== 平滑移动系统 =====
     this.smoothMoveEnabled = true; // 是否启用平滑移动
     this.lastFrameTime = 0; // 上一帧时间戳
-    
+
+    // ===== 战斗动画增强系统 =====
+    // 受击动画：怪物被击中时闪烁、震动
+    // 格式: { monsterId: { startTime, duration, intensity, isCrit } }
+    this.hitAnimations = new Map();
+
+    // 屏幕震动效果
+    this.screenShake = { intensity: 0, duration: 0, startTime: 0 };
+
+    // 死亡动画：怪物死亡时淡出、放大
+    // 格式: { monsterId: { startTime, duration, originalAlpha } }
+    this.deathAnimations = new Map();
+
+    // 攻击者动作动画：玩家攻击时的挥砍动作
+    // 格式: { startTime, duration, direction, attackerId }
+    this.attackerAnimations = [];
+
+    // 连击数追踪（用于显示连击）
+    this.comboTracker = { count: 0, lastHitTime: 0, timeout: 2000 };
+
     console.log('战斗系统初始化完成');
   }
   
@@ -337,42 +356,89 @@ class BattleSystem {
   drawMonster(ctx, monster, x, y, tileSize) {
     const size = tileSize * 0.8;
     const halfSize = size / 2;
-    
+
     // 根据怪物类型选择颜色
     let color = '#FF6B6B'; // 普通 - 红色
     if (monster.type === 1) color = '#9B59B6'; // 精英 - 紫色
     if (monster.type === 2) color = '#E74C3C'; // BOSS - 深红
-    
-    // 绘制怪物身体（圆形）
+
+    // ===== 受击动画：闪烁与震动 =====
+    let shakeX = 0, shakeY = 0;
+    let flashColor = null;
+    let alpha = 1.0;
+    let scale = 1.0;
+
+    const hitAnim = this.hitAnimations.get(monster.id);
+    if (hitAnim) {
+      const elapsed = Date.now() - hitAnim.startTime;
+      if (elapsed < hitAnim.duration) {
+        const progress = elapsed / hitAnim.duration;
+        const decay = 1 - progress;
+        const shakeAmount = hitAnim.intensity * decay * 4;
+        shakeX = (Math.random() - 0.5) * shakeAmount * 2;
+        shakeY = (Math.random() - 0.5) * shakeAmount * 2;
+        if (Math.floor(elapsed / 60) % 2 === 0) {
+          flashColor = hitAnim.isCrit ? '#FFEB3B' : '#FFFFFF';
+        }
+        if (hitAnim.isCrit) {
+          scale = 1 + 0.15 * decay;
+        }
+      } else {
+        this.hitAnimations.delete(monster.id);
+      }
+    }
+
+    // ===== 死亡动画：淡出与放大 =====
+    const deathAnim = this.deathAnimations.get(monster.id);
+    if (deathAnim) {
+      const elapsed = Date.now() - deathAnim.startTime;
+      if (elapsed < deathAnim.duration) {
+        const progress = elapsed / deathAnim.duration;
+        alpha = 1 - progress;
+        scale = 1 + progress * 0.5;
+      } else {
+        this.deathAnimations.delete(monster.id);
+      }
+    }
+
     ctx.save();
-    ctx.fillStyle = color;
+    ctx.globalAlpha = alpha;
+
+    const drawX = x + shakeX;
+    const drawY = y + shakeY;
+    ctx.translate(drawX, drawY);
+    ctx.scale(scale, scale);
+    ctx.translate(-drawX, -drawY);
+
+    // 绘制怪物身体（圆形）
+    ctx.fillStyle = flashColor || color;
     ctx.strokeStyle = '#000';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(x, y, halfSize * 0.7, 0, Math.PI * 2);
+    ctx.arc(drawX, drawY, halfSize * 0.7, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
-    
+
     // 绘制眼睛
     ctx.fillStyle = '#FFF';
     ctx.beginPath();
-    ctx.arc(x - size * 0.15, y - size * 0.1, size * 0.12, 0, Math.PI * 2);
-    ctx.arc(x + size * 0.15, y - size * 0.1, size * 0.12, 0, Math.PI * 2);
+    ctx.arc(drawX - size * 0.15, drawY - size * 0.1, size * 0.12, 0, Math.PI * 2);
+    ctx.arc(drawX + size * 0.15, drawY - size * 0.1, size * 0.12, 0, Math.PI * 2);
     ctx.fill();
-    
+
     // 绘制瞳孔
     ctx.fillStyle = '#000';
     ctx.beginPath();
-    ctx.arc(x - size * 0.15, y - size * 0.08, size * 0.06, 0, Math.PI * 2);
-    ctx.arc(x + size * 0.15, y - size * 0.08, size * 0.06, 0, Math.PI * 2);
+    ctx.arc(drawX - size * 0.15, drawY - size * 0.08, size * 0.06, 0, Math.PI * 2);
+    ctx.arc(drawX + size * 0.15, drawY - size * 0.08, size * 0.06, 0, Math.PI * 2);
     ctx.fill();
-    
+
     // 绘制名称
     ctx.fillStyle = '#FFF';
     ctx.font = 'bold 10px Arial';
     ctx.textAlign = 'center';
-    ctx.fillText(monster.name, x, y - halfSize - 5);
-    
+    ctx.fillText(monster.name, drawX, drawY - halfSize - 5);
+
     ctx.restore();
   }
   
@@ -612,12 +678,21 @@ class BattleSystem {
    */
   playAttackAnimation(fromX, fromY, toX, toY) {
     const tileSize = this.game.mapEngine?.tileSize || 48;
-    
+
+    // 触发角色攻击动画（卡通人形挥砍动作）
+    if (this.game.characterRenderer) {
+      // 根据目标位置设置朝向
+      const dx = toX - fromX;
+      const dy = toY - fromY;
+      this.game.characterRenderer.setDirection(dx, dy);
+      this.game.characterRenderer.playAttack();
+    }
+
     // 触发技能特效（普通攻击）
     if (this.game.triggerSkillEffect) {
       this.game.triggerSkillEffect(0); // 0=普通攻击
     }
-    
+
     // 播放攻击音效
     if (this.game.playSkillSound) {
       this.game.playSkillSound(0);
@@ -668,6 +743,26 @@ class BattleSystem {
     const targetPos = monster ? { x: monster.x, y: monster.y } : { x: data.target_x, y: data.target_y };
     this.addDamageNumber(targetPos.x, targetPos.y, damage, isCrit, isMiss, isBlocked);
 
+    // 触发受击动画（怪物被击中时闪烁、震动）
+    if (monster && !isMiss) {
+      this.triggerHitAnimation(targetId, isCrit, isBlocked);
+    }
+
+    // 暴击时触发屏幕震动
+    if (isCrit && this.game.effectSettings?.enableScreenShake) {
+      this.triggerScreenShake(isCrit ? 8 : 3, 300);
+    }
+
+    // 死亡动画
+    if (isDead && monster) {
+      this.triggerDeathAnimation(targetId);
+    }
+
+    // 连击数追踪（玩家攻击时）
+    if (data.attacker_id === this.game.player.id && !isMiss && damage > 0) {
+      this.updateComboTracker();
+    }
+
     // 技能攻击时显示技能名飘字
     if (data.is_skill_attack && data.skill_name) {
       const skillColor = isCrit ? '#FFD700' : '#00BFFF';
@@ -688,6 +783,83 @@ class BattleSystem {
     if (this.game.playHitSound) {
       this.game.playHitSound(isCrit, isBlocked, isMiss);
     }
+  }
+
+  /**
+   * 触发受击动画
+   */
+  triggerHitAnimation(monsterId, isCrit, isBlocked) {
+    const intensity = isCrit ? 1.0 : (isBlocked ? 0.3 : 0.6);
+    this.hitAnimations.set(monsterId, {
+      startTime: Date.now(),
+      duration: isCrit ? 400 : 250,
+      intensity: intensity,
+      isCrit: isCrit
+    });
+  }
+
+  /**
+   * 触发屏幕震动
+   */
+  triggerScreenShake(intensity, duration) {
+    this.screenShake = {
+      intensity: intensity,
+      duration: duration,
+      startTime: Date.now()
+    };
+  }
+
+  /**
+   * 触发死亡动画
+   */
+  triggerDeathAnimation(monsterId) {
+    this.deathAnimations.set(monsterId, {
+      startTime: Date.now(),
+      duration: 1500,
+      originalAlpha: 1.0
+    });
+  }
+
+  /**
+   * 更新连击追踪
+   */
+  updateComboTracker() {
+    const now = Date.now();
+    if (now - this.comboTracker.lastHitTime < this.comboTracker.timeout) {
+      this.comboTracker.count++;
+    } else {
+      this.comboTracker.count = 1;
+    }
+    this.comboTracker.lastHitTime = now;
+
+    // 连击数>=3时显示连击提示
+    if (this.comboTracker.count >= 3) {
+      const player = this.game.player;
+      const color = this.comboTracker.count >= 10 ? '#FF1493' : '#FFD700';
+      this.addDamageNumber(player.x, player.y - 1.5, `${this.comboTracker.count} 连击!`, color, true);
+    }
+  }
+
+  /**
+   * 获取屏幕震动偏移
+   */
+  getScreenShakeOffset() {
+    if (this.screenShake.intensity === 0) return { x: 0, y: 0 };
+
+    const elapsed = Date.now() - this.screenShake.startTime;
+    if (elapsed > this.screenShake.duration) {
+      this.screenShake.intensity = 0;
+      return { x: 0, y: 0 };
+    }
+
+    const progress = elapsed / this.screenShake.duration;
+    const decay = 1 - progress;
+    const intensity = this.screenShake.intensity * decay;
+
+    return {
+      x: (Math.random() - 0.5) * intensity * 2,
+      y: (Math.random() - 0.5) * intensity * 2
+    };
   }
   
   /**
@@ -811,11 +983,15 @@ class BattleSystem {
    * 显示物品掉落
    */
   showDrops(drops, x, y) {
+    // 显示掉落飘字提示
     drops.forEach((itemId, index) => {
       setTimeout(() => {
-        this.addDamageNumber(x, y - 1 - index * 0.5, `+物品`, false, false, false);
+        this.addDamageNumber(x, y - 1 - index * 0.5, `+物品#${itemId}`, '#FFD700', false);
       }, index * 200);
     });
+
+    // 添加掉落物到地面（可拾取）
+    this.addDroppedItems(x, y, drops);
   }
   
   /**
@@ -946,28 +1122,38 @@ class BattleSystem {
    */
   async pickupItem(item) {
     if (!item) return false;
-    
+
     try {
       console.log(`🎒 拾取物品: ${item.itemName} x${item.quantity}`);
-      
-      // 从地面移除
+
+      // 发送拾取请求到服务端（CMD_PICKUP=2005）
+      if (window.GameWS && window.GameWS.isConnected) {
+        window.GameWS.send(window.Protocol.CMD_PICKUP || 2005, {
+          item_id: item.itemID,
+          x: Math.floor(item.x),
+          y: Math.floor(item.y),
+          quantity: item.quantity
+        });
+      }
+
+      // 从地面移除（乐观更新，服务端会推送权威背包数据）
       const index = this.droppedItems.indexOf(item);
       if (index > -1) {
         this.droppedItems.splice(index, 1);
       }
-      
+
       // 显示拾取成功提示
       this.game.showFloatingText(
-        `获得 ${item.itemName} x${item.quantity}`, 
-        this.game.player.x, 
-        this.game.player.y, 
+        `获得 ${item.itemName} x${item.quantity}`,
+        this.game.player.x,
+        this.game.player.y,
         '#00FF00'
       );
-      
+
       // 显示飘字
-      this.addDamageNumber(this.game.player.x, this.game.player.y, 
+      this.addDamageNumber(this.game.player.x, this.game.player.y,
         `+${item.itemName}`, '#00FF00', false);
-      
+
       return true;
     } catch (error) {
       console.error('拾取失败:', error);

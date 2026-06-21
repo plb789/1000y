@@ -430,6 +430,121 @@ class SkillBar {
    */
   update() {
     this.updateCooldowns();
+    this.updateMpStatus();
+  }
+
+  /**
+   * 更新MP状态（MP不足时技能图标变灰）
+   */
+  updateMpStatus() {
+    const playerMp = this.game.player?.mp || 0;
+    this.skillSlots.forEach((slot) => {
+      if (!slot.skillId) return;
+      const mpCost = parseInt(slot.mpCost.textContent) || 0;
+      if (mpCost > playerMp) {
+        slot.element.classList.add('mp-insufficient');
+      } else {
+        slot.element.classList.remove('mp-insufficient');
+      }
+    });
+  }
+
+  /**
+   * 切换技能面板显示（供HUD按钮调用）
+   */
+  toggleSkillPanel() {
+    let panel = document.getElementById('skillPanel');
+    if (!panel) {
+      panel = this.createSkillPanel();
+    }
+    if (panel.style.display === 'none' || !panel.style.display) {
+      panel.style.display = 'block';
+      this.refreshSkillPanel();
+    } else {
+      panel.style.display = 'none';
+    }
+  }
+
+  /**
+   * 创建技能面板（显示所有已学技能）
+   */
+  createSkillPanel() {
+    const panel = document.createElement('div');
+    panel.id = 'skillPanel';
+    panel.style.cssText = `
+      position: absolute;
+      top: 70px;
+      right: 20px;
+      width: 320px;
+      max-height: 400px;
+      overflow-y: auto;
+      background: rgba(10, 10, 20, 0.95);
+      border: 2px solid #e94560;
+      border-radius: 12px;
+      padding: 15px;
+      color: #fff;
+      z-index: 101;
+      display: none;
+      box-shadow: 0 0 20px rgba(233, 69, 96, 0.3);
+    `;
+    panel.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; padding-bottom:8px; border-bottom:1px solid rgba(233,69,96,0.3);">
+        <div style="color:#e94560; font-size:16px; font-weight:bold;">技能列表</div>
+        <button id="skillPanelClose" style="background:transparent; border:none; color:#999; font-size:18px; cursor:pointer;">×</button>
+      </div>
+      <div id="skillListContainer"></div>
+      <div style="margin-top:10px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.1); font-size:11px; color:#999;">
+        提示：拖动技能到快捷栏可设置快捷键
+      </div>
+    `;
+    document.body.appendChild(panel);
+
+    panel.querySelector('#skillPanelClose').addEventListener('click', () => {
+      panel.style.display = 'none';
+    });
+
+    return panel;
+  }
+
+  /**
+   * 刷新技能面板内容
+   */
+  refreshSkillPanel() {
+    const container = document.getElementById('skillListContainer');
+    if (!container) return;
+
+    const skills = this.game.player?.skills || [];
+    if (skills.length === 0) {
+      container.innerHTML = '<div style="text-align:center; color:#999; padding:20px;">暂未学习技能</div>';
+      return;
+    }
+
+    container.innerHTML = skills.map(skill => `
+      <div class="skill-item" data-skill-id="${skill.id}" style="
+        display:flex; align-items:center; gap:10px; padding:8px; margin:4px 0;
+        background:rgba(45,55,72,0.6); border:1px solid #4a5568; border-radius:6px;
+        cursor:grab;
+      ">
+        <div style="font-size:24px;">${this.getSkillIcon(skill.type)}</div>
+        <div style="flex:1;">
+          <div style="color:#fff; font-weight:bold;">${skill.name} ${skill.level ? 'Lv.' + skill.level : ''}</div>
+          <div style="color:#999; font-size:11px;">
+            ${skill.mp_cost ? `MP:${skill.mp_cost} ` : ''}
+            ${skill.cooldown ? `CD:${skill.cooldown}s ` : ''}
+            ${skill.damage ? `伤害:${skill.damage}` : ''}
+          </div>
+        </div>
+        <div style="color:#fbbf24; font-size:11px;">拖拽</div>
+      </div>
+    `).join('');
+
+    // 添加拖拽事件
+    container.querySelectorAll('.skill-item').forEach(item => {
+      item.draggable = true;
+      item.addEventListener('dragstart', (e) => {
+        e.dataTransfer.setData('skillId', item.dataset.skillId);
+      });
+    });
   }
 }
 

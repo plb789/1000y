@@ -65,6 +65,16 @@
       border-color: #e94560;
       box-shadow: 0 0 10px rgba(233, 69, 96, 0.3);
     }
+
+    .gender-option {
+      cursor: pointer;
+    }
+
+    .gender-option.selected {
+      border-color: #e94560 !important;
+      background: rgba(233, 69, 96, 0.2);
+      box-shadow: 0 0 15px rgba(233, 69, 96, 0.4);
+    }
     
     .login-btn {
       width: 100%;
@@ -624,11 +634,15 @@
       <div style="margin: 15px 0;">
         <label style="color: #fff; margin-bottom: 10px; display: block;">性别：</label>
         <div style="display: flex; gap: 15px;">
-          <label style="color: #fff; cursor: pointer;">
-            <input type="radio" name="gender" value="0" checked> 男
+          <label style="color: #fff; cursor: pointer; flex: 1; text-align: center; padding: 10px; border: 2px solid #4a5568; border-radius: 8px; transition: all 0.2s;" class="gender-option" data-gender="0">
+            <input type="radio" name="gender" value="0" checked style="display:none;">
+            <div style="font-size: 32px;">👦</div>
+            <div>男</div>
           </label>
-          <label style="color: #fff; cursor: pointer;">
-            <input type="radio" name="gender" value="1"> 女
+          <label style="color: #fff; cursor: pointer; flex: 1; text-align: center; padding: 10px; border: 2px solid #4a5568; border-radius: 8px; transition: all 0.2s;" class="gender-option" data-gender="1">
+            <input type="radio" name="gender" value="1" style="display:none;">
+            <div style="font-size: 32px;">👧</div>
+            <div>女</div>
           </label>
         </div>
       </div>
@@ -776,6 +790,9 @@
   <script src="GameLogic/UI/UIManager.js"></script>
   <script src="GameLogic/UI/SkillBar.js"></script>
   <script src="GameLogic/UI/Inventory.js"></script>
+  <script src="GameLogic/UI/HUDSystem.js"></script>
+  <script src="GameLogic/UI/QuestSystem.js"></script>
+  <script src="GameLogic/Render/CharacterRenderer.js"></script>
   <script src="GameLogic/UI/UIConfigManager.js"></script>
   <script src="GameLogic/UI/UIDynamicLoader.js"></script>
   <script src="GameLogic/UI/UIFactory.js"></script>

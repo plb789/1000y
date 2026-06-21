@@ -15,11 +15,14 @@ class Inventory {
     this.isDragging = false;
     this.draggedItem = null;
     this.draggedSlot = null;
-    
+
     // 物品数据
     this.items = [];
     this.equipments = [];
     this.questItems = [];
+
+    // 排序模式
+    this.sortMode = 'default'; // default, quality, type, name, count
     
     // 装备栏定义
     this.equipPositions = {
@@ -427,19 +430,51 @@ class Inventory {
    * 刷新物品列表
    */
   refreshItems() {
+    // 应用当前排序
+    this.applySort();
+
     // 清空所有槽位
     this.itemSlots.forEach(slot => {
       slot.item = null;
       slot.element.innerHTML = '';
       slot.element.style.borderColor = '#4a5568';
     });
-    
+
     // 填充物品
     this.items.forEach((item, index) => {
       if (index < this.itemSlots.length) {
         this.setItemToSlot(this.itemSlots[index], item);
       }
     });
+  }
+
+  /**
+   * 应用排序
+   */
+  applySort() {
+    if (!this.sortMode || this.sortMode === 'default') return;
+    this.items.sort((a, b) => {
+      switch (this.sortMode) {
+        case 'quality':
+          return (b.quality || 0) - (a.quality || 0);
+        case 'type':
+          return (a.type || 0) - (b.type || 0);
+        case 'name':
+          return (a.name || '').localeCompare(b.name || '');
+        case 'count':
+          return (b.count || 1) - (a.count || 1);
+        default:
+          return 0;
+      }
+    });
+  }
+
+  /**
+   * 设置排序模式
+   */
+  setSortMode(mode) {
+    this.sortMode = mode;
+    this.refreshItems();
   }
   
   /**
@@ -648,19 +683,32 @@ class Inventory {
    * 穿戴装备
    */
   equipItem(item) {
-    if (!item.can_equip) return;
-    
-    // 发送装备协议
+    if (!item.can_equip) {
+      if (this.game.uiManager?.toast) {
+        this.game.uiManager.toast('该物品无法装备', 'warning', 1500);
+      }
+      return;
+    }
+
+    // 检查等级要求
+    if (item.level_req && (this.game.player.level || 1) < item.level_req) {
+      if (this.game.uiManager?.toast) {
+        this.game.uiManager.toast(`需要等级 ${item.level_req} 才能装备`, 'warning', 1500);
+      }
+      return;
+    }
+
+    // 发送装备协议到服务端
     if (window.GameWS) {
       window.GameWS.send(window.Protocol.CMD_EQUIP, {
         item_id: item.id,
         equip_pos: item.equip_pos
       });
     }
-    
-    // 更新装备数据
+
+    // 更新本地装备数据（乐观更新，服务端会推送权威数据）
     const oldEquip = this.equipments.find(e => e.equip_pos === item.equip_pos);
-    
+
     // 卸下旧装备到背包
     if (oldEquip) {
       const idx = this.items.findIndex(i => i.id === oldEquip.id);
@@ -668,23 +716,36 @@ class Inventory {
         this.items.push(oldEquip);
       }
     }
-    
+
     // 移除已装备物品从背包
     const itemIdx = this.items.findIndex(i => i.id === item.id);
     if (itemIdx !== -1) {
       this.items.splice(itemIdx, 1);
     }
-    
+
     // 添加到装备栏
     const existEquipIdx = this.equipments.findIndex(e => e.equip_pos === item.equip_pos);
     if (existEquipIdx !== -1) {
       this.equipments.splice(existEquipIdx, 1);
     }
     this.equipments.push(item);
-    
+
+    // 同步到 player.equippedItems（供 HUD 角色面板使用）
+    this.game.player.equippedItems = this.equipments;
+
     this.refreshItems();
     this.refreshEquipments();
     this.updateAttributes();
+
+    // 提示装备成功
+    if (this.game.uiManager?.toast) {
+      this.game.uiManager.toast(`装备：${item.name}`, 'success', 1500);
+    }
+
+    // 更新 HUD 装备摘要
+    if (this.game.hudSystem) {
+      this.game.hudSystem.updateEquipSummary();
+    }
   }
   
   /**
@@ -693,9 +754,9 @@ class Inventory {
   unequipItem(position) {
     const slot = this.equipSlots[position];
     if (!slot || !slot.item) return;
-    
+
     const item = slot.item;
-    
+
     // 发送到服务器
     if (window.GameWS) {
       window.GameWS.send(window.Protocol.CMD_EQUIP, {
@@ -704,14 +765,27 @@ class Inventory {
         action: 'unequip'
       });
     }
-    
+
     // 移到背包
     this.equipments = this.equipments.filter(e => e.id !== item.id);
     this.items.push(item);
-    
+
+    // 同步到 player.equippedItems
+    this.game.player.equippedItems = this.equipments;
+
     this.refreshItems();
     this.refreshEquipments();
     this.updateAttributes();
+
+    // 提示卸下成功
+    if (this.game.uiManager?.toast) {
+      this.game.uiManager.toast(`卸下：${item.name}`, 'info', 1500);
+    }
+
+    // 更新 HUD 装备摘要
+    if (this.game.hudSystem) {
+      this.game.hudSystem.updateEquipSummary();
+    }
   }
   
   /**

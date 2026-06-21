@@ -63,6 +63,9 @@ class MapEngine {
     // 资源
     this.tilesetImg = null;
     this.roleAnim = null;
+
+    // 角色渲染器（卡通人形）
+    this.characterRenderer = null;
     
     // FPS 计算和帧率锁定
     this.fps = 0;
@@ -447,6 +450,28 @@ class MapEngine {
       this.roleAnim.draw(this.ctx, this.player.pixelX, this.player.pixelY);
     }
 
+    // 绘制卡通人形角色（覆盖默认圆形）
+    if (this.characterRenderer) {
+      const cx = this.player.pixelX + this.tileSize / 2;
+      const cy = this.player.pixelY + this.tileSize - 2; // 底部对齐
+      // 计算移动方向
+      let moveDx = 0, moveDy = 0;
+      if (this.player.movePath && this.player.movePath.length > 0) {
+        const next = this.player.movePath[0];
+        moveDx = next.x - this.player.x;
+        moveDy = next.y - this.player.y;
+      }
+      const isMoving = !!(moveDx || moveDy);
+      this.characterRenderer.draw(this.ctx, cx, cy, this.tileSize, {
+        gender: this.player.gender || 0,
+        name: this.player.name,
+        isSelf: true,
+        isMoving: isMoving,
+        moveDx: moveDx,
+        moveDy: moveDy
+      });
+    }
+
     // 渲染完成后调用回调（用于绘制其他玩家）
     // 注意：在 ctx.restore() 之前调用，确保摄像机偏移仍然有效
     if (this.afterRender) {
@@ -699,6 +724,7 @@ class MapEngine {
     // 基于时间的移动（确保无论帧率如何移动速度一致）
     this.updatePlayerMove(deltaTime);
     if (this.roleAnim) this.roleAnim.update();
+    if (this.characterRenderer) this.characterRenderer.update(deltaTime);
     this.render(deltaTime);
     
     // FPS 计算：每秒更新一次

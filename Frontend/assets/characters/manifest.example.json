@@ -1,0 +1,88 @@
+{
+  "version": 2,
+  "description": "角色资源清单 - 8方向版。放置此文件后 CharacterRenderer 会自动切换到资源模式；删除或重命名此文件则降级到矢量模式",
+  "base_dir": "assets/characters/",
+  "frame_duration": 120,
+  "design_size": 48,
+  "directions": ["down", "down_left", "left", "up_left", "up", "up_right", "right", "down_right"],
+  "characters": {
+    "male": {
+      "idle_down": ["male/idle_down_0.png", "male/idle_down_1.png", "male/idle_down_2.png", "male/idle_down_3.png"],
+      "idle_down_left": ["male/idle_down_left_0.png", "male/idle_down_left_1.png", "male/idle_down_left_2.png", "male/idle_down_left_3.png"],
+      "idle_left": ["male/idle_left_0.png", "male/idle_left_1.png", "male/idle_left_2.png", "male/idle_left_3.png"],
+      "idle_up_left": ["male/idle_up_left_0.png", "male/idle_up_left_1.png", "male/idle_up_left_2.png", "male/idle_up_left_3.png"],
+      "idle_up": ["male/idle_up_0.png", "male/idle_up_1.png", "male/idle_up_2.png", "male/idle_up_3.png"],
+      "idle_up_right": ["male/idle_up_right_0.png", "male/idle_up_right_1.png", "male/idle_up_right_2.png", "male/idle_up_right_3.png"],
+      "idle_right": ["male/idle_right_0.png", "male/idle_right_1.png", "male/idle_right_2.png", "male/idle_right_3.png"],
+      "idle_down_right": ["male/idle_down_right_0.png", "male/idle_down_right_1.png", "male/idle_down_right_2.png", "male/idle_down_right_3.png"],
+
+      "walk_down": ["male/walk_down_0.png", "male/walk_down_1.png", "male/walk_down_2.png", "male/walk_down_3.png", "male/walk_down_4.png", "male/walk_down_5.png"],
+      "walk_down_left": ["male/walk_down_left_0.png", "male/walk_down_left_1.png", "male/walk_down_left_2.png", "male/walk_down_left_3.png", "male/walk_down_left_4.png", "male/walk_down_left_5.png"],
+      "walk_left": ["male/walk_left_0.png", "male/walk_left_1.png", "male/walk_left_2.png", "male/walk_left_3.png", "male/walk_left_4.png", "male/walk_left_5.png"],
+      "walk_up_left": ["male/walk_up_left_0.png", "male/walk_up_left_1.png", "male/walk_up_left_2.png", "male/walk_up_left_3.png", "male/walk_up_left_4.png", "male/walk_up_left_5.png"],
+      "walk_up": ["male/walk_up_0.png", "male/walk_up_1.png", "male/walk_up_2.png", "male/walk_up_3.png", "male/walk_up_4.png", "male/walk_up_5.png"],
+      "walk_up_right": ["male/walk_up_right_0.png", "male/walk_up_right_1.png", "male/walk_up_right_2.png", "male/walk_up_right_3.png", "male/walk_up_right_4.png", "male/walk_up_right_5.png"],
+      "walk_right": ["male/walk_right_0.png", "male/walk_right_1.png", "male/walk_right_2.png", "male/walk_right_3.png", "male/walk_right_4.png", "male/walk_right_5.png"],
+      "walk_down_right": ["male/walk_down_right_0.png", "male/walk_down_right_1.png", "male/walk_down_right_2.png", "male/walk_down_right_3.png", "male/walk_down_right_4.png", "male/walk_down_right_5.png"],
+
+      "attack_down": ["male/attack_down_0.png", "male/attack_down_1.png", "male/attack_down_2.png"],
+      "attack_down_left": ["male/attack_down_left_0.png", "male/attack_down_left_1.png", "male/attack_down_left_2.png"],
+      "attack_left": ["male/attack_left_0.png", "male/attack_left_1.png", "male/attack_left_2.png"],
+      "attack_up_left": ["male/attack_up_left_0.png", "male/attack_up_left_1.png", "male/attack_up_left_2.png"],
+      "attack_up": ["male/attack_up_0.png", "male/attack_up_1.png", "male/attack_up_2.png"],
+      "attack_up_right": ["male/attack_up_right_0.png", "male/attack_up_right_1.png", "male/attack_up_right_2.png"],
+      "attack_right": ["male/attack_right_0.png", "male/attack_right_1.png", "male/attack_right_2.png"],
+      "attack_down_right": ["male/attack_down_right_0.png", "male/attack_down_right_1.png", "male/attack_down_right_2.png"],
+
+      "cast_down": ["male/cast_down_0.png", "male/cast_down_1.png", "male/cast_down_2.png", "male/cast_down_3.png"],
+      "cast_down_left": ["male/cast_down_left_0.png", "male/cast_down_left_1.png", "male/cast_down_left_2.png", "male/cast_down_left_3.png"],
+      "cast_left": ["male/cast_left_0.png", "male/cast_left_1.png", "male/cast_left_2.png", "male/cast_left_3.png"],
+      "cast_up_left": ["male/cast_up_left_0.png", "male/cast_up_left_1.png", "male/cast_up_left_2.png", "male/cast_up_left_3.png"],
+      "cast_up": ["male/cast_up_0.png", "male/cast_up_1.png", "male/cast_up_2.png", "male/cast_up_3.png"],
+      "cast_up_right": ["male/cast_up_right_0.png", "male/cast_up_right_1.png", "male/cast_up_right_2.png", "male/cast_up_right_3.png"],
+      "cast_right": ["male/cast_right_0.png", "male/cast_right_1.png", "male/cast_right_2.png", "male/cast_right_3.png"],
+      "cast_down_right": ["male/cast_down_right_0.png", "male/cast_down_right_1.png", "male/cast_down_right_2.png", "male/cast_down_right_3.png"],
+
+      "dead": ["male/dead_0.png", "male/dead_1.png"]
+    },
+    "female": {
+      "idle_down": ["female/idle_down_0.png", "female/idle_down_1.png", "female/idle_down_2.png", "female/idle_down_3.png"],
+      "idle_down_left": ["female/idle_down_left_0.png", "female/idle_down_left_1.png", "female/idle_down_left_2.png", "female/idle_down_left_3.png"],
+      "idle_left": ["female/idle_left_0.png", "female/idle_left_1.png", "female/idle_left_2.png", "female/idle_left_3.png"],
+      "idle_up_left": ["female/idle_up_left_0.png", "female/idle_up_left_1.png", "female/idle_up_left_2.png", "female/idle_up_left_3.png"],
+      "idle_up": ["female/idle_up_0.png", "female/idle_up_1.png", "female/idle_up_2.png", "female/idle_up_3.png"],
+      "idle_up_right": ["female/idle_up_right_0.png", "female/idle_up_right_1.png", "female/idle_up_right_2.png", "female/idle_up_right_3.png"],
+      "idle_right": ["female/idle_right_0.png", "female/idle_right_1.png", "female/idle_right_2.png", "female/idle_right_3.png"],
+      "idle_down_right": ["female/idle_down_right_0.png", "female/idle_down_right_1.png", "female/idle_down_right_2.png", "female/idle_down_right_3.png"],
+
+      "walk_down": ["female/walk_down_0.png", "female/walk_down_1.png", "female/walk_down_2.png", "female/walk_down_3.png", "female/walk_down_4.png", "female/walk_down_5.png"],
+      "walk_down_left": ["female/walk_down_left_0.png", "female/walk_down_left_1.png", "female/walk_down_left_2.png", "female/walk_down_left_3.png", "female/walk_down_left_4.png", "female/walk_down_left_5.png"],
+      "walk_left": ["female/walk_left_0.png", "female/walk_left_1.png", "female/walk_left_2.png", "female/walk_left_3.png", "female/walk_left_4.png", "female/walk_left_5.png"],
+      "walk_up_left": ["female/walk_up_left_0.png", "female/walk_up_left_1.png", "female/walk_up_left_2.png", "female/walk_up_left_3.png", "female/walk_up_left_4.png", "female/walk_up_left_5.png"],
+      "walk_up": ["female/walk_up_0.png", "female/walk_up_1.png", "female/walk_up_2.png", "female/walk_up_3.png", "female/walk_up_4.png", "female/walk_up_5.png"],
+      "walk_up_right": ["female/walk_up_right_0.png", "female/walk_up_right_1.png", "female/walk_up_right_2.png", "female/walk_up_right_3.png", "female/walk_up_right_4.png", "female/walk_up_right_5.png"],
+      "walk_right": ["female/walk_right_0.png", "female/walk_right_1.png", "female/walk_right_2.png", "female/walk_right_3.png", "female/walk_right_4.png", "female/walk_right_5.png"],
+      "walk_down_right": ["female/walk_down_right_0.png", "female/walk_down_right_1.png", "female/walk_down_right_2.png", "female/walk_down_right_3.png", "female/walk_down_right_4.png", "female/walk_down_right_5.png"],
+
+      "attack_down": ["female/attack_down_0.png", "female/attack_down_1.png", "female/attack_down_2.png"],
+      "attack_down_left": ["female/attack_down_left_0.png", "female/attack_down_left_1.png", "female/attack_down_left_2.png"],
+      "attack_left": ["female/attack_left_0.png", "female/attack_left_1.png", "female/attack_left_2.png"],
+      "attack_up_left": ["female/attack_up_left_0.png", "female/attack_up_left_1.png", "female/attack_up_left_2.png"],
+      "attack_up": ["female/attack_up_0.png", "female/attack_up_1.png", "female/attack_up_2.png"],
+      "attack_up_right": ["female/attack_up_right_0.png", "female/attack_up_right_1.png", "female/attack_up_right_2.png"],
+      "attack_right": ["female/attack_right_0.png", "female/attack_right_1.png", "female/attack_right_2.png"],
+      "attack_down_right": ["female/attack_down_right_0.png", "female/attack_down_right_1.png", "female/attack_down_right_2.png"],
+
+      "cast_down": ["female/cast_down_0.png", "female/cast_down_1.png", "female/cast_down_2.png", "female/cast_down_3.png"],
+      "cast_down_left": ["female/cast_down_left_0.png", "female/cast_down_left_1.png", "female/cast_down_left_2.png", "female/cast_down_left_3.png"],
+      "cast_left": ["female/cast_left_0.png", "female/cast_left_1.png", "female/cast_left_2.png", "female/cast_left_3.png"],
+      "cast_up_left": ["female/cast_up_left_0.png", "female/cast_up_left_1.png", "female/cast_up_left_2.png", "female/cast_up_left_3.png"],
+      "cast_up": ["female/cast_up_0.png", "female/cast_up_1.png", "female/cast_up_2.png", "female/cast_up_3.png"],
+      "cast_up_right": ["female/cast_up_right_0.png", "female/cast_up_right_1.png", "female/cast_up_right_2.png", "female/cast_up_right_3.png"],
+      "cast_right": ["female/cast_right_0.png", "female/cast_right_1.png", "female/cast_right_2.png", "female/cast_right_3.png"],
+      "cast_down_right": ["female/cast_down_right_0.png", "female/cast_down_right_1.png", "female/cast_down_right_2.png", "female/cast_down_right_3.png"],
+
+      "dead": ["female/dead_0.png", "female/dead_1.png"]
+    }
+  }
+}
