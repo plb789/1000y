@@ -420,6 +420,11 @@ func handleRoleGet(c *gin.Context) {
 			"map_id":      role.MapID,
 			"map_x":       role.MapX,
 			"map_y":       role.MapY,
+			"status":      role.Status,
+			"pk_mode":     role.PkMode,
+			"pk_value":    role.PkValue,
+			"kill_count":  role.KillCount,
+			"weapon_id":   role.WeaponID,
 		},
 	})
 }

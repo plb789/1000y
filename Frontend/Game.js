@@ -30,7 +30,10 @@ class Game {
       crit: 5,
       mapId: 1,
       x: 0,
-      y: 0
+      y: 0,
+      pkMode: 0,    // PK模式: 0=和平, 1=队伍, 2=帮派, 3=全体
+      pkValue: 0,   // PK值（红名程度）
+      weaponId: 0   // 装备武器ID
     };
 
     // 角色列表
@@ -1592,6 +1595,10 @@ class Game {
         this.handleDebuff(data);
         break;
         
+      case Protocol.CMD_SET_PK_MODE:
+        this.onPkModeChanged(data);
+        break;
+        
       case Protocol.CMD_MAP_EVENT:
         this.handleMapEvent(data);
         break;
@@ -1653,11 +1660,36 @@ class Game {
    * 处理伤害消息
    */
   handleDamage(data) {
+    // 优先处理攻击失败消息（服务端pushToClient("attack_failed")）
+    // 此类消息带error_code字段，无伤害数据
+    if (data.error_code !== undefined && data.error_code > 0) {
+      const attackerId = data.attacker_id;
+      const isSelf = (attackerId === this.player.id);
+      if (isSelf) {
+        // 显示错误提示（距离过远、冷却中等）
+        const color = data.error_code === 2 ? '#FFAA00' : '#FF0000'; // 冷却=橙色，其他=红色
+        this.showFloatingText(data.error_msg || '攻击失败', this.player.x, this.player.y, color);
+      }
+      return;
+    }
+
     const targetId = data.target_id;
     const damage = data.damage || 0;
     const isCritical = data.is_critical || false;
     const isBlocked = data.is_blocked || false;
     const isDodged = data.is_dodged || false;
+    const currentHp = data.current_hp; // 服务端权威血量
+    const isDead = data.is_dead || false;
+    
+    // 判断目标类型：玩家攻击怪物的结果，attacker_type=1且target是怪物
+    // 怪物攻击玩家的结果，attacker_type=2且target是玩家
+    const attackerType = data.attacker_type || 0;
+    
+    // 如果目标是怪物（玩家攻击怪物的结果），交给战斗系统处理
+    if (this.battleSystem && this.battleSystem.monsters && this.battleSystem.monsters.has(targetId)) {
+      this.battleSystem.handleDamageResult(data);
+      return;
+    }
     
     // 获取目标玩家
     let target = null;
@@ -1672,8 +1704,10 @@ class Game {
     
     if (!target) return;
     
-    // 更新血量
-    if (target.hp !== undefined) {
+    // 更新血量（优先使用服务端权威值）
+    if (currentHp !== undefined) {
+      target.hp = Math.max(0, currentHp);
+    } else if (target.hp !== undefined) {
       target.hp = Math.max(0, target.hp - damage);
     }
     
@@ -1695,6 +1729,26 @@ class Game {
     
     // 显示伤害数字
     this.showDamageNumber(x, y, damage, isCritical);
+
+    // 技能攻击时显示技能名飘字
+    if (data.is_skill_attack && data.skill_name) {
+      const skillColor = isCritical ? '#FFD700' : '#00BFFF';
+      this.showFloatingText(data.skill_name, target.x, target.y - 0.5, skillColor);
+    }
+
+    // 更新玩家MP（技能攻击会消耗MP，服务端返回current_mp）
+    if (isSelf && data.current_mp !== undefined) {
+      this.player.mp = data.current_mp;
+      if (this.player.max_mp === undefined && data.max_mp !== undefined) {
+        this.player.max_mp = data.max_mp;
+      }
+      this.updatePlayerUI();
+    }
+
+    // 处理玩家死亡（怪物攻击玩家致死）
+    if (isSelf && isDead) {
+      this.onPlayerDeath();
+    }
   }
   
   /**
@@ -1797,12 +1851,21 @@ class Game {
   /**
    * 玩家死亡处理
    */
-  onPlayerDeath() {
+  onPlayerDeath(data) {
+    // PVP死亡：显示击杀者信息
+    const isPVP = data && data.is_pvp;
+    const killerName = (isPVP && this.players && this.players.has(data.attacker_id))
+      ? this.players.get(data.attacker_id).name
+      : null;
+
     // 显示死亡UI
     if (this.uiManager) {
+      const message = isPVP && killerName
+        ? `你被 ${killerName} 击杀了！\n是否选择复活？`
+        : '是否选择复活？';
       this.uiManager.showDialog({
         title: '你已死亡',
-        message: '是否选择复活？',
+        message: message,
         buttons: [
           { text: '原地复活', onClick: () => this.respawn() },
           { text: '回城复活', onClick: () => this.respawnToTown() }
@@ -1810,10 +1873,28 @@ class Game {
         closeable: false
       });
     }
-    
+
     // 停止玩家移动
     if (this.mapEngine && this.mapEngine.player) {
       this.mapEngine.player.stopMoving();
+    }
+  }
+
+  /**
+   * 触发PVP受击特效（屏幕红边闪烁+伤害数字）
+   */
+  triggerPVPHitEffect(data) {
+    // 屏幕红边受击特效
+    if (this.ui && this.ui.gamePanel) {
+      const panel = this.ui.gamePanel;
+      panel.classList.add('pvp-hit-flash');
+      setTimeout(() => panel.classList.remove('pvp-hit-flash'), 300);
+    }
+    // 暴击时额外震动
+    if (data.is_critical && this.mapEngine && this.mapEngine.canvas) {
+      const canvas = this.mapEngine.canvas;
+      canvas.classList.add('screen-shake');
+      setTimeout(() => canvas.classList.remove('screen-shake'), 400);
     }
   }
   
@@ -2478,26 +2559,104 @@ class Game {
       }
       return;
     }
-    
-    // 发送技能请求
+
+    // 获取当前选中目标（技能需要目标）
+    const targetId = (this.battleSystem && this.battleSystem.selectedTarget) || 0;
+    if (!targetId) {
+      // 无目标时，skill_id=0 为无目标技能（如内功心法），其他技能需要目标
+      if (skillId > 0) {
+        if (this.uiManager) {
+          this.uiManager.toast('请先选择目标', 'warning', 1000);
+        }
+        return;
+      }
+    }
+
+    // 判断目标类型：1=玩家（PVP），2=怪物（PVE）
+    // 优先检查 players Map，命中则为玩家目标
+    let targetType = 2;
+    if (targetId && this.players && this.players.has(targetId)) {
+      targetType = 1;
+      // PVP前检查：和平模式禁止攻击玩家
+      if (this.player.pkMode === 0 && skillId >= 0) {
+        if (this.uiManager) {
+          this.uiManager.toast('和平模式无法攻击玩家，请切换PK模式', 'warning', 2000);
+        }
+        return;
+      }
+    }
+
+    // 发送技能请求（使用CMD_USE_SKILL=2003，Gateway复用攻击流程转发）
     window.GameWS.send(Protocol.CMD_USE_SKILL, {
       skill_id: skillId,
-      target_id: 0, // 默认无目标
+      target_id: targetId,
+      target_type: targetType,
       x: this.player.x,
       y: this.player.y
     });
-    
+
     // 触发技能特效
     this.triggerSkillEffect(skillId);
-    
+
     // 播放技能音效
     this.playSkillSound(skillId);
-    
-    // 设置冷却
+
+    // 设置冷却（普通攻击1秒，技能3秒）
     const cooldown = skillId === 0 ? 1000 : 3000;
     this.skillCooldowns.set(skillId, Date.now() + cooldown);
   }
-  
+
+  /**
+   * 切换PK模式
+   * @param {number} mode 0=和平, 1=队伍, 2=帮派, 3=全体
+   */
+  setPkMode(mode) {
+    if (mode < 0 || mode > 3) {
+      if (this.uiManager) {
+        this.uiManager.toast('无效的PK模式', 'error', 1500);
+      }
+      return;
+    }
+    // 和平模式切换需要确认（避免误操作丢失红名状态）
+    if (this.player.pkMode !== 0 && mode === 0 && this.player.pkValue > 0) {
+      if (!window.confirm(`您当前PK值为${this.player.pkValue}，切换到和平模式不会清除PK值，确认切换？`)) {
+        return;
+      }
+    }
+    // 全体模式需要二次确认（防止误开红）
+    if (mode === 3 && this.player.pkMode !== 3) {
+      if (!window.confirm('全体模式会攻击所有玩家，确认开启？')) {
+        return;
+      }
+    }
+    window.GameWS.send(Protocol.CMD_SET_PK_MODE, { pk_mode: mode });
+  }
+
+  /**
+   * 处理服务端推送的PK模式切换结果
+   */
+  onPkModeChanged(data) {
+    if (!data) return;
+    // 失败响应
+    if (data.code && data.code !== 0) {
+      if (this.uiManager) {
+        this.uiManager.toast(data.msg || 'PK模式切换失败', 'error', 1500);
+      }
+      return;
+    }
+    this.player.pkMode = data.pk_mode || 0;
+    const modeNames = ['和平', '队伍', '帮派', '全体'];
+    const modeName = modeNames[this.player.pkMode] || '未知';
+    if (this.uiManager) {
+      this.uiManager.toast(`PK模式已切换为：${modeName}`, 'info', 2000);
+    }
+    // 更新UI显示
+    if (this.ui && this.ui.pkModeLabel) {
+      this.ui.pkModeLabel.textContent = modeName;
+      this.ui.pkModeLabel.style.color = this.player.pkMode === 0 ? '#5cb85c' : '#d9534f';
+    }
+  }
+
   /**
    * 检查目标是否在攻击范围内
    */
@@ -2643,10 +2802,30 @@ class Game {
         // 更新玩家自身血量（如果被攻击）
         if (data.target_id === this.player.id) {
           this.player.hp = data.current_hp || this.player.hp;
+          // PVP受击特效
+          if (data.is_pvp && data.damage > 0) {
+            this.triggerPVPHitEffect(data);
+          }
           if (data.is_dead) {
-            this.onPlayerDeath();
+            this.onPlayerDeath(data);
           }
           this.updatePlayerUI();
+        }
+        // 攻击者获得经验和PK值
+        if (data.attacker_id === this.player.id && data.is_pvp) {
+          if (data.exp_gain > 0) {
+            this.player.exp = (this.player.exp || 0) + (data.exp_gain || 0);
+            if (this.uiManager) {
+              this.uiManager.toast(`PVP胜利！经验+${data.exp_gain}`, 'success', 2000);
+            }
+          }
+          if (data.pk_value_gain > 0) {
+            this.player.pkValue = (this.player.pkValue || 0) + (data.pk_value_gain || 0);
+            if (this.uiManager) {
+              this.uiManager.toast(`PK值+${data.pk_value_gain}（红名程度提升）`, 'warning', 2000);
+            }
+            this.updatePlayerUI();
+          }
         }
         break;
         
@@ -2963,7 +3142,10 @@ class Game {
       crit: 5,
       mapId: 1,
       x: 0,
-      y: 0
+      y: 0,
+      pkMode: 0,    // PK模式: 0=和平, 1=队伍, 2=帮派, 3=全体
+      pkValue: 0,   // PK值（红名程度）
+      weaponId: 0   // 装备武器ID
     };
 
     // 清空其他玩家列表
@@ -3048,6 +3230,7 @@ const Protocol = window.Protocol = {
   CMD_LEVEL_UP: 2012,
   CMD_BUFF: 2013,
   CMD_DEBUFF: 2014,
+  CMD_SET_PK_MODE: 2015, // 切换PK模式
   
   // 地图相关 3001-3050
   CMD_ENTER_MAP: 3001,

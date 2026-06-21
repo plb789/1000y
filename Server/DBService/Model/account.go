@@ -57,6 +57,7 @@ type Role struct {
 	Status       uint8          `gorm:"default:0;comment:状态(0正常)"`
 	KillCount    int            `gorm:"default:0;comment:击杀数"`
 	DeathCount   int            `gorm:"default:0;comment:死亡数"`
+	WeaponID     uint64         `gorm:"default:0;comment:装备武器ID(0=徒手)"`
 	Title        string         `gorm:"size:64;comment:称号"`
 	CreateTime   time.Time      `gorm:"comment:创建时间"`
 	LastLogin    time.Time      `gorm:"comment:最后登录时间"`

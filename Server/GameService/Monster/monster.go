@@ -387,7 +387,17 @@ var (
 
 	// 位置广播回调（由外部设置，用于通过Gateway广播怪物位置）
 	positionBroadcastFunc func(map[uint32][]MonsterPositionInfo)
+
+	// 玩家受击推送回调（由外部设置，用于通过Gateway推送怪物攻击玩家的结果给被攻击玩家）
+	// 参数: targetRoleID(被攻击玩家), monsterName(怪物名), result(攻击结果)
+	playerDamagePushFunc func(targetRoleID uint64, monsterName string, result *common.MonsterAttackResult)
 )
+
+// SetPlayerDamagePushFunc 设置玩家受击推送函数（在main.go中调用）
+// 用于将怪物攻击玩家的结果通过Gateway WebSocket推送给被攻击的客户端
+func SetPlayerDamagePushFunc(fn func(targetRoleID uint64, monsterName string, result *common.MonsterAttackResult)) {
+	playerDamagePushFunc = fn
+}
 
 // InitService 初始化怪物服务（在main.go中调用）
 func InitService(battleSvc BattleServiceInterface) {

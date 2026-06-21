@@ -52,6 +52,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	{
 		// 战斗相关
 		battleGroup.POST("/attack", h.HandleAttack)   // 玩家攻击怪物
+		battleGroup.POST("/pvp", h.HandlePVPAttack)   // 玩家攻击玩家（PVP）
 		battleGroup.POST("/damage", h.HandleDamage)   // 处理伤害
 		battleGroup.POST("/death", h.HandleDeath)     // 处理死亡
 		battleGroup.POST("/respawn", h.HandleRespawn) // 处理复活
@@ -86,7 +87,16 @@ func (h *Handler) HandleAttack(c *gin.Context) {
 	}
 
 	if !result.Success && result.ErrorCode > 0 {
-		// 攻击失败（距离过远、冷却中等）
+		// 攻击失败（距离过远、冷却中等）：通过WebSocket推送错误给攻击者
+		// 前端使用WebSocket发送攻击请求，不读取HTTP响应，必须通过push通道下发错误
+		errorMsg := map[string]interface{}{
+			"attacker_id": req.AttackerID,
+			"target_id":   req.TargetID,
+			"error_code":  result.ErrorCode,
+			"error_msg":   result.ErrorMsg,
+		}
+		h.pushToClient(req.AttackerID, "attack_failed", errorMsg)
+
 		c.JSON(http.StatusOK, gin.H{
 			"code": result.ErrorCode,
 			"msg":  result.ErrorMsg,
@@ -134,6 +144,80 @@ func (h *Handler) HandleDamage(c *gin.Context) {
 
 	// 推送给目标玩家
 	h.pushToClient(req.TargetID, "damage", result)
+
+	c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "success", "data": result})
+}
+
+// HandlePVPAttack 处理玩家攻击玩家请求（PVP）
+func (h *Handler) HandlePVPAttack(c *gin.Context) {
+	var req PVPAttackRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "请求参数错误"})
+		return
+	}
+
+	log.Printf("⚔️ PVP攻击请求: 攻击者=%d, 目标=%d, skillID=%d",
+		req.AttackerID, req.TargetID, req.SkillID)
+
+	// 调用PVP战斗服务
+	result := h.service.PlayerAttackPlayer(req.AttackerID, req.TargetID, req.SkillID)
+
+	// 攻击失败：推送错误给攻击者
+	if !result.Success && result.ErrorCode > 0 {
+		errorMsg := map[string]interface{}{
+			"attacker_id": req.AttackerID,
+			"target_id":   req.TargetID,
+			"error_code":  result.ErrorCode,
+			"error_msg":   result.ErrorMsg,
+		}
+		h.pushToClient(req.AttackerID, "attack_failed", errorMsg)
+		c.JSON(http.StatusOK, gin.H{"code": result.ErrorCode, "msg": result.ErrorMsg, "data": result})
+		return
+	}
+
+	// 推送PVP伤害结果给攻击者和目标
+	// 构造前端可识别的PVP伤害消息（与CMD_DAMAGE协议一致）
+	// 注：底层CalculateFinalDamage的isMiss语义为"攻击未命中（含闪避）"，
+	// 系统未独立区分"未命中"与"闪避"。前端Game.js读is_dodged、BattleSystem.js读is_miss，
+	// 因此两个字段都赋值result.IsMiss，确保前端两个模块都能正确识别未命中状态。
+	pvpResultMsg := map[string]interface{}{
+		"target_id":       req.TargetID,
+		"attacker_id":     req.AttackerID,
+		"attacker_type":   1, // 1=玩家
+		"damage":          result.Damage,
+		"is_critical":     result.IsCrit,
+		"is_miss":         result.IsMiss, // 未命中（前端BattleSystem使用）
+		"is_blocked":      result.IsBlocked,
+		"is_dodged":       result.IsMiss, // 闪避（前端Game.js使用，语义同is_miss）
+		"current_hp":      result.TargetHP,
+		"max_hp":          result.TargetMaxHP,
+		"is_dead":         result.IsDead,
+		"is_skill_attack": result.IsSkillAttack,
+		"skill_name":      result.SkillName,
+		"buff_applied":    result.BuffApplied,
+		"current_mp":      result.AttackerMP,
+		"max_mp":          result.AttackerMaxMP,
+		"exp_gain":        result.ExpGain,
+		"pk_value_gain":   result.PkValueGain,
+		"is_pvp":          true,
+	}
+
+	// 推送给攻击者（作为攻击结果）
+	h.pushToClient(req.AttackerID, "attack_result", pvpResultMsg)
+	// 推送给目标（作为受击结果）
+	h.pushToClient(req.TargetID, "damage", pvpResultMsg)
+
+	// 如果目标死亡，广播给同地图所有玩家
+	if result.IsDead {
+		deathNotice := map[string]interface{}{
+			"victim_id":     req.TargetID,
+			"killer_id":     req.AttackerID,
+			"exp_gain":      result.ExpGain,
+			"pk_value_gain": result.PkValueGain,
+			"is_pvp":        true,
+		}
+		h.broadcastToMap(getPlayerMapID(req.AttackerID), "player_death", deathNotice)
+	}
 
 	c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "success", "data": result})
 }
@@ -270,6 +354,35 @@ func (h *Handler) pushToClient(roleID uint64, msgType string, data interface{}) 
 		}
 		defer resp.Body.Close()
 	}()
+}
+
+// PushMonsterAttackResult 推送怪物攻击玩家的结果给被攻击的客户端
+// 供main.go注入到monster包使用（避免monster包依赖battle包）
+func (h *Handler) PushMonsterAttackResult(targetRoleID uint64, monsterName string, result *common.MonsterAttackResult) {
+	if result == nil {
+		return
+	}
+
+	// 构造前端可识别的伤害消息（与CMD_DAMAGE协议一致）
+	// 注：底层CalculateFinalDamage的isMiss语义为"攻击未命中（含闪避）"，
+	// 系统未独立区分"未命中"与"闪避"。前端Game.js读is_dodged、BattleSystem.js读is_miss，
+	// 因此两个字段都赋值result.IsMiss，确保前端两个模块都能正确识别未命中状态。
+	damageMsg := map[string]interface{}{
+		"target_id":     targetRoleID,
+		"attacker_id":   result.MonsterID,
+		"attacker_name": monsterName,
+		"attacker_type": 2, // 2=怪物
+		"damage":        result.Damage,
+		"is_critical":   result.IsCrit,
+		"is_miss":       result.IsMiss, // 未命中（前端BattleSystem使用）
+		"is_blocked":    false,
+		"is_dodged":     result.IsMiss, // 闪避（前端Game.js使用，语义同is_miss）
+		"current_hp":    result.PlayerHP,
+		"max_hp":        result.PlayerMaxHP,
+		"is_dead":       result.IsDead,
+	}
+
+	h.pushToClient(targetRoleID, "damage", damageMsg)
 }
 
 // broadcastToMap 广播消息给地图所有玩家（通过Gateway）

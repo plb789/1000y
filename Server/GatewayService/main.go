@@ -122,6 +122,7 @@ const (
 	CmdLevelUp               uint16 = 2012 // 升级
 	CmdBuff                  uint16 = 2013 // 增益
 	CmdDeBuff                uint16 = 2014 // 减益
+	CmdSetPKMode             uint16 = 2015 // 切换PK模式
 	CmdEnterMap              uint16 = 3001 // 进入地图
 	CmdLeaveMap              uint16 = 3002 // 离开地图
 	CmdMapPlayer             uint16 = 3003 // 地图玩家列表
@@ -514,6 +515,16 @@ func (c *Client) handleMessage(cmd uint16, body []byte) {
 
 	case CmdMove:
 		c.handleMove(body)
+
+	case CmdAttack:
+		c.handleAttack(body)
+
+	case CmdUseSkill:
+		// 使用技能：复用攻击流程，前端需在body中带target_id和skill_id
+		c.handleAttack(body)
+
+	case CmdSetPKMode:
+		c.handleSetPKMode(body)
 
 	case CmdChat:
 		c.handleChat(body)
@@ -954,6 +965,113 @@ func (c *Client) forwardMoveToGameService(x, y int) {
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("GameService移动处理失败，状态码: %d", resp.StatusCode)
 	}
+}
+
+// handleAttack 处理玩家攻击请求（转发到GameService战斗接口）
+func (c *Client) handleAttack(body []byte) {
+	var req struct {
+		TargetID   uint64 `json:"target_id"`
+		TargetType uint8  `json:"target_type"` // 2=怪物
+		SkillID    uint32 `json:"skill_id"`    // 0=普通攻击
+		X          int    `json:"x"`
+		Y          int    `json:"y"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		log.Printf("解析攻击请求失败: %v", err)
+		return
+	}
+
+	// 默认目标类型为怪物
+	if req.TargetType == 0 {
+		req.TargetType = 2
+	}
+
+	log.Printf("玩家攻击: roleID=%d, targetID=%d, targetType=%d, skillID=%d",
+		c.ID, req.TargetID, req.TargetType, req.SkillID)
+
+	// 转发到GameService处理（异步，避免阻塞WebSocket读取）
+	go c.forwardAttackToGameService(req.TargetID, req.TargetType, req.SkillID, req.X, req.Y)
+}
+
+// forwardAttackToGameService 转发攻击请求到GameService
+func (c *Client) forwardAttackToGameService(targetID uint64, targetType uint8, skillID uint32, x, y int) {
+	instance := common.GetInstanceByMapID(c.MapID)
+	if instance == nil {
+		log.Printf("未找到处理地图 %d 的GameService实例", c.MapID)
+		return
+	}
+
+	// 构建攻击请求（与GameService Battle.AttackRequest结构一致）
+	attackReq := map[string]interface{}{
+		"attacker_id":   c.ID,
+		"attacker_type": 1, // 1=玩家
+		"target_id":     targetID,
+		"target_type":   targetType,
+		"skill_id":      skillID,
+		"x":             x,
+		"y":             y,
+	}
+
+	jsonData, err := json.Marshal(attackReq)
+	if err != nil {
+		log.Printf("序列化攻击数据失败: %v", err)
+		return
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	// 根据目标类型选择接口：1=玩家→PVP接口，2=怪物→普通攻击接口
+	url := instance.URL + "/api/battle/attack"
+	if targetType == 1 {
+		url = instance.URL + "/api/battle/pvp"
+	}
+	resp, err := client.Post(url, "application/json", bytes.NewReader(jsonData))
+	if err != nil {
+		log.Printf("调用GameService攻击接口失败: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	// GameService会通过/internal/push接口异步推送attack_result给客户端
+	// 这里不需要同步返回结果给客户端
+}
+
+// handleSetPKMode 处理切换PK模式请求
+func (c *Client) handleSetPKMode(body []byte) {
+	var req struct {
+		PKMode uint8 `json:"pk_mode"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		log.Printf("解析PK模式切换数据失败: %v", err)
+		return
+	}
+
+	if req.PKMode > 3 {
+		c.sendPacket(CmdSetPKMode, mustMarshal(map[string]interface{}{
+			"code": 1,
+			"msg":  "无效的PK模式",
+		}))
+		return
+	}
+
+	// 调用DBService更新PK模式
+	if err := common.DBRoleSetPKMode(c.ID, req.PKMode); err != nil {
+		log.Printf("设置PK模式失败: roleID=%d, mode=%d, err=%v", c.ID, req.PKMode, err)
+		c.sendPacket(CmdSetPKMode, mustMarshal(map[string]interface{}{
+			"code": 2,
+			"msg":  "设置失败",
+		}))
+		return
+	}
+
+	log.Printf("玩家[%d]切换PK模式为: %d", c.ID, req.PKMode)
+
+	// 推送成功结果给客户端
+	c.sendPacket(CmdSetPKMode, mustMarshal(map[string]interface{}{
+		"code":    0,
+		"msg":     "success",
+		"pk_mode": req.PKMode,
+	}))
 }
 
 func (c *Client) handleChat(body []byte) {
@@ -2070,6 +2188,13 @@ func handleInternalBroadcastBinary(w http.ResponseWriter, r *http.Request) {
 func getMsgTypeCmd(msgType string) uint16 {
 	switch msgType {
 	case "damage":
+		return CmdDamage
+	case "attack_result":
+		// 玩家攻击怪物的结果，复用CmdDamage通道（前端按damage处理）
+		return CmdDamage
+	case "attack_failed":
+		// 攻击失败（距离过远、冷却中等），复用CmdDamage通道
+		// 前端通过error_code/error_msg字段区分失败类型
 		return CmdDamage
 	case "death":
 		return CmdDeath

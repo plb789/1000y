@@ -487,47 +487,28 @@ class BattleSystem {
     // 设置冷却
     this.lastAttackTime = now;
     
-    try {
-      console.log(`⚔️ 发起攻击 -> 怪物 ${target.name} (${targetId})`);
-      
-      // 通过HTTP发送攻击请求到服务端
-            const response = await fetch('http://localhost:8082/api/battle/attack', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                role_id: this.game.roleID || 1,
-                monster_id: targetId,
-                skill_id: 0,  // 0=普通攻击
-                x: Math.floor(player.x),
-                y: Math.floor(player.y)
-              })
-            });;
-      
-      const result = await response.json();
-      
-      if (result.code !== 200 && result.code !== 0) {
-        // 攻击失败（服务端返回错误）
-        console.warn(`❌ 攻击失败: ${result.msg}`);
-        this.game.showFloatingText(result.msg || '攻击失败', player.x, player.y, '#FF0000');
-        return false;
-      }
-      
-      // 处理攻击结果
-      const data = result.data;
-      this.handleAttackResult(data, target);
-      
-      // 播放攻击动画
-      this.playAttackAnimation(player.x, player.y, target.x, target.y);
-      
-      return true;
-      
-    } catch (error) {
-      console.error('攻击请求失败:', error);
-      this.game.showFloatingText('网络错误', player.x, player.y, '#FF0000');
+    console.log(`⚔️ 发起攻击 -> 怪物 ${target.name} (${targetId})`);
+    
+    // 通过WebSocket发送攻击请求（cmd=2002 CMD_ATTACK）
+    // 服务端Gateway转发到GameService，处理结果通过/internal/push异步推送回来
+    if (window.GameWS && window.GameWS.isConnected) {
+      window.GameWS.send(2002, {
+        target_id: targetId,
+        target_type: 2,    // 2=怪物
+        skill_id: 0,       // 0=普通攻击
+        x: Math.floor(player.x),
+        y: Math.floor(player.y)
+      });
+    } else {
+      console.warn('WebSocket未连接，无法发起攻击');
+      this.game.showFloatingText('网络未连接', player.x, player.y, '#FF0000');
       return false;
     }
+    
+    // 播放攻击动画（不等待服务端响应，提升手感）
+    this.playAttackAnimation(player.x, player.y, target.x, target.y);
+    
+    return true;
   }
   
   /**
@@ -678,10 +659,18 @@ class BattleSystem {
     // 显示伤害数字
     const targetPos = monster ? { x: monster.x, y: monster.y } : { x: data.target_x, y: data.target_y };
     this.addDamageNumber(targetPos.x, targetPos.y, damage, isCrit, isMiss, isBlocked);
-    
+
+    // 技能攻击时显示技能名飘字
+    if (data.is_skill_attack && data.skill_name) {
+      const skillColor = isCrit ? '#FFD700' : '#00BFFF';
+      if (this.game.showFloatingText) {
+        this.game.showFloatingText(data.skill_name, targetPos.x, targetPos.y - 0.5, skillColor);
+      }
+    }
+
     // 触发受击特效
     if (this.game.triggerHitEffect) {
-      this.game.triggerHitEffect(isCrit, isBlocked, isMiss, 
+      this.game.triggerHitEffect(isCrit, isBlocked, isMiss,
         targetPos.x * (this.game.mapEngine?.tileSize || 48),
         targetPos.y * (this.game.mapEngine?.tileSize || 48)
       );

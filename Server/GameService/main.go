@@ -381,6 +381,12 @@ func startHTTPServer() {
 		}
 	})
 
+	// 设置怪物攻击玩家结果推送函数（通过Gateway WebSocket推送给被攻击客户端）
+	// 解决：怪物AI攻击玩家后，前端无感知（无伤害飘字、无血量更新）的问题
+	monster.SetPlayerDamagePushFunc(func(targetRoleID uint64, monsterName string, result *common.MonsterAttackResult) {
+		battleHandler.PushMonsterAttackResult(targetRoleID, monsterName, result)
+	})
+
 	// 注册怪物路由（包含GM命令）
 	monsterHandler := &monster.MonsterHandler{}
 	monsterHandler.RegisterRoutes(r)

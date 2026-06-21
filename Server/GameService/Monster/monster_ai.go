@@ -518,16 +518,24 @@ func (m *AIMonster) performAttack(now int64) {
 	// ✅ 通过接口调用战斗服务（避免循环依赖）
 	result := globalBattleSvc.MonsterAttackPlayer(m.ID, m.TargetID)
 
-	if result == nil || result.IsMiss {
-		return // 未命中或错误，无需后续处理
+	if result == nil {
+		return
 	}
 
 	log.Printf("⚔️ 怪物[%d]攻击玩家%d: 伤害=%d, 暴击=%v, 玩家剩余HP=%d/%d",
 		m.ID, m.TargetID, result.Damage, result.IsCrit,
 		result.PlayerHP, result.PlayerMaxHP)
 
-	// TODO: 推送战斗结果给客户端（通过WebSocket）
-	// 需要调用gameService的推送接口通知前端显示伤害数字、更新血条等
+	// ✅ 推送战斗结果给被攻击的客户端（通过Gateway WebSocket）
+	if playerDamagePushFunc != nil {
+		playerDamagePushFunc(m.TargetID, m.Name, result)
+	}
+
+	// 若玩家已死亡，怪物清除目标回到巡逻状态（避免继续攻击尸体）
+	if result.IsDead {
+		m.TargetID = 0
+		m.changeState(AIStatePatrol)
+	}
 }
 
 // moveToward 向目标移动（带完整碰撞检测）

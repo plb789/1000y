@@ -225,12 +225,14 @@ func CalculateBlock(attacker, defender *BaseFighter) (bool, float64) {
 // targetX, targetY: 目标坐标
 // attackRange: 攻击范围（格子数）
 // 返回: 是否在范围内, 实际距离
-func CheckAttackRange(attackerX, attackerY, targetX, targetY int, attackRange int) (bool, float64) {
+// CheckAttackRange 检查攻击范围
+// attackRange: 攻击范围（格，支持小数，如1.5表示1.5格内可攻击）
+func CheckAttackRange(attackerX, attackerY, targetX, targetY int, attackRange float64) (bool, float64) {
 	dx := float64(attackerX - targetX)
 	dy := float64(attackerY - targetY)
 	distance := math.Sqrt(dx*dx + dy*dy)
 
-	return distance <= float64(attackRange), distance
+	return distance <= attackRange, distance
 }
 
 // CalculateFinalDamage 计算最终伤害（包含所有修正）

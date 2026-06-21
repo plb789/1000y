@@ -1653,11 +1653,36 @@ class Game {
    * 处理伤害消息
    */
   handleDamage(data) {
+    // 优先处理攻击失败消息（服务端pushToClient("attack_failed")）
+    // 此类消息带error_code字段，无伤害数据
+    if (data.error_code !== undefined && data.error_code > 0) {
+      const attackerId = data.attacker_id;
+      const isSelf = (attackerId === this.player.id);
+      if (isSelf) {
+        // 显示错误提示（距离过远、冷却中等）
+        const color = data.error_code === 2 ? '#FFAA00' : '#FF0000'; // 冷却=橙色，其他=红色
+        this.showFloatingText(data.error_msg || '攻击失败', this.player.x, this.player.y, color);
+      }
+      return;
+    }
+
     const targetId = data.target_id;
     const damage = data.damage || 0;
     const isCritical = data.is_critical || false;
     const isBlocked = data.is_blocked || false;
     const isDodged = data.is_dodged || false;
+    const currentHp = data.current_hp; // 服务端权威血量
+    const isDead = data.is_dead || false;
+    
+    // 判断目标类型：玩家攻击怪物的结果，attacker_type=1且target是怪物
+    // 怪物攻击玩家的结果，attacker_type=2且target是玩家
+    const attackerType = data.attacker_type || 0;
+    
+    // 如果目标是怪物（玩家攻击怪物的结果），交给战斗系统处理
+    if (this.battleSystem && this.battleSystem.monsters && this.battleSystem.monsters.has(targetId)) {
+      this.battleSystem.handleDamageResult(data);
+      return;
+    }
     
     // 获取目标玩家
     let target = null;
@@ -1672,8 +1697,10 @@ class Game {
     
     if (!target) return;
     
-    // 更新血量
-    if (target.hp !== undefined) {
+    // 更新血量（优先使用服务端权威值）
+    if (currentHp !== undefined) {
+      target.hp = Math.max(0, currentHp);
+    } else if (target.hp !== undefined) {
       target.hp = Math.max(0, target.hp - damage);
     }
     
@@ -1695,6 +1722,11 @@ class Game {
     
     // 显示伤害数字
     this.showDamageNumber(x, y, damage, isCritical);
+    
+    // 处理玩家死亡（怪物攻击玩家致死）
+    if (isSelf && isDead) {
+      this.onPlayerDeath();
+    }
   }
   
   /**

@@ -143,7 +143,11 @@ type RoleInfo struct {
 	MapID      uint32 `json:"map_id"`
 	MapX       int    `json:"map_x"`
 	MapY       int    `json:"map_y"`
-	Status     uint8  `json:"status"` // 状态: 0=正常, 1=打坐, 2=死亡, 3=在线
+	Status     uint8  `json:"status"`     // 状态: 0=正常, 1=打坐, 2=死亡, 3=在线
+	PkMode     uint8  `json:"pk_mode"`    // PK模式: 0=和平, 1=队伍, 2=帮派, 3=全体
+	PkValue    int    `json:"pk_value"`   // PK值（红名程度）
+	KillCount  int    `json:"kill_count"` // 击杀数
+	WeaponID   uint64 `json:"weapon_id"`  // 装备武器ID(0=徒手)
 }
 
 // GetRoleInfo 获取角色信息
