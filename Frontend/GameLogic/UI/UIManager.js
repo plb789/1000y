@@ -784,26 +784,6 @@ class UIManager {
   }
   
   /**
-   * 创建常用UI组件
-   */
-  createCommonComponents() {
-    // Toast容器
-    this.toastContainer = document.createElement('div');
-    this.toastContainer.id = 'ui-toast-container';
-    this.toastContainer.style.cssText = `
-      position: fixed;
-      top: 20px;
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: ${this.config.zIndexBase + 400};
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    `;
-    document.body.appendChild(this.toastContainer);
-  }
-  
-  /**
    * 创建按钮
    */
   createButton(options = {}) {

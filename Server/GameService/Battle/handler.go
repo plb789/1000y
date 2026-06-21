@@ -109,8 +109,9 @@ func (h *Handler) HandleAttack(c *gin.Context) {
 	log.Printf("✅ 攻击结果: 怪物%d 受到%d点伤害 (暴击=%v, 闪避=%v, 死亡=%v)",
 		req.TargetID, result.Damage, result.IsCrit, result.IsMiss, result.IsDead)
 
-	// 推送战斗结果给客户端（通过Gateway WebSocket）
-	h.pushToClient(req.AttackerID, "attack_result", result)
+	// 广播战斗结果给同地图所有玩家（包括攻击者）
+	// 其他玩家可以看到打怪伤害飘字，attacker_id 用于客户端区分是否是自己造成的伤害
+	h.broadcastToMap(getPlayerMapID(req.AttackerID), "attack_result", result)
 
 	// 如果怪物死亡，广播给同地图所有玩家
 	if result.IsDead {
@@ -356,9 +357,10 @@ func (h *Handler) pushToClient(roleID uint64, msgType string, data interface{}) 
 	}()
 }
 
-// PushMonsterAttackResult 推送怪物攻击玩家的结果给被攻击的客户端
+// PushMonsterAttackResult 推送怪物攻击玩家的结果给同地图所有客户端
 // 供main.go注入到monster包使用（避免monster包依赖battle包）
-func (h *Handler) PushMonsterAttackResult(targetRoleID uint64, monsterName string, result *common.MonsterAttackResult) {
+// 广播给同地图所有玩家，让其他玩家也能看到受击飘字和血条
+func (h *Handler) PushMonsterAttackResult(mapID uint32, targetRoleID uint64, monsterName string, result *common.MonsterAttackResult) {
 	if result == nil {
 		return
 	}
@@ -382,7 +384,8 @@ func (h *Handler) PushMonsterAttackResult(targetRoleID uint64, monsterName strin
 		"is_dead":       result.IsDead,
 	}
 
-	h.pushToClient(targetRoleID, "damage", damageMsg)
+	// 广播给同地图所有玩家（包括被攻击者），让所有人看到受击飘字和血条
+	h.broadcastToMap(mapID, "damage", damageMsg)
 }
 
 // broadcastToMap 广播消息给地图所有玩家（通过Gateway）
@@ -421,6 +424,12 @@ func (h *Handler) broadcastToMap(mapID uint32, msgType string, data interface{})
 func (h *Handler) BroadcastMonsterPositions(mapID uint32, data interface{}) {
 	log.Printf("📡 广播怪物位置: 地图%d, %d个怪物", mapID, len(data.(gin.H)["monsters"].([]monster.MonsterPositionInfo)))
 	h.broadcastToMap(mapID, "monster_position_update", data)
+}
+
+// BroadcastMonsterSpawn 广播怪物生成（复活）消息给地图所有玩家
+// 客户端收到后会重新创建怪物对象
+func (h *Handler) BroadcastMonsterSpawn(mapID uint32, spawnInfo monster.MonsterSpawnInfo) {
+	h.broadcastToMap(mapID, "monster_spawn", spawnInfo)
 }
 
 // BroadcastMonsterPositionsBinary 广播怪物位置（二进制协议，紧凑格式）

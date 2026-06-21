@@ -2,6 +2,7 @@ package battle
 
 import (
 	"errors"
+	"fmt"
 	common "game-server/Common"
 	"log"
 	"math/rand"
@@ -54,6 +55,8 @@ type MonsterServiceInterface interface {
 type AIServiceInterface interface {
 	// OnMonsterHurted 通知AI系统怪物受伤
 	OnMonsterHurted(monsterID uint64, attackerID uint64)
+	// OnMonsterDeath 通知AI系统怪物死亡，触发复活倒计时
+	OnMonsterDeath(monsterID uint64)
 }
 
 // 全局服务实例（通过依赖注入设置）
@@ -255,7 +258,8 @@ func (s *Service) getFighter(id uint64, fighterType uint8) (*BaseFighter, error)
 func (s *Service) getPlayerFighter(roleID uint64) (*BaseFighter, error) {
 	roleInfo, err := common.DBRoleGet(roleID)
 	if err != nil || roleInfo == nil {
-		return nil, errors.New("角色不存在")
+		log.Printf("getPlayerFighter: 获取角色数据失败 roleID=%d, err=%v", roleID, err)
+		return nil, fmt.Errorf("角色数据获取失败: %v", err)
 	}
 
 	// 从已装备武学计算加成
@@ -979,6 +983,11 @@ func (s *Service) PlayerAttackMonster(roleID uint64, monsterInstanceID uint64, s
 
 	// 10. 如果怪物死亡，处理掉落
 	if isDead {
+		// 通知AI服务怪物死亡，触发复活倒计时
+		if globalAIService != nil {
+			globalAIService.OnMonsterDeath(monsterInstanceID)
+		}
+
 		exp, gold, drops, err := globalMonsterSvc.MonsterDie(monsterInstanceID)
 		if err == nil {
 			result.ExpGain = exp
@@ -1078,6 +1087,9 @@ func (s *Service) MonsterAttackPlayer(monsterInstanceID uint64, playerID uint64)
 	result.IsMiss = isMiss
 
 	if isMiss {
+		// 未命中时也需返回玩家当前血量，避免前端显示 0/0
+		result.PlayerHP = playerFighter.CurrentHP
+		result.PlayerMaxHP = playerFighter.MaxHP
 		return result
 	}
 

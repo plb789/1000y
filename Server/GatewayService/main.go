@@ -237,24 +237,28 @@ func (cm *ClientManager) sendMessage(msg *Message) {
 	cm.mutex.RLock()
 	defer cm.mutex.RUnlock()
 
+	// 封包: [cmd(2字节)][body(N字节)]
+	pkg := make([]byte, 2+len(msg.Data))
+	binary.LittleEndian.PutUint16(pkg[0:2], msg.Type)
+	copy(pkg[2:], msg.Data)
+
 	if msg.To > 0 {
 		// 私聊
 		if client, ok := cm.clients[msg.To]; ok {
 			select {
-			case client.Send <- msg.Data:
+			case client.Send <- pkg:
 			default:
+				log.Printf("警告: 客户端 %d 发送通道已满，丢弃消息", msg.To)
 			}
 		}
 	} else {
-		// 广播 - 发送给所有连接的客户端
+		// 广播 - 发送给所有连接的客户端（包括发送者自己）
+		// 注：战斗广播等场景需要发送者也收到消息以更新UI（伤害飘字、MP等）
 		for _, client := range cm.clients {
-			// 排除消息发送者自己（避免回显）
-			if client.ID != msg.From {
-				select {
-				case client.Send <- msg.Data:
-				default:
-					log.Printf("警告: 客户端 %d 发送通道已满，丢弃消息", client.ID)
-				}
+			select {
+			case client.Send <- pkg:
+			default:
+				log.Printf("警告: 客户端 %d 发送通道已满，丢弃消息", client.ID)
 			}
 		}
 	}

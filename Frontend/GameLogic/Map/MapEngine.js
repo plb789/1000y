@@ -303,6 +303,12 @@ class MapEngine {
   }
 
   updatePlayerMove(deltaTime) {
+    // 死亡状态下禁止移动
+    if (this.player.isDead) {
+      this.player.movePath = [];
+      return;
+    }
+
     const path = this.player.movePath;
     if (path.length === 0) return;
     
@@ -452,6 +458,9 @@ class MapEngine {
 
   // 执行鼠标移动（点击移动一格）
   performMouseMove(isRunning, continueMoving = false) {
+    // 死亡状态下禁止移动
+    if (this.player.isDead) return;
+
     // 根据是否跑步决定移动距离
     const moveDistance = isRunning ? 2 : 1;
 

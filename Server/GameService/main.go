@@ -106,6 +106,23 @@ func main() {
 	battle.SetMonsterService(monster.GetService())
 	battle.SetAIService(monster.GetAIService())
 
+	// 4.1 Battle → PlayerPosition: 战斗系统需要获取玩家位置用于距离判定
+	// 优先从内存中的地图玩家实例获取（实时性强），失败时回退到DB查询
+	battle.SetPlayerPositionSetter(func(roleID uint64) *battle.PlayerPosition {
+		// 遍历所有地图查找玩家（玩家在同一GameService实例的地图中）
+		for _, mapID := range handledMaps {
+			if p, ok := gamemap.GetService().GetPlayerPosition(mapID, roleID); ok {
+				return &battle.PlayerPosition{X: p.X, Y: p.Y}
+			}
+		}
+		// 回退：从DB查询角色位置
+		pos, err := common.DBGetRolePosition(roleID)
+		if err != nil || pos == nil {
+			return nil
+		}
+		return &battle.PlayerPosition{X: pos.X, Y: pos.Y}
+	})
+
 	// 5. Monster → PlayerPosition: AI系统需要获取玩家位置用于追踪目标
 	monster.SetPlayerPositionFunc(func(targetID uint64) (int, int, bool) {
 		// 遍历所有已加载地图查找玩家
@@ -381,10 +398,15 @@ func startHTTPServer() {
 		}
 	})
 
-	// 设置怪物攻击玩家结果推送函数（通过Gateway WebSocket推送给被攻击客户端）
-	// 解决：怪物AI攻击玩家后，前端无感知（无伤害飘字、无血量更新）的问题
-	monster.SetPlayerDamagePushFunc(func(targetRoleID uint64, monsterName string, result *common.MonsterAttackResult) {
-		battleHandler.PushMonsterAttackResult(targetRoleID, monsterName, result)
+	// 设置怪物生成通知函数（怪物复活时通知客户端重新创建怪物）
+	monster.SetSpawnNotifyFunc(func(mapID uint32, spawnInfo monster.MonsterSpawnInfo) {
+		battleHandler.BroadcastMonsterSpawn(mapID, spawnInfo)
+	})
+
+	// 设置怪物攻击玩家结果广播函数（通过Gateway WebSocket广播给同地图所有客户端）
+	// 解决：怪物AI攻击玩家后，其他玩家看不到受击飘字和血条的问题
+	monster.SetPlayerDamagePushFunc(func(mapID uint32, targetRoleID uint64, monsterName string, result *common.MonsterAttackResult) {
+		battleHandler.PushMonsterAttackResult(mapID, targetRoleID, monsterName, result)
 	})
 
 	// 注册怪物路由（包含GM命令）

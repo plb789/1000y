@@ -75,7 +75,7 @@ const (
 	AIStateRespawn AIState = 7 // 复活中
 )
 
-// AIMonster AI怪物实例（扩展MonsterInstance）
+// AIMonster ai怪物实例（扩展MonsterInstance）
 type AIMonster struct {
 	*MonsterInstance
 	State           AIState // 当前状态
@@ -93,6 +93,7 @@ type AIMonster struct {
 	FleeThreshold   float64 // 逃跑血量阈值(0-1)
 	LastUpdateTime  int64   // 上次更新时间
 	RespawnDuration int64   // 复活时间(毫秒)
+	JustRespawned   bool    // 刚复活标志（用于通知前端重新创建怪物）
 }
 
 // Point 坐标点
@@ -111,6 +112,9 @@ type AIService struct {
 	// 位置同步回调（用于广播怪物位置给客户端）
 	positionSyncCallback func(map[uint32][]MonsterPositionInfo)
 
+	// 怪物生成回调（用于怪物复活时通知客户端重新创建怪物）
+	spawnNotifyCallback func(mapID uint32, spawnInfo MonsterSpawnInfo)
+
 	// 增量广播：记录上次广播的位置快照，仅当有变化时才广播
 	lastBroadcastPositions map[uint64]MonsterPositionInfo
 	broadcastUpdateCount   int64 // 广播次数计数（用于采样日志）
@@ -124,6 +128,21 @@ type MonsterPositionInfo struct {
 	Y          int    `json:"y"`
 	State      int    `json:"state"` // AI状态
 	HP         int    `json:"hp"`    // 当前血量
+}
+
+// MonsterSpawnInfo 怪物生成信息（用于复活通知）
+type MonsterSpawnInfo struct {
+	InstanceID uint64 `json:"instance_id"`
+	MapID      uint32 `json:"-"`
+	BaseID     uint32 `json:"base_id"`
+	Name       string `json:"name"`
+	Level      uint32 `json:"level"`
+	Type       uint8  `json:"type"`
+	X          int    `json:"x"`
+	Y          int    `json:"y"`
+	HP         int    `json:"hp"`
+	MaxHP      int    `json:"max_hp"`
+	SpriteID   int    `json:"sprite_id"`
 }
 
 // NewAIService 创建AI服务
@@ -192,6 +211,11 @@ func (s *AIService) SetPositionSyncCallback(callback func(map[uint32][]MonsterPo
 	s.positionSyncCallback = callback
 }
 
+// SetSpawnNotifyCallback 设置怪物生成回调（用于复活通知）
+func (s *AIService) SetSpawnNotifyCallback(callback func(mapID uint32, spawnInfo MonsterSpawnInfo)) {
+	s.spawnNotifyCallback = callback
+}
+
 // Start 启动AI主循环
 func (s *AIService) Start() {
 	s.ticker = time.NewTicker(1000 * time.Millisecond) // 每1秒更新一次（降频优化：怪物移动慢，1秒延迟无感）
@@ -226,8 +250,36 @@ func (s *AIService) Update() {
 
 	now := time.Now().UnixMilli()
 
+	// 收集本轮复活的怪物（在锁内收集，锁外发送通知避免死锁）
+	var respawnedMonsters []MonsterSpawnInfo
+
 	for _, monster := range s.monsters {
 		monster.Update(now)
+
+		// 检测刚复活的怪物，收集通知信息
+		if monster.JustRespawned {
+			respawnedMonsters = append(respawnedMonsters, MonsterSpawnInfo{
+				InstanceID: monster.ID,
+				MapID:      monster.MapID,
+				BaseID:     monster.BaseID,
+				Name:       monster.Name,
+				Level:      monster.Level,
+				Type:       monster.Type,
+				X:          monster.X,
+				Y:          monster.Y,
+				HP:         monster.CurrentHP,
+				MaxHP:      monster.MaxHP,
+				SpriteID:   getSpriteID(monster.BaseID),
+			})
+			monster.JustRespawned = false // 清除标志
+		}
+	}
+
+	// 锁外发送复活通知（避免回调中可能的锁竞争）
+	if s.spawnNotifyCallback != nil && len(respawnedMonsters) > 0 {
+		for _, info := range respawnedMonsters {
+			go s.spawnNotifyCallback(info.MapID, info)
+		}
 	}
 
 	// 位置同步：收集所有活跃怪物的位置并广播给客户端
@@ -475,6 +527,7 @@ func (m *AIMonster) updateFlee(now int64) {
 func (m *AIMonster) updateDead(now int64) {
 	m.Status = 4 // 死亡状态
 	m.RespawnAt = now + m.RespawnDuration
+	log.Printf("[复活调试] 怪物%d死亡: RespawnDuration=%dms, RespawnAt=%d, now=%d", m.ID, m.RespawnDuration, m.RespawnAt, now)
 	m.changeState(AIStateRespawn)
 }
 
@@ -487,6 +540,8 @@ func (m *AIMonster) updateRespawn(now int64) {
 		m.Y = m.HomeY
 		m.Status = 0 // 活着
 		m.TargetID = 0
+		m.JustRespawned = true // 标记刚复活，由AIService.Update检测并通知前端
+		log.Printf("[复活调试] 怪物%d复活: HP=%d, 位置=(%d,%d)", m.ID, m.CurrentHP, m.X, m.Y)
 		m.changeState(AIStateIdle)
 	}
 }
@@ -526,9 +581,9 @@ func (m *AIMonster) performAttack(now int64) {
 		m.ID, m.TargetID, result.Damage, result.IsCrit,
 		result.PlayerHP, result.PlayerMaxHP)
 
-	// ✅ 推送战斗结果给被攻击的客户端（通过Gateway WebSocket）
+	// ✅ 广播战斗结果给同地图所有客户端（通过Gateway WebSocket）
 	if playerDamagePushFunc != nil {
-		playerDamagePushFunc(m.TargetID, m.Name, result)
+		playerDamagePushFunc(m.MapID, m.TargetID, m.Name, result)
 	}
 
 	// 若玩家已死亡，怪物清除目标回到巡逻状态（避免继续攻击尸体）
@@ -774,4 +829,30 @@ func (s *AIService) OnMonsterHurted(monsterID uint64, attackerID uint64) {
 
 	// 调用怪物的受伤处理逻辑
 	ai.SetTarget(attackerID)
+}
+
+// OnMonsterDeath 通知AI怪物死亡，触发复活倒计时
+// 死亡后AI进入AIStateDead状态，下一轮Update会切换到AIStateRespawn等待复活
+func (s *AIService) OnMonsterDeath(monsterID uint64) {
+	s.mu.RLock()
+	ai, exists := s.monsters[monsterID]
+	s.mu.RUnlock()
+
+	if !exists || ai == nil {
+		log.Printf("[复活调试] OnMonsterDeath: 怪物%d 不存在于AI系统", monsterID)
+		return
+	}
+
+	log.Printf("[复活调试] OnMonsterDeath: 怪物%d 当前状态=%d, 切换到AIStateDead", monsterID, ai.State)
+	// 切换到死亡状态，updateDead会设置RespawnAt并转入AIStateRespawn
+	ai.changeState(AIStateDead)
+}
+
+// getSpriteID 根据怪物基础ID获取精灵ID
+func getSpriteID(baseID uint32) int {
+	config := common.GetMonsterConfig(baseID)
+	if config != nil && config.SpriteID != nil {
+		return *config.SpriteID
+	}
+	return 2001 // 默认精灵ID
 }

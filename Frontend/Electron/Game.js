@@ -30,7 +30,11 @@ class Game {
       crit: 5,
       mapId: 1,
       x: 0,
-      y: 0
+      y: 0,
+      pkMode: 0,    // PK模式: 0=和平, 1=队伍, 2=帮派, 3=全体
+      pkValue: 0,   // PK值（红名程度）
+      weaponId: 0,  // 装备武器ID
+      isDead: false // 是否死亡（死亡时禁止移动和攻击）
     };
 
     // 角色列表
@@ -48,6 +52,16 @@ class Game {
     
     // 技能冷却
     this.skillCooldowns = new Map();
+
+    // 自动追击攻击目标相关状态
+    this.pendingAttackTargetId = null;   // 待攻击目标ID
+    this._pendingStartPos = null;        // 追击起始位置（用于卡死检测）
+    this._lastPendingMoveTime = 0;       // 上次追击移动时间戳（节流）
+
+    // 选中目标相关状态（点击选中后持续显示目标信息面板）
+    this.selectedTargetId = null;        // 选中目标ID
+    this.selectedTarget = null;          // 选中目标对象
+    this.selectedTargetKind = null;      // 选中目标类型 'monster' | 'player'
     
     // UI元素
     this.ui = {
@@ -407,6 +421,10 @@ class Game {
   
   initMapEngine() {
     this.mapEngine = new MapEngine(this.ui.canvas);
+
+    // 绑定画布鼠标事件：悬停显示目标详情，点击选中目标或移动
+    this.bindCanvasTargetEvents();
+
     // 设置渲染完成后回调，用于更新其他玩家位置并绘制
     // 注意：updateOtherPlayers需要在renderPlayers之前调用，确保位置已更新
     this.mapEngine.afterRender = (deltaTime) => {
@@ -1592,12 +1610,24 @@ class Game {
         this.handleDebuff(data);
         break;
         
+      case Protocol.CMD_SET_PK_MODE:
+        this.onPkModeChanged(data);
+        break;
+        
       case Protocol.CMD_MAP_EVENT:
         this.handleMapEvent(data);
         break;
         
       case Protocol.CMD_MONSTER_POSITION_UPDATE:
         this.handleMonsterPositionUpdate(data);
+        break;
+
+      case Protocol.CMD_MONSTER_SPAWN:
+        this.handleMonsterSpawn(data);
+        break;
+
+      case Protocol.CMD_MONSTER_DEATH:
+        this.handleMonsterDeath(data);
         break;
         
       default:
@@ -1662,6 +1692,14 @@ class Game {
         // 显示错误提示（距离过远、冷却中等）
         const color = data.error_code === 2 ? '#FFAA00' : '#FF0000'; // 冷却=橙色，其他=红色
         this.showFloatingText(data.error_msg || '攻击失败', this.player.x, this.player.y, color);
+        // 距离过远(error_code=1)时，自动追击目标：移动到怪物附近后再次攻击
+        if (data.error_code === 1 && data.target_id) {
+          this.pendingAttackTargetId = data.target_id;
+          const target = this.battleSystem?.monsters?.get(data.target_id);
+          if (target) {
+            this.moveToTarget(target.x, target.y);
+          }
+        }
       }
       return;
     }
@@ -1678,9 +1716,21 @@ class Game {
     // 怪物攻击玩家的结果，attacker_type=2且target是玩家
     const attackerType = data.attacker_type || 0;
     
-    // 如果目标是怪物（玩家攻击怪物的结果），交给战斗系统处理
-    if (this.battleSystem && this.battleSystem.monsters && this.battleSystem.monsters.has(targetId)) {
+    // 关键修复：必须用 attacker_type 区分目标类型，避免玩家ID和怪物ID冲突
+    // attacker_type=2 (怪物攻击玩家) → target是玩家，必须走玩家受击逻辑
+    // attacker_type=1 或未设置 (玩家攻击怪物) → target是怪物
+    if (attackerType !== 2 && this.battleSystem && this.battleSystem.monsters && this.battleSystem.monsters.has(targetId)) {
       this.battleSystem.handleDamageResult(data);
+      
+      // 更新攻击者自身MP（技能攻击会消耗MP，服务端返回current_mp）
+      // 由于上面 handleDamageResult 后直接 return，MP更新逻辑需在此处处理
+      if (data.attacker_id === this.player.id && data.current_mp !== undefined) {
+        this.player.mp = data.current_mp;
+        if (this.player.max_mp === undefined && data.max_mp !== undefined) {
+          this.player.max_mp = data.max_mp;
+        }
+        this.updatePlayerUI();
+      }
       return;
     }
     
@@ -1704,6 +1754,9 @@ class Game {
       target.hp = Math.max(0, target.hp - damage);
     }
     
+    // 记录被攻击时间（用于条件显示血条：5秒内被攻击才显示）
+    target.lastAttackedTime = Date.now();
+    
     // 更新UI
     if (isSelf) {
       this.updatePlayerUI();
@@ -1719,10 +1772,29 @@ class Game {
     
     // 播放受击音效
     this.playHitSound(isCritical, isBlocked, isDodged);
-    
-    // 显示伤害数字
-    this.showDamageNumber(x, y, damage, isCritical);
-    
+
+    // 显示伤害数字（使用 BattleSystem 的 canvas 渲染，自动处理相机偏移）
+    if (this.battleSystem) {
+      this.battleSystem.addDamageNumber(target.x, target.y, damage, isCritical, isDodged, isBlocked);
+    } else {
+      this.showDamageNumber(x, y, damage, isCritical);
+    }
+
+    // 技能攻击时显示技能名飘字
+    if (data.is_skill_attack && data.skill_name) {
+      const skillColor = isCritical ? '#FFD700' : '#00BFFF';
+      this.showFloatingText(data.skill_name, target.x, target.y - 0.5, skillColor);
+    }
+
+    // 更新玩家MP（技能攻击会消耗MP，服务端返回current_mp）
+    if (isSelf && data.current_mp !== undefined) {
+      this.player.mp = data.current_mp;
+      if (this.player.max_mp === undefined && data.max_mp !== undefined) {
+        this.player.max_mp = data.max_mp;
+      }
+      this.updatePlayerUI();
+    }
+
     // 处理玩家死亡（怪物攻击玩家致死）
     if (isSelf && isDead) {
       this.onPlayerDeath();
@@ -1829,12 +1901,29 @@ class Game {
   /**
    * 玩家死亡处理
    */
-  onPlayerDeath() {
+  onPlayerDeath(data) {
+    // 标记玩家死亡状态（禁止移动和攻击）
+    this.player.isDead = true;
+
+    // 停止玩家移动
+    if (this.mapEngine) {
+      this.mapEngine.stopMoving();
+    }
+
+    // PVP死亡：显示击杀者信息
+    const isPVP = data && data.is_pvp;
+    const killerName = (isPVP && this.players && this.players.has(data.attacker_id))
+      ? this.players.get(data.attacker_id).name
+      : null;
+
     // 显示死亡UI
     if (this.uiManager) {
+      const message = isPVP && killerName
+        ? `你被 ${killerName} 击杀了！\n是否选择复活？`
+        : '是否选择复活？';
       this.uiManager.showDialog({
         title: '你已死亡',
-        message: '是否选择复活？',
+        message: message,
         buttons: [
           { text: '原地复活', onClick: () => this.respawn() },
           { text: '回城复活', onClick: () => this.respawnToTown() }
@@ -1842,10 +1931,23 @@ class Game {
         closeable: false
       });
     }
-    
-    // 停止玩家移动
-    if (this.mapEngine && this.mapEngine.player) {
-      this.mapEngine.player.stopMoving();
+  }
+
+  /**
+   * 触发PVP受击特效（屏幕红边闪烁+伤害数字）
+   */
+  triggerPVPHitEffect(data) {
+    // 屏幕红边受击特效
+    if (this.ui && this.ui.gamePanel) {
+      const panel = this.ui.gamePanel;
+      panel.classList.add('pvp-hit-flash');
+      setTimeout(() => panel.classList.remove('pvp-hit-flash'), 300);
+    }
+    // 暴击时额外震动
+    if (data.is_critical && this.mapEngine && this.mapEngine.canvas) {
+      const canvas = this.mapEngine.canvas;
+      canvas.classList.add('screen-shake');
+      setTimeout(() => canvas.classList.remove('screen-shake'), 400);
     }
   }
   
@@ -1853,9 +1955,6 @@ class Game {
    * 原地复活
    */
   respawn() {
-    // 关闭对话框
-    this.uiManager.hideDialog();
-    
     // 触发复活特效
     const tileSize = this.mapEngine?.tileSize || 48;
     const x = this.player.x * tileSize + tileSize / 2;
@@ -1876,9 +1975,6 @@ class Game {
    * 回城复活
    */
   respawnToTown() {
-    // 关闭对话框
-    this.uiManager.hideDialog();
-    
     // 发送回城复活请求
     window.GameWS.send(Protocol.CMD_RESPAWN, {
       type: 'town',
@@ -1894,6 +1990,7 @@ class Game {
     
     if (targetId === this.player.id) {
       // 自己复活
+      this.player.isDead = false; // 清除死亡状态
       this.player.x = data.x || this.player.x;
       this.player.y = data.y || this.player.y;
       this.player.hp = data.hp || this.player.maxHp;
@@ -2211,6 +2308,90 @@ class Game {
       }
     });
   }
+
+  /**
+   * 处理怪物生成（复活）消息 (cmd=3102)
+   * 服务端在怪物复活时广播，前端重新创建怪物对象
+   */
+  handleMonsterSpawn(data) {
+    console.log('[复活调试] handleMonsterSpawn 收到:', JSON.stringify(data));
+
+    // 构造 updateMonsters 兼容的数据格式
+    const monsterData = {
+      id: data.instance_id,
+      base_id: data.base_id,
+      name: data.name,
+      level: data.level,
+      type: data.type,
+      x: data.x,
+      y: data.y,
+      hp: data.hp,
+      maxHp: data.max_hp,
+      sprite_id: data.sprite_id,
+      status: 0, // 复活后为活跃状态
+    };
+
+    console.log('[复活调试] 构造的数据:', JSON.stringify(monsterData));
+    console.log('[复活调试] 当前 Map 大小:', this.battleSystem.monsters.size);
+    console.log('[复活调试] 怪物是否已存在:', this.battleSystem.monsters.has(data.instance_id));
+
+    // 通过 updateMonsters 添加或更新怪物（updateMonsters 接收数组，不是对象）
+    this.battleSystem.updateMonsters([monsterData]);
+
+    const newMonster = this.battleSystem.monsters.get(data.instance_id);
+    console.log('[复活调试] 处理后怪物对象:', newMonster ? JSON.stringify({
+      id: newMonster.id, name: newMonster.name, hp: newMonster.hp,
+      maxHp: newMonster.maxHp, status: newMonster.status,
+      x: newMonster.x, y: newMonster.y, displayX: newMonster.displayX, displayY: newMonster.displayY
+    }) : 'null');
+  }
+
+  /**
+   * 处理怪物死亡消息 (cmd=3103)
+   * 服务端广播怪物死亡通知，包含击杀者、经验、金币、掉落等信息
+   */
+  handleMonsterDeath(data) {
+    const monsterId = data.monster_id;
+    const killerId = data.killer_id;
+    const expGain = data.exp_gain || 0;
+    const goldGain = data.gold_gain || 0;
+    const drops = data.drops || [];
+
+    // 标记怪物为死亡状态并移除
+    const monster = this.battleSystem.monsters.get(monsterId);
+    if (monster) {
+      monster.status = 4; // 死亡状态
+      monster.hp = 0;
+
+      // 显示经验获取
+      if (expGain > 0 && killerId === this.player.id) {
+        this.battleSystem.showExpGain(expGain, monster.x, monster.y);
+      }
+
+      // 显示掉落物品
+      if (drops.length > 0 && killerId === this.player.id) {
+        this.battleSystem.showDrops(drops, monster.x, monster.y);
+      }
+
+      // 延迟移除死亡怪物（3秒后）
+      // 怪物复活时服务端会通过 monster_spawn 消息通知前端重新创建
+      setTimeout(() => {
+        this.battleSystem.removeMonster(monsterId);
+      }, 3000);
+    }
+
+    // 如果自己是击杀者，更新金币和经验
+    if (killerId === this.player.id) {
+      if (expGain > 0) {
+        this.player.exp = (this.player.exp || 0) + expGain;
+        this.updatePlayerUI();
+      }
+      if (goldGain > 0) {
+        this.player.gold = (this.player.gold || 0) + goldGain;
+        this.updatePlayerUI();
+      }
+    }
+  }
   
   /**
    * 触发地图事件特效
@@ -2414,7 +2595,179 @@ class Game {
     e.preventDefault();
     this.tryMove(newX, newY);
   }
-  
+
+  /**
+   * 绑定画布鼠标事件
+   * - mousemove：悬停在怪物/玩家上时显示目标详情
+   * - click：点击怪物/玩家选中并持续显示，点击空白处隐藏
+   * - mouseleave：离开画布时隐藏悬停详情
+   */
+  bindCanvasTargetEvents() {
+    if (!this.ui.canvas) return;
+    const canvas = this.ui.canvas;
+
+    // 悬停检测：鼠标移动时检查是否在怪物/玩家上
+    canvas.addEventListener('mousemove', (e) => {
+      if (this.state !== 'playing') return;
+      const tile = this.eventToTile(e);
+      if (!tile) return;
+
+      // 已选中目标时，悬停不覆盖选中状态（除非悬停在其他目标上）
+      const hoverTarget = this.getTargetAt(tile.x, tile.y);
+      if (hoverTarget) {
+        // 仅当未选中或悬停目标与选中目标不同时，显示悬停详情
+        if (!this.selectedTargetId || this.selectedTargetId !== hoverTarget.id) {
+          this.showTargetInfo(hoverTarget.target, hoverTarget.kind, false);
+        }
+      } else {
+        // 鼠标在空白处：若未选中目标则隐藏，若已选中则恢复选中目标详情
+        if (!this.selectedTargetId) {
+          this.hideTargetInfo();
+        } else if (this.selectedTarget) {
+          this.showTargetInfo(this.selectedTarget, this.selectedTargetKind, true);
+        }
+      }
+    });
+
+    // 点击：选中目标或移动
+    canvas.addEventListener('click', (e) => {
+      if (this.state !== 'playing') return;
+      const tile = this.eventToTile(e);
+      if (!tile) return;
+
+      const hit = this.getTargetAt(tile.x, tile.y);
+      if (hit) {
+        // 选中目标并持续显示
+        this.selectedTargetId = hit.id;
+        this.selectedTarget = hit.target;
+        this.selectedTargetKind = hit.kind;
+        this.showTargetInfo(hit.target, hit.kind, true);
+        // 怪物：发起攻击；玩家：仅选中（PVP需手动攻击）
+        if (hit.kind === 'monster') {
+          this.attackTarget(hit.id);
+        }
+      } else {
+        // 点击空白：清除选中并隐藏详情
+        this.clearSelectedTarget();
+        this.hideTargetInfo();
+      }
+    });
+
+    // 鼠标离开画布：隐藏悬停详情（选中状态保留）
+    canvas.addEventListener('mouseleave', () => {
+      if (!this.selectedTargetId) {
+        this.hideTargetInfo();
+      }
+    });
+  }
+
+  /**
+   * 将鼠标事件转换为地图格子坐标
+   */
+  eventToTile(e) {
+    if (!this.mapEngine) return null;
+    const rect = this.ui.canvas.getBoundingClientRect();
+    const tileSize = this.mapEngine.tileSize || 48;
+    const tileX = Math.floor((e.clientX - rect.left + this.mapEngine.camera.offsetX) / tileSize);
+    const tileY = Math.floor((e.clientY - rect.top + this.mapEngine.camera.offsetY) / tileSize);
+    return { x: tileX, y: tileY };
+  }
+
+  /**
+   * 获取指定格子上的目标（怪物或玩家）
+   * @returns {object|null} { id, target, kind } 或 null
+   */
+  getTargetAt(tileX, tileY) {
+    // 优先检查怪物
+    if (this.battleSystem) {
+      const monster = this.battleSystem.getMonsterAt(tileX, tileY);
+      if (monster && monster.status !== 4) {
+        return { id: monster.id, target: monster, kind: 'monster' };
+      }
+    }
+    // 检查其他玩家
+    for (const [, player] of this.players) {
+      if (player.x === tileX && player.y === tileY) {
+        return { id: player.id, target: player, kind: 'player' };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 清除选中目标
+   */
+  clearSelectedTarget() {
+    this.selectedTargetId = null;
+    this.selectedTarget = null;
+    this.selectedTargetKind = null;
+    if (this.battleSystem) {
+      this.battleSystem.selectedTarget = null;
+    }
+  }
+
+  /**
+   * 显示目标信息面板
+   * @param {object} target - 目标对象（怪物或玩家）
+   * @param {string} kind - 'monster' 或 'player'
+   * @param {boolean} selected - 是否为选中状态（true=持续显示，false=悬停临时显示）
+   */
+  showTargetInfo(target, kind, selected = false) {
+    const panel = document.getElementById('targetInfoPanel');
+    if (!panel || !target) return;
+
+    const nameEl = document.getElementById('targetName');
+    const levelEl = document.getElementById('targetLevel');
+    const badgeEl = document.getElementById('targetTypeBadge');
+    const avatarIconEl = document.getElementById('targetAvatarIcon');
+    const hpFillEl = document.getElementById('targetHpFill');
+    const hpTextEl = document.getElementById('targetHpText');
+
+    if (kind === 'monster') {
+      // 怪物类型徽章
+      const typeNames = { 0: '普通', 1: '精英', 2: 'BOSS' };
+      const typeIcons = { 0: '👹', 1: '👺', 2: '💀' };
+      const typeClasses = { 0: '', 1: 'elite', 2: 'boss' };
+      badgeEl.textContent = typeNames[target.type] || '普通';
+      badgeEl.className = 'target-type-badge ' + (typeClasses[target.type] || '');
+      avatarIconEl.textContent = typeIcons[target.type] || '👹';
+      nameEl.textContent = target.name || '未知怪物';
+      levelEl.textContent = `Lv.${target.level || 1}`;
+      hpFillEl.className = 'target-hp-fill';
+    } else {
+      // 玩家
+      badgeEl.textContent = '玩家';
+      badgeEl.className = 'target-type-badge player';
+      avatarIconEl.textContent = '🧙';
+      nameEl.textContent = target.name || '未知玩家';
+      levelEl.textContent = target.level ? `Lv.${target.level}` : '';
+      hpFillEl.className = 'target-hp-fill player';
+    }
+
+    // 血量条
+    const hp = target.hp || 0;
+    const maxHp = target.maxHp || target.max_hp || 100;
+    const hpPercent = maxHp > 0 ? Math.max(0, Math.min(100, (hp / maxHp) * 100)) : 0;
+    hpFillEl.style.width = `${hpPercent}%`;
+    hpTextEl.textContent = `${Math.max(0, hp)}/${maxHp}`;
+
+    // 选中状态边框高亮
+    panel.style.borderColor = selected ? '#FFD700' : '#e94560';
+    panel.style.boxShadow = selected
+      ? '0 4px 12px rgba(0,0,0,0.6), 0 0 12px rgba(255,215,0,0.6)'
+      : '0 4px 12px rgba(0,0,0,0.6), 0 0 8px rgba(233,69,96,0.4)';
+
+    panel.style.display = 'flex';
+  }
+
+  /**
+   * 隐藏目标信息面板
+   */
+  hideTargetInfo() {
+    const panel = document.getElementById('targetInfoPanel');
+    if (panel) panel.style.display = 'none';
+  }
+
   handleCanvasClick(e) {
     if (this.state !== 'playing') return;
     
@@ -2432,14 +2785,11 @@ class Game {
       const clickedMonster = this.battleSystem.handleClick(tileX, tileY);
       if (clickedMonster) {
         console.log(`点击怪物: ${clickedMonster.name}`);
-        // 如果距离足够近，自动发起攻击
-        if (this.isInAttackRange(clickedMonster)) {
-          this.attackTarget(clickedMonster.id);
-        } else {
-          // 先移动到怪物附近
-          this.moveToTarget(clickedMonster.x, clickedMonster.y);
-          this.showFloatingText(`接近目标...`, tileX, tileY, '#FFFF00');
-        }
+        // 显示目标信息面板
+        this.showTargetInfo(clickedMonster, 'monster');
+        // 直接发起攻击请求，由服务端校验距离
+        // 服务端返回"距离过远"时，handleDamage会自动触发追击移动
+        this.attackTarget(clickedMonster.id);
         return; // 点击了怪物，不进行移动
       }
       
@@ -2491,13 +2841,14 @@ class Game {
     // 立即更新位置
     this.player.x = newX;
     this.player.y = newY;
-    
+
     // 同步位置到地图引擎（摄像机跟随）
     this.syncPlayerPosition();
-    
+
     // 重绘（不带deltaTime，手动触发一次渲染）
     this.mapEngine.render(16.67); // 假设16.67ms帧时间
     this.renderMiniMap();
+    // 注：追击目标的自动攻击由游戏循环中的 updatePendingAttack 统一处理
   }
   
   useSkill(skillId) {
@@ -2510,26 +2861,104 @@ class Game {
       }
       return;
     }
-    
-    // 发送技能请求
+
+    // 获取当前选中目标（技能需要目标）
+    const targetId = (this.battleSystem && this.battleSystem.selectedTarget) || 0;
+    if (!targetId) {
+      // 无目标时，skill_id=0 为无目标技能（如内功心法），其他技能需要目标
+      if (skillId > 0) {
+        if (this.uiManager) {
+          this.uiManager.toast('请先选择目标', 'warning', 1000);
+        }
+        return;
+      }
+    }
+
+    // 判断目标类型：1=玩家（PVP），2=怪物（PVE）
+    // 优先检查 players Map，命中则为玩家目标
+    let targetType = 2;
+    if (targetId && this.players && this.players.has(targetId)) {
+      targetType = 1;
+      // PVP前检查：和平模式禁止攻击玩家
+      if (this.player.pkMode === 0 && skillId >= 0) {
+        if (this.uiManager) {
+          this.uiManager.toast('和平模式无法攻击玩家，请切换PK模式', 'warning', 2000);
+        }
+        return;
+      }
+    }
+
+    // 发送技能请求（使用CMD_USE_SKILL=2003，Gateway复用攻击流程转发）
     window.GameWS.send(Protocol.CMD_USE_SKILL, {
       skill_id: skillId,
-      target_id: 0, // 默认无目标
+      target_id: targetId,
+      target_type: targetType,
       x: this.player.x,
       y: this.player.y
     });
-    
+
     // 触发技能特效
     this.triggerSkillEffect(skillId);
-    
+
     // 播放技能音效
     this.playSkillSound(skillId);
-    
-    // 设置冷却
+
+    // 设置冷却（普通攻击1秒，技能3秒）
     const cooldown = skillId === 0 ? 1000 : 3000;
     this.skillCooldowns.set(skillId, Date.now() + cooldown);
   }
-  
+
+  /**
+   * 切换PK模式
+   * @param {number} mode 0=和平, 1=队伍, 2=帮派, 3=全体
+   */
+  setPkMode(mode) {
+    if (mode < 0 || mode > 3) {
+      if (this.uiManager) {
+        this.uiManager.toast('无效的PK模式', 'error', 1500);
+      }
+      return;
+    }
+    // 和平模式切换需要确认（避免误操作丢失红名状态）
+    if (this.player.pkMode !== 0 && mode === 0 && this.player.pkValue > 0) {
+      if (!window.confirm(`您当前PK值为${this.player.pkValue}，切换到和平模式不会清除PK值，确认切换？`)) {
+        return;
+      }
+    }
+    // 全体模式需要二次确认（防止误开红）
+    if (mode === 3 && this.player.pkMode !== 3) {
+      if (!window.confirm('全体模式会攻击所有玩家，确认开启？')) {
+        return;
+      }
+    }
+    window.GameWS.send(Protocol.CMD_SET_PK_MODE, { pk_mode: mode });
+  }
+
+  /**
+   * 处理服务端推送的PK模式切换结果
+   */
+  onPkModeChanged(data) {
+    if (!data) return;
+    // 失败响应
+    if (data.code && data.code !== 0) {
+      if (this.uiManager) {
+        this.uiManager.toast(data.msg || 'PK模式切换失败', 'error', 1500);
+      }
+      return;
+    }
+    this.player.pkMode = data.pk_mode || 0;
+    const modeNames = ['和平', '队伍', '帮派', '全体'];
+    const modeName = modeNames[this.player.pkMode] || '未知';
+    if (this.uiManager) {
+      this.uiManager.toast(`PK模式已切换为：${modeName}`, 'info', 2000);
+    }
+    // 更新UI显示
+    if (this.ui && this.ui.pkModeLabel) {
+      this.ui.pkModeLabel.textContent = modeName;
+      this.ui.pkModeLabel.style.color = this.player.pkMode === 0 ? '#5cb85c' : '#d9534f';
+    }
+  }
+
   /**
    * 检查目标是否在攻击范围内
    */
@@ -2599,11 +3028,133 @@ class Game {
   
   /**
    * 移动到目标位置附近
+   * 寻找目标周围4格中第一个可通行的格子作为移动目标
    */
   moveToTarget(targetX, targetY) {
-    // 计算目标附近的可移动位置（距离目标1格）
-    // 这里简化处理，直接移动到目标位置（会在接近时自动停止）
-    this.tryMove(targetX, targetY);
+    // 候选位置：目标上下左右4格
+    const candidates = [
+      { x: targetX, y: targetY - 1 },
+      { x: targetX, y: targetY + 1 },
+      { x: targetX - 1, y: targetY },
+      { x: targetX + 1, y: targetY }
+    ];
+    // 按距离玩家从近到远排序，优先走最近的路
+    candidates.sort((a, b) => {
+      const da = Math.hypot(this.player.x - a.x, this.player.y - a.y);
+      const db = Math.hypot(this.player.x - b.x, this.player.y - b.y);
+      return da - db;
+    });
+    for (const c of candidates) {
+      if (this.isWalkable(c.x, c.y)) {
+        this.tryMove(c.x, c.y);
+        return;
+      }
+    }
+    // 所有相邻格都不可通行，放弃移动
+    console.log('⚠️ 怪物周围无可通行路径，放弃追击');
+    this.pendingAttackTargetId = null;
+  }
+
+  /**
+   * 检查格子是否可通行（地图瓦片+玩家+怪物碰撞检测）
+   */
+  isWalkable(x, y) {
+    if (this.currentMap?.tiles?.[y]?.[x] === 1) return false;
+    for (const [, p] of this.players) {
+      if (p.x === x && p.y === y) return false;
+    }
+    if (this.battleSystem && this.battleSystem.monsters) {
+      for (const [, m] of this.battleSystem.monsters) {
+        if (m.status !== 4 && m.x === x && m.y === y) return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * 自动追击待攻击目标（游戏循环调用）
+   * 每次移动有冷却，避免请求过快；检测卡死自动放弃
+   */
+  updatePendingAttack() {
+    if (!this.pendingAttackTargetId) return;
+    if (!this.battleSystem || !this.battleSystem.monsters) return;
+
+    const target = this.battleSystem.monsters.get(this.pendingAttackTargetId);
+    // 目标消失或死亡，清除追击状态
+    if (!target || target.status === 4) {
+      this.pendingAttackTargetId = null;
+      return;
+    }
+
+    // 距离足够，发起攻击
+    if (this.isInAttackRange(target)) {
+      const targetId = this.pendingAttackTargetId;
+      this.pendingAttackTargetId = null;
+      this.attackTarget(targetId);
+      return;
+    }
+
+    // 卡死检测：记录上次玩家位置，若连续5秒位置未变则放弃追击
+    if (!this._pendingStartPos) {
+      this._pendingStartPos = { x: this.player.x, y: this.player.y, time: Date.now() };
+    } else if (this._pendingStartPos.x === this.player.x && this._pendingStartPos.y === this.player.y) {
+      if (Date.now() - this._pendingStartPos.time > 5000) {
+        console.log('⚠️ 追击卡死，放弃攻击目标');
+        this.pendingAttackTargetId = null;
+        this._pendingStartPos = null;
+        return;
+      }
+    } else {
+      // 位置变化，重置卡死计时
+      this._pendingStartPos = { x: this.player.x, y: this.player.y, time: Date.now() };
+    }
+
+    // 距离不够，继续向目标移动（节流：每300ms移动1格）
+    const now = Date.now();
+    if (!this._lastPendingMoveTime || now - this._lastPendingMoveTime >= 300) {
+      this._lastPendingMoveTime = now;
+      this.moveToTarget(target.x, target.y);
+    }
+  }
+
+  /**
+   * 实时更新选中目标的血量信息面板
+   * 怪物血量会随战斗变化，需每帧刷新；目标消失/死亡时清除选中并隐藏面板
+   */
+  updateSelectedTargetInfo() {
+    if (!this.selectedTargetId || !this.selectedTargetKind) return;
+
+    // 根据类型获取最新目标数据
+    let target = null;
+    if (this.selectedTargetKind === 'monster') {
+      target = this.battleSystem?.monsters?.get(this.selectedTargetId);
+      // 怪物死亡或消失：清除选中
+      if (!target || target.status === 4) {
+        this.clearSelectedTarget();
+        this.hideTargetInfo();
+        return;
+      }
+    } else if (this.selectedTargetKind === 'player') {
+      target = this.players.get(this.selectedTargetId);
+      if (!target) {
+        this.clearSelectedTarget();
+        this.hideTargetInfo();
+        return;
+      }
+    }
+
+    if (target) {
+      // 仅更新血量条，避免每帧重建整个面板
+      const hpFillEl = document.getElementById('targetHpFill');
+      const hpTextEl = document.getElementById('targetHpText');
+      if (hpFillEl && hpTextEl) {
+        const hp = target.hp || 0;
+        const maxHp = target.maxHp || target.max_hp || 100;
+        const hpPercent = maxHp > 0 ? Math.max(0, Math.min(100, (hp / maxHp) * 100)) : 0;
+        hpFillEl.style.width = `${hpPercent}%`;
+        hpTextEl.textContent = `${Math.max(0, hp)}/${maxHp}`;
+      }
+    }
   }
   
   /**
@@ -2675,10 +3226,30 @@ class Game {
         // 更新玩家自身血量（如果被攻击）
         if (data.target_id === this.player.id) {
           this.player.hp = data.current_hp || this.player.hp;
+          // PVP受击特效
+          if (data.is_pvp && data.damage > 0) {
+            this.triggerPVPHitEffect(data);
+          }
           if (data.is_dead) {
-            this.onPlayerDeath();
+            this.onPlayerDeath(data);
           }
           this.updatePlayerUI();
+        }
+        // 攻击者获得经验和PK值
+        if (data.attacker_id === this.player.id && data.is_pvp) {
+          if (data.exp_gain > 0) {
+            this.player.exp = (this.player.exp || 0) + (data.exp_gain || 0);
+            if (this.uiManager) {
+              this.uiManager.toast(`PVP胜利！经验+${data.exp_gain}`, 'success', 2000);
+            }
+          }
+          if (data.pk_value_gain > 0) {
+            this.player.pkValue = (this.player.pkValue || 0) + (data.pk_value_gain || 0);
+            if (this.uiManager) {
+              this.uiManager.toast(`PK值+${data.pk_value_gain}（红名程度提升）`, 'warning', 2000);
+            }
+            this.updatePlayerUI();
+          }
         }
         break;
         
@@ -2710,16 +3281,16 @@ class Game {
     const x = this.player.x * tileSize + tileSize / 2;
     const y = this.player.y * tileSize + tileSize / 2;
     
-    // 根据技能ID选择特效
+    // 根据技能ID选择特效（名称需与EffectManager.js中注册的key一致）
     const effectMap = {
-      0: 'sword_slash',   // 普通攻击
-      1: 'fire_burst',    // 技能1 - 火焰
-      2: 'ice_burst',     // 技能2 - 冰霜
-      3: 'magic_circle',  // 技能3 - 魔法阵
+      0: 'sword_basic',   // 普通攻击
+      1: 'fire_ball',     // 技能1 - 火球
+      2: 'ice_arrow',     // 技能2 - 冰箭
+      3: 'sword_qi',      // 技能3 - 剑气
       4: 'thunder_strike' // 技能4 - 雷霆
     };
     
-    const effectName = effectMap[skillId] || 'hit_spark';
+    const effectName = effectMap[skillId] || 'hit_normal';
     
     if (this.effectSettings.enableScreenShake && skillId >= 2) {
       // 高级技能触发屏幕震动
@@ -2811,7 +3382,13 @@ class Game {
         if (this.battleSystem) {
           this.battleSystem.update(deltaTime);
         }
-        
+
+        // 自动追击待攻击目标（点击远处怪物后自动接近并攻击）
+        this.updatePendingAttack();
+
+        // 实时更新选中目标的血量信息面板
+        this.updateSelectedTargetInfo();
+
         // 实时更新小地图（显示怪物平滑移动）
         this.renderMiniMap();
       }
@@ -2912,6 +3489,12 @@ class Game {
     const tileSize = this.mapEngine.tileSize || 48;
     const myX = this.player.x;
     const myY = this.player.y;
+    
+    // 绘制自己的条件血条（仅在被怪物攻击后5秒内显示）
+    if (this.player.lastAttackedTime && (Date.now() - this.player.lastAttackedTime < 5000)) {
+      const selfCenterX = this.player.pixelX + tileSize / 2;
+      this.drawPlayerHealthBar(ctx, selfCenterX, this.player.pixelY, tileSize, this.player.hp, this.player.maxHp);
+    }
     // 与updateOtherPlayers保持一致的视野计算
     const bufferMultiplier = 1.0;
     const viewWidth = Math.ceil(canvas.width / tileSize) * (1 + bufferMultiplier);
@@ -2952,7 +3535,57 @@ class Game {
       ctx.font = '12px Microsoft YaHei';
       ctx.textAlign = 'center';
       ctx.fillText(player.name, screenX + tileSize / 2, screenY - 5);
+      
+      // 条件血条：仅在被怪物攻击后5秒内显示
+      if (player.lastAttackedTime && (Date.now() - player.lastAttackedTime < 5000)) {
+        this.drawPlayerHealthBar(ctx, screenX + tileSize / 2, screenY, tileSize, player.hp, player.maxHp);
+      }
     });
+  }
+  
+  /**
+   * 绘制玩家血条（与怪物血条风格一致）
+   * @param {number} centerX - 屏幕中心X
+   * @param {number} topY - 角色顶部Y
+   * @param {number} tileSize - 格子大小
+   * @param {number} hp - 当前血量
+   * @param {number} maxHp - 最大血量
+   */
+  drawPlayerHealthBar(ctx, centerX, topY, tileSize, hp, maxHp) {
+    const barWidth = tileSize * 0.8;
+    const barHeight = 5;
+    const barX = centerX - barWidth / 2;
+    const barY = topY - tileSize * 0.5 - 10;
+    
+    const maxHpVal = maxHp || 100;
+    const hpPercent = Math.max(0, Math.min(1, (hp || 0) / maxHpVal));
+    
+    ctx.save();
+    
+    // 背景
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+    ctx.fillRect(barX - 1, barY - 1, barWidth + 2, barHeight + 2);
+    
+    // 血量背景
+    ctx.fillStyle = '#555';
+    ctx.fillRect(barX, barY, barWidth, barHeight);
+    
+    // 当前血量（根据百分比变色）
+    let hpColor = '#27AE60'; // 绿色 > 50%
+    if (hpPercent <= 0.3) {
+      hpColor = '#E74C3C'; // 红色 < 30%
+    } else if (hpPercent <= 0.5) {
+      hpColor = '#F39C12'; // 黄色 < 50%
+    }
+    ctx.fillStyle = hpColor;
+    ctx.fillRect(barX, barY, barWidth * hpPercent, barHeight);
+    
+    // 边框
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(barX, barY, barWidth, barHeight);
+    
+    ctx.restore();
   }
   
   /**
@@ -2995,7 +3628,11 @@ class Game {
       crit: 5,
       mapId: 1,
       x: 0,
-      y: 0
+      y: 0,
+      pkMode: 0,    // PK模式: 0=和平, 1=队伍, 2=帮派, 3=全体
+      pkValue: 0,   // PK值（红名程度）
+      weaponId: 0,  // 装备武器ID
+      isDead: false // 是否死亡（死亡时禁止移动和攻击）
     };
 
     // 清空其他玩家列表
@@ -3080,6 +3717,7 @@ const Protocol = window.Protocol = {
   CMD_LEVEL_UP: 2012,
   CMD_BUFF: 2013,
   CMD_DEBUFF: 2014,
+  CMD_SET_PK_MODE: 2015, // 切换PK模式
   
   // 地图相关 3001-3050
   CMD_ENTER_MAP: 3001,

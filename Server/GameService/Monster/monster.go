@@ -388,14 +388,17 @@ var (
 	// 位置广播回调（由外部设置，用于通过Gateway广播怪物位置）
 	positionBroadcastFunc func(map[uint32][]MonsterPositionInfo)
 
-	// 玩家受击推送回调（由外部设置，用于通过Gateway推送怪物攻击玩家的结果给被攻击玩家）
-	// 参数: targetRoleID(被攻击玩家), monsterName(怪物名), result(攻击结果)
-	playerDamagePushFunc func(targetRoleID uint64, monsterName string, result *common.MonsterAttackResult)
+	// 怪物生成通知回调（由外部设置，用于怪物复活时通知客户端重新创建怪物）
+	spawnNotifyFunc func(mapID uint32, spawnInfo MonsterSpawnInfo)
+
+	// 玩家受击推送回调（由外部设置，用于通过Gateway广播怪物攻击玩家的结果给同地图所有玩家）
+	// 参数: mapID(地图ID), targetRoleID(被攻击玩家), monsterName(怪物名), result(攻击结果)
+	playerDamagePushFunc func(mapID uint32, targetRoleID uint64, monsterName string, result *common.MonsterAttackResult)
 )
 
 // SetPlayerDamagePushFunc 设置玩家受击推送函数（在main.go中调用）
-// 用于将怪物攻击玩家的结果通过Gateway WebSocket推送给被攻击的客户端
-func SetPlayerDamagePushFunc(fn func(targetRoleID uint64, monsterName string, result *common.MonsterAttackResult)) {
+// 用于将怪物攻击玩家的结果通过Gateway WebSocket广播给同地图所有客户端
+func SetPlayerDamagePushFunc(fn func(mapID uint32, targetRoleID uint64, monsterName string, result *common.MonsterAttackResult)) {
 	playerDamagePushFunc = fn
 }
 
@@ -423,6 +426,13 @@ func InitService(battleSvc BattleServiceInterface) {
 		}
 	})
 
+	// 设置怪物生成回调（怪物复活时通知客户端重新创建怪物）
+	globalAIService.SetSpawnNotifyCallback(func(mapID uint32, spawnInfo MonsterSpawnInfo) {
+		if spawnNotifyFunc != nil {
+			spawnNotifyFunc(mapID, spawnInfo)
+		}
+	})
+
 	// 启动AI系统
 	globalAIService.Start()
 }
@@ -430,6 +440,12 @@ func InitService(battleSvc BattleServiceInterface) {
 // SetPositionBroadcastFunc 设置位置广播函数（在main.go中调用）
 func SetPositionBroadcastFunc(fn func(map[uint32][]MonsterPositionInfo)) {
 	positionBroadcastFunc = fn
+}
+
+// SetSpawnNotifyFunc 设置怪物生成通知函数（在main.go中调用）
+// 用于怪物复活时通知客户端重新创建怪物
+func SetSpawnNotifyFunc(fn func(mapID uint32, spawnInfo MonsterSpawnInfo)) {
+	spawnNotifyFunc = fn
 }
 
 // InitMapMonsters 初始化指定地图的怪物（在loadManagedMaps中调用）

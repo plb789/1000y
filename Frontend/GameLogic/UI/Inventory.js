@@ -915,8 +915,17 @@ class Inventory {
   async loadFromServer() {
     try {
       const response = await fetch('/api/player/inventory');
-      const data = await response.json();
-      
+
+      // 服务端暂未实现该接口，降级到测试数据
+      if (!response.ok) {
+        console.warn('背包接口暂未实现，使用测试数据');
+        this.loadTestData();
+        return;
+      }
+
+      const text = await response.text();
+      const data = JSON.parse(text);
+
       if (data.success) {
         this.items = data.items;
         this.equipments = data.equipments;
@@ -925,6 +934,8 @@ class Inventory {
       }
     } catch (error) {
       console.error('从服务器加载背包数据失败:', error);
+      // 降级到测试数据，避免背包为空
+      this.loadTestData();
     }
   }
 }

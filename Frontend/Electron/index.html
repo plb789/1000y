@@ -150,6 +150,119 @@
       border-radius: 5px;
       border: 1px solid #e94560;
     }
+
+    /* 目标信息面板（画布顶部居中） */
+    #targetInfoPanel {
+      position: absolute;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 16px;
+      background: linear-gradient(180deg, rgba(0,0,0,0.85) 0%, rgba(20,20,40,0.85) 100%);
+      border: 2px solid #e94560;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.6), 0 0 8px rgba(233,69,96,0.4);
+      z-index: 101;
+      min-width: 280px;
+      max-width: 420px;
+    }
+
+    .target-avatar {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: radial-gradient(circle, #3a3a5a 0%, #1a1a2e 100%);
+      border: 2px solid #e94560;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .target-avatar-icon {
+      font-size: 28px;
+      line-height: 1;
+    }
+
+    .target-details {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+    }
+
+    .target-name-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .target-type-badge {
+      font-size: 11px;
+      padding: 1px 6px;
+      border-radius: 3px;
+      background: #555;
+      color: #fff;
+      flex-shrink: 0;
+    }
+
+    .target-type-badge.elite { background: #9B59B6; }
+    .target-type-badge.boss { background: #c0392b; }
+    .target-type-badge.player { background: #2980b9; }
+
+    .target-name {
+      color: #fff;
+      font-weight: bold;
+      font-size: 14px;
+      text-shadow: 0 1px 2px #000;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 200px;
+    }
+
+    .target-level {
+      color: #FFD700;
+      font-size: 12px;
+      flex-shrink: 0;
+    }
+
+    .target-hp-bar {
+      position: relative;
+      width: 100%;
+      height: 16px;
+      background: rgba(0,0,0,0.6);
+      border: 1px solid #444;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .target-hp-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #c0392b 0%, #e74c3c 100%);
+      transition: width 0.3s ease;
+      width: 100%;
+    }
+
+    .target-hp-fill.player {
+      background: linear-gradient(90deg, #27ae60 0%, #2ecc71 100%);
+    }
+
+    .target-hp-text {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #fff;
+      font-size: 11px;
+      text-shadow: 0 1px 2px #000;
+      white-space: nowrap;
+    }
     
     .online-count {
       color: #4ade80;
@@ -548,6 +661,24 @@
     
     <!-- 小地图 -->
     <canvas id="miniMap"></canvas>
+
+    <!-- 目标信息面板（画布顶部居中，点击怪物/玩家时显示） -->
+    <div id="targetInfoPanel" style="display:none;">
+      <div class="target-avatar" id="targetAvatar">
+        <span class="target-avatar-icon" id="targetAvatarIcon">👹</span>
+      </div>
+      <div class="target-details">
+        <div class="target-name-row">
+          <span class="target-type-badge" id="targetTypeBadge">普通</span>
+          <span class="target-name" id="targetName">未知目标</span>
+          <span class="target-level" id="targetLevel">Lv.1</span>
+        </div>
+        <div class="target-hp-bar">
+          <div class="target-hp-fill" id="targetHpFill"></div>
+          <span class="target-hp-text" id="targetHpText">100/100</span>
+        </div>
+      </div>
+    </div>
     
     <!-- 角色信息面板 -->
     <div id="rolePanel">

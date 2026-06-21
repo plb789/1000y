@@ -58,7 +58,9 @@ class BattleSystem {
         }
         
         // 更新其他属性
-        if (data.hp !== undefined) monster.hp = data.hp;
+        if (data.hp !== undefined) {
+          monster.hp = data.hp;
+        }
         if (data.maxHp !== undefined) monster.maxHp = data.maxHp;
         if (data.name !== undefined) monster.name = data.name;
         if (data.level !== undefined) monster.level = data.level;
@@ -460,6 +462,12 @@ class BattleSystem {
    * @param {number} targetId - 目标怪物实例ID
    */
   async attack(targetId) {
+    // 死亡状态下禁止攻击
+    if (this.game.player.isDead) {
+      console.log('已死亡，无法攻击');
+      return false;
+    }
+
     // 检查冷却
     const now = Date.now();
     if (now - this.lastAttackTime < this.attackCooldown) {
@@ -467,28 +475,24 @@ class BattleSystem {
       this.game.showFloatingText('攻击冷却中...', this.game.player.x, this.game.player.y, '#FFAA00');
       return false;
     }
-    
-    // 检查距离
+
+    // 检查目标存在性
     const target = this.monsters.get(targetId);
     if (!target) {
       console.log('目标不存在');
       return false;
     }
-    
+
+    // 距离校验交由服务端处理，前端直接发送攻击请求
+    // 服务端返回error_code=1(距离过远)时，Game.handleDamage会自动触发追击移动
+
     const player = this.game.player;
-    const distance = Math.hypot(player.x - target.x, player.y - target.y);
-    
-    if (distance > 1.5) { // 近战攻击范围1.5格
-      console.log('距离过远');
-      this.game.showFloatingText('距离过远!', player.x, player.y, '#FF0000');
-      return false;
-    }
-    
+
     // 设置冷却
     this.lastAttackTime = now;
-    
+
     console.log(`⚔️ 发起攻击 -> 怪物 ${target.name} (${targetId})`);
-    
+
     // 通过WebSocket发送攻击请求（cmd=2002 CMD_ATTACK）
     // 服务端Gateway转发到GameService，处理结果通过/internal/push异步推送回来
     if (window.GameWS && window.GameWS.isConnected) {
@@ -501,13 +505,13 @@ class BattleSystem {
       });
     } else {
       console.warn('WebSocket未连接，无法发起攻击');
-      this.game.showFloatingText('网络未连接', player.x, player.y, '#FF0000');
+      this.game.showFloatingText('网络未连接', this.game.player.x, this.game.player.y, '#FF0000');
       return false;
     }
-    
+
     // 播放攻击动画（不等待服务端响应，提升手感）
     this.playAttackAnimation(player.x, player.y, target.x, target.y);
-    
+
     return true;
   }
   
@@ -632,26 +636,30 @@ class BattleSystem {
     const isBlocked = data.is_blocked || false;
     const currentHp = data.current_hp;
     const isDead = data.is_dead || false;
-    
+
     // 更新怪物HP
     const monster = this.monsters.get(targetId);
     if (monster) {
       monster.hp = currentHp;
-      
+
       if (isDead) {
         monster.status = 4; // 死亡状态
-        
+
         // 延迟移除死亡怪物（3秒后）
+        // 怪物复活时服务端会通过 monster_spawn 消息通知前端重新创建
         setTimeout(() => {
           this.removeMonster(targetId);
         }, 3000);
-        
-        // 显示掉落信息
-        if (data.exp_gain) {
-          this.showExpGain(data.exp_gain, monster.x, monster.y);
-        }
-        if (data.drops && data.drops.length > 0) {
-          this.showDrops(data.drops, monster.x, monster.y);
+
+        // 仅击杀者显示掉落信息（广播消息中其他玩家也会收到，但只有击杀者应看到）
+        const isKiller = data.attacker_id === this.game.player.id;
+        if (isKiller) {
+          if (data.exp_gain) {
+            this.showExpGain(data.exp_gain, monster.x, monster.y);
+          }
+          if (data.drops && data.drops.length > 0) {
+            this.showDrops(data.drops, monster.x, monster.y);
+          }
         }
       }
     }

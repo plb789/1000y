@@ -128,7 +128,7 @@ type RoleInfo struct {
 	BindGold   int64  `json:"bind_gold"`
 	Yuanbao    int64  `json:"yuanbao"`
 	Gender     uint8  `json:"gender"`
-	Appearance string `json:"appearance"`
+	Appearance uint32 `json:"appearance"`
 	Hp         int    `json:"hp"`
 	MaxHp      int    `json:"max_hp"`
 	Mp         int    `json:"mp"`
@@ -329,11 +329,16 @@ type DBRoleRequest struct {
 func DBRoleGet(roleID uint64) (*RoleInfo, error) {
 	resp, err := DBPost("/api/role/get", map[string]uint64{"id": roleID})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("DBService请求失败: %v", err)
 	}
 
-	if resp["code"].(float64) != 0 {
-		return nil, fmt.Errorf("获取角色失败: %v", resp["msg"])
+	code, ok := resp["code"].(float64)
+	if !ok {
+		return nil, fmt.Errorf("DBService响应格式错误: %v", resp)
+	}
+	if code != 0 {
+		msg, _ := resp["msg"].(string)
+		return nil, fmt.Errorf("获取角色失败: %s", msg)
 	}
 
 	data, _ := json.Marshal(resp["data"])
