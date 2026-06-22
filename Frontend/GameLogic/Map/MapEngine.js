@@ -13,6 +13,11 @@ class MapEngine {
     this.mapRenderer = null;
     this.currentMap = this.mapParser; // 当前地图数据引用
 
+    // ★ 分块加载管理器（支持超大地图）
+    // 统一在 loadMapData 中根据模式创建实例，避免重复创建导致泄漏
+    this.chunkManager = null;
+    this.lastUnloadTime = 0; // 上次卸载远端区块的时间戳
+
     // 动画系统
     if (typeof MapAnimationSystem !== 'undefined' && typeof MapAnimationSystem === 'function') {
       this.animationSystem = new MapAnimationSystem();
@@ -97,6 +102,10 @@ class MapEngine {
     const mapBuf = await CommonUtil.loadBinary(mapUrl);
     this.mapParser.loadMap(mapBuf);
 
+    // ★ 创建分块管理器（根据地图大小自动决定是否启用）
+    //    统一调用 _initChunkManagerFromFullData，避免与 loadMapData 重复初始化
+    this._initChunkManagerFromFullData();
+
     // 瓦片图集是可选的
     if (tilesetUrl) {
       this.tilesetImg = await CommonUtil.loadImage(tilesetUrl);
@@ -119,13 +128,181 @@ class MapEngine {
   }
 
   // 分步加载：加载地图数据
-  async loadMapData(mapUrl) {
+  // ★ 支持两种模式：
+  //    模式A（默认）：下载完整 .map 文件
+  //    模式B（服务端按需加载）：仅查询地图尺寸，瓦片数据按区块从服务端获取
+  //
+  // @param {string} mapUrl - .map 文件URL（模式A）或地图ID（模式B，传 'map:<id>'）
+  // @param {object} [options] - 加载选项
+  // @param {boolean} [options.useServerChunkMode=false] - 是否启用服务端按需加载模式
+  // @param {number} [options.mapId] - 地图ID（模式B必填）
+  async loadMapData(mapUrl, options = {}) {
     try {
-      const mapBuf = await CommonUtil.loadBinary(mapUrl);
-      this.mapParser.loadMap(mapBuf);
+      if (options.useServerChunkMode && options.mapId) {
+        // ★ 模式B：服务端按需加载
+        console.log(`📦 启用服务端按需加载模式 (mapId=${options.mapId})`);
+
+        // 1. 查询地图区块信息
+        const chunkInfo = await ChunkManager.queryChunkInfo(options.mapId);
+        if (!chunkInfo) {
+          throw new Error('无法获取地图区块信息');
+        }
+
+        console.log(`   地图尺寸: ${chunkInfo.width} × ${chunkInfo.height}`);
+        console.log(`   区块划分: ${chunkInfo.chunk_cols} × ${chunkInfo.chunk_rows} = ${chunkInfo.total_chunks} 块`);
+        console.log(`   建议分块模式: ${chunkInfo.recommend_chunk_mode ? '是' : '否'}`);
+
+        // 2. 设置 mapParser 的地图尺寸（不加载完整数据）
+        //    这样视口裁剪渲染可以正常工作，瓦片数据通过 chunkManager 获取
+        this.mapParser.width = chunkInfo.width;
+        this.mapParser.height = chunkInfo.height;
+        // ★ collision 初始化为全 1（阻挡），避免未加载区块被 A* 误判为可通行
+        //    _syncCollisionFromChunks 会用已加载区块的真实值覆盖对应位置
+        this.mapParser.collision = new Uint8Array(chunkInfo.width * chunkInfo.height).fill(1);
+        // 初始化空的 layerData（实际数据由 chunkManager 提供）
+        this.mapParser.layerData = {
+          ground: new Array(chunkInfo.width * chunkInfo.height).fill(null),
+          object: new Array(chunkInfo.width * chunkInfo.height).fill(null),
+          overlay: new Array(chunkInfo.width * chunkInfo.height).fill(null)
+        };
+        this.mapParser.objects = [];
+
+        // 3. 创建服务端模式的 ChunkManager
+        this.chunkManager = ChunkManager.createServerMode({
+          mapId: options.mapId,
+          chunkSize: chunkInfo.chunk_size || 64,
+          loadRadius: 1,
+          maxChunks: 25
+        });
+        // ★ 调用 initialize 完成统一初始化（设置 mapWidth/mapHeight、计算 chunkCols/chunkRows、打印日志）
+        //    createServerMode 已设置 threshold: 0，initialize 会自动计算 enabled = true
+        this.chunkManager.initialize(chunkInfo.width, chunkInfo.height);
+        // 服务端返回的 chunk_cols/chunk_rows 优先（避免客户端 Math.ceil 与服务端不一致）
+        if (chunkInfo.chunk_cols) this.chunkManager.chunkCols = chunkInfo.chunk_cols;
+        if (chunkInfo.chunk_rows) this.chunkManager.chunkRows = chunkInfo.chunk_rows;
+
+        // 4. 注入到 mapParser
+        this.mapParser.setChunkManager(this.chunkManager);
+        // ★ 注册区块卸载回调，重置已卸载区块的 collision 数据
+        this.chunkManager.onChunkUnload = (chunk) => this._onChunkUnloaded(chunk);
+
+        // 5. 预加载玩家周围区块（同步等待，确保首次渲染有数据）
+        await this.chunkManager.preloadChunks(this.player.x, this.player.y);
+
+        // 6. 同步 collision 数据到 mapParser（用于寻路）
+        //    从已加载的区块中提取 collision 数据
+        this._syncCollisionFromChunks();
+
+        console.log(`✅ 服务端按需加载模式初始化完成`);
+      } else {
+        // 模式A：下载完整 .map 文件
+        const mapBuf = await CommonUtil.loadBinary(mapUrl);
+        this.mapParser.loadMap(mapBuf);
+
+        // ★ 创建分块管理器（根据地图大小自动决定是否启用）
+        //    统一调用 _initChunkManagerFromFullData，避免与 loadMap 重复初始化
+        this._initChunkManagerFromFullData();
+      }
     } catch (err) {
       console.error('地图数据加载失败:', err.message);
       throw err; // 重新抛出异常，让上层处理
+    }
+  }
+
+  /**
+   * ★ 从完整地图数据初始化分块管理器（模式A公共逻辑）
+   *    供 loadMap 和 loadMapData(模式A) 共用，避免重复初始化导致：
+   *    1. 创建多个 ChunkManager 实例造成内存泄漏
+   *    2. 之前预加载的区块被丢弃
+   *    调用前提：this.mapParser 已完成 loadMap，tiles/collision/layerData/objects 已就绪
+   */
+  _initChunkManagerFromFullData() {
+    // 先清理旧实例，避免重复加载地图时内存泄漏
+    if (this.chunkManager) {
+      this.chunkManager.clear();
+    }
+    this.chunkManager = new ChunkManager({
+      chunkSize: 64,
+      loadRadius: 1,
+      maxChunks: 25,
+      threshold: 200000
+    });
+    this.chunkManager.initialize(this.mapParser.width, this.mapParser.height);
+    this.chunkManager.setFullMapData({
+      tiles: this.mapParser.tiles,
+      collision: this.mapParser.collision,
+      layerData: this.mapParser.layerData,
+      objects: this.mapParser.objects
+    });
+    // 注入到 mapParser，让 getZSortedRenderList 在分块模式下委托获取瓦片
+    this.mapParser.setChunkManager(this.chunkManager);
+    // ★ 模式A不注册 onChunkUnload 回调：
+    //    mapParser.collision 在 loadMap 时已填充完整数据，不应被区块卸载重置
+    //    卸载回调只在服务端模式（模式B）下注册，因为模式B的 collision 数组
+    //    需要根据已加载区块动态维护
+    // 预加载玩家周围区块
+    this.chunkManager.preloadChunks(this.player.x, this.player.y);
+  }
+
+  /**
+   * ★ 从已加载的区块同步 collision 数据到 mapParser
+   * 用于服务端模式下寻路（A*需要完整的 collision 数组）
+   * 注意：未加载区块保持初始值 1（阻挡），避免 A* 寻路穿越未加载区域
+   */
+  _syncCollisionFromChunks() {
+    if (!this.chunkManager || !this.chunkManager.enabled) return;
+
+    const w = this.mapParser.width;
+    const h = this.mapParser.height;
+    const collision = this.mapParser.collision;
+
+    // 遍历所有已加载区块，提取 collision 数据
+    for (const [key, chunk] of this.chunkManager.chunks) {
+      const startX = chunk.startTileX;
+      const startY = chunk.startTileY;
+      const cw = chunk.width;
+      const ch = chunk.height;
+
+      for (let y = 0; y < ch; y++) {
+        for (let x = 0; x < cw; x++) {
+          const tileX = startX + x;
+          const tileY = startY + y;
+          if (tileX < w && tileY < h) {
+            collision[tileY * w + tileX] = chunk.data.collision[y * cw + x];
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * ★ 区块卸载回调：重置对应区域的 collision 数据为 1（阻挡）
+   *    避免 A* 寻路将已卸载区块误判为可通行
+   *    由 ChunkManager._removeChunk 在区块卸载时触发
+   *
+   * @param {object} chunk - 被卸载的区块 {startTileX, startTileY, width, height}
+   */
+  _onChunkUnloaded(chunk) {
+    if (!this.mapParser || !this.mapParser.collision) return;
+
+    const w = this.mapParser.width;
+    const h = this.mapParser.height;
+    const collision = this.mapParser.collision;
+    const startX = chunk.startTileX;
+    const startY = chunk.startTileY;
+    const cw = chunk.width;
+    const ch = chunk.height;
+
+    // 将已卸载区块的 collision 重置为 1（阻挡）
+    for (let y = 0; y < ch; y++) {
+      const tileY = startY + y;
+      if (tileY >= h) break;
+      const rowBase = tileY * w;
+      for (let x = 0; x < cw; x++) {
+        const tileX = startX + x;
+        if (tileX >= w) break;
+        collision[rowBase + tileX] = 1;
+      }
     }
   }
 
@@ -626,12 +803,14 @@ class MapEngine {
     }
 
     // 使用 AStar 算法计算路径
+    // ★ 传入 maxDistance 参数，避免超大地图长距离寻路卡顿
     const path = AStar.findPath(
       this.player.x, this.player.y,
       targetX, targetY,
       this.mapParser.collision,
       this.mapParser.width,
-      this.mapParser.height
+      this.mapParser.height,
+      { maxDistance: 100 }  // 寻路距离上限（曼哈顿距离）
     );
 
     if (path.length === 0) {
@@ -726,6 +905,29 @@ class MapEngine {
     if (this.roleAnim) this.roleAnim.update();
     if (this.characterRenderer) this.characterRenderer.update(deltaTime);
     this.render(deltaTime);
+
+    // ★ 分块加载：玩家移动时预加载新区块，定期卸载远端区块
+    if (this.chunkManager && this.chunkManager.enabled) {
+      // 预加载是幂等的，已加载的区块会直接返回，开销很小
+      // ★ 注意：preloadChunks 是 async，但这里不 await（避免阻塞渲染循环）
+      //    通过 .then() 在加载完成后异步同步 collision 数据
+      this.chunkManager.preloadChunks(this.player.x, this.player.y).then(loaded => {
+        // 服务端模式下，每次预加载新区块后立即同步 collision 数据用于寻路
+        //    避免新区块加载后 collision 数据滞后导致寻路错误
+        if (this.chunkManager.chunkLoader && loaded > 0) {
+          this._syncCollisionFromChunks();
+        }
+      }).catch(err => {
+        // ★ 捕获预加载失败（网络错误等），避免未处理的 Promise rejection 影响渲染循环
+        console.warn('预加载区块失败:', err);
+      });
+
+      // 卸载远端区块：每 1 秒执行一次（节流）
+      if (currentTime - this.lastUnloadTime > 1000) {
+        this.chunkManager.unloadDistantChunks(this.player.x, this.player.y);
+        this.lastUnloadTime = currentTime;
+      }
+    }
     
     // FPS 计算：每秒更新一次
     this.frameCount++;

@@ -19,6 +19,9 @@ type GameMap struct {
 	Width     uint16
 	Height    uint16
 	Collision [][]bool
+	// ★ 新增：保存原始瓦片数据，用于按区块提供给前端
+	//   按 y*Width + x 一维存储
+	Tiles []Tile
 }
 
 // 全局地图数据（支持多地图）
@@ -106,6 +109,7 @@ func LoadMapFile(path string) error {
 		Width:     w,
 		Height:    h,
 		Collision: coll,
+		Tiles:     tiles, // ★ 保存原始瓦片数据用于按区块提供
 	}
 
 	mapMutex.Lock()
@@ -150,4 +154,79 @@ func CanMove(x, y int) bool {
 		return false
 	}
 	return !m.Collision[y][x]
+}
+
+// ★ 新增：按区块获取瓦片数据
+// 用于前端方案B按需加载，避免一次性下载整张地图
+//
+// 返回二进制数据格式（紧凑传输）：
+//
+//	[width:u16][height:u16]
+//	每瓦片 5 字节：[low:u16][high:u16][attr:u8]
+//
+// @param chunkX, chunkY - 区块坐标（瓦片坐标除以chunkSize）
+// @param chunkSize - 区块尺寸（瓦片数，前端约定64）
+// @returns []byte 二进制数据，nil 表示地图未加载
+func (m *GameMap) GetChunkData(chunkX, chunkY, chunkSize int) []byte {
+	if m == nil || m.Tiles == nil {
+		return nil
+	}
+
+	startX := chunkX * chunkSize
+	startY := chunkY * chunkSize
+	if startX >= int(m.Width) || startY >= int(m.Height) {
+		return nil
+	}
+
+	endX := startX + chunkSize
+	endY := startY + chunkSize
+	if endX > int(m.Width) {
+		endX = int(m.Width)
+	}
+	if endY > int(m.Height) {
+		endY = int(m.Height)
+	}
+
+	chunkW := endX - startX
+	chunkH := endY - startY
+
+	// 输出缓冲：4字节头 + 每瓦片5字节
+	buf := make([]byte, 4+chunkW*chunkH*5)
+	pos := 0
+
+	// 写入区块尺寸
+	buf[pos] = byte(chunkW & 0xFF)
+	buf[pos+1] = byte((chunkW >> 8) & 0xFF)
+	buf[pos+2] = byte(chunkH & 0xFF)
+	buf[pos+3] = byte((chunkH >> 8) & 0xFF)
+	pos += 4
+
+	// 写入瓦片数据
+	for y := startY; y < endY; y++ {
+		rowBase := y * int(m.Width)
+		for x := startX; x < endX; x++ {
+			t := m.Tiles[rowBase+x]
+			// low:u16 little-endian
+			buf[pos] = byte(t.Low & 0xFF)
+			buf[pos+1] = byte((t.Low >> 8) & 0xFF)
+			// high:u16 little-endian
+			buf[pos+2] = byte(t.High & 0xFF)
+			buf[pos+3] = byte((t.High >> 8) & 0xFF)
+			// attr:u8
+			buf[pos+4] = t.Attr
+			pos += 5
+		}
+	}
+
+	return buf[:pos]
+}
+
+// GetChunkSize 获取地图的区块划分信息
+func (m *GameMap) GetChunkSize(chunkSize int) (chunkCols, chunkRows int) {
+	if m == nil || chunkSize <= 0 {
+		return 0, 0
+	}
+	chunkCols = (int(m.Width) + chunkSize - 1) / chunkSize
+	chunkRows = (int(m.Height) + chunkSize - 1) / chunkSize
+	return
 }

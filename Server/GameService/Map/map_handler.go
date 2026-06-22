@@ -56,6 +56,10 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 		// NPC和怪物
 		mapGroup.GET("/:id/npcs", h.GetNPCs)         // 获取地图NPC
 		mapGroup.GET("/:id/monsters", h.GetMonsters) // 获取地图怪物
+
+		// ★ 按区块加载地图数据（方案B按需加载）
+		mapGroup.GET("/:id/chunk_info", h.GetChunkInfo)   // 获取区块划分信息（必须放在 :id/chunk 之前避免冲突）
+		mapGroup.GET("/:id/chunk/:cx/:cy", h.GetMapChunk) // 获取指定区块的二进制数据
 	}
 }
 
@@ -266,22 +270,22 @@ func (h *Handler) Move(c *gin.Context) {
 		X      int    `json:"x" binding:"required"`
 		Y      int    `json:"y" binding:"required"`
 	}
-	
+
 	// 读取原始请求体用于调试
 	bodyBytes, _ := io.ReadAll(c.Request.Body)
 	log.Printf("📥 Move: 收到原始请求体: %s", string(bodyBytes))
-	
+
 	// 重新设置请求体（因为已经读取了）
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-	
+
 	if err := c.ShouldBindJSON(&req); err != nil {
 		log.Printf("❌ Move: 参数绑定失败 - %v", err)
 		log.Printf("❌ Move: 期望格式: {role_id: number, map_id: number, x: number, y: number}")
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "请求参数错误"})
 		return
 	}
-	
-	log.Printf("✅ Move: 参数绑定成功 - roleID=%d, mapID=%d, x=%d, y=%d", 
+
+	log.Printf("✅ Move: 参数绑定成功 - roleID=%d, mapID=%d, x=%d, y=%d",
 		req.RoleID, req.MapID, req.X, req.Y)
 
 	// 移动玩家
@@ -576,4 +580,129 @@ func (h *Handler) getMonsterListForMap(mapID uint32) []interface{} {
 	}
 
 	return result
+}
+
+// ★ GetChunkInfo 获取地图的区块划分信息
+// 前端在加载大地图前调用此接口，决定是否启用分块模式
+//
+// 响应示例：
+//
+//	{
+//	  "code": 200,
+//	  "data": {
+//	    "map_id": 1,
+//	    "width": 3000,           // 地图宽度（瓦片数）
+//	    "height": 3000,          // 地图高度（瓦片数）
+//	    "chunk_size": 64,        // 区块尺寸
+//	    "chunk_cols": 47,        // 区块列数
+//	    "chunk_rows": 47,        // 区块行数
+//	    "total_chunks": 2209,    // 总区块数
+//	    "recommend_chunk_mode": true  // 是否建议启用分块模式
+//	  }
+//	}
+func (h *Handler) GetChunkInfo(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "无效的地图ID"})
+		return
+	}
+
+	// 获取地图配置
+	mapBase, err := h.service.GetMapBase(uint32(id))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "msg": "地图不存在"})
+		return
+	}
+
+	// 获取已加载的 GameMap（含瓦片数据）
+	gameMap := GetGameMap(mapBase.MapFile)
+	if gameMap == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "msg": "地图文件未加载"})
+		return
+	}
+
+	chunkSize := 64 // 与前端约定
+	chunkCols, chunkRows := gameMap.GetChunkSize(chunkSize)
+	totalChunks := chunkCols * chunkRows
+	totalTiles := int(gameMap.Width) * int(gameMap.Height)
+
+	// 超过 20 万瓦片建议启用分块模式
+	recommendChunkMode := totalTiles > 200000
+
+	c.JSON(http.StatusOK, gin.H{
+		"code": 200,
+		"msg":  "success",
+		"data": gin.H{
+			"map_id":               id,
+			"width":                gameMap.Width,
+			"height":               gameMap.Height,
+			"chunk_size":           chunkSize,
+			"chunk_cols":           chunkCols,
+			"chunk_rows":           chunkRows,
+			"total_chunks":         totalChunks,
+			"total_tiles":          totalTiles,
+			"recommend_chunk_mode": recommendChunkMode,
+		},
+	})
+}
+
+// ★ GetMapChunk 获取指定区块的二进制瓦片数据
+// 用于前端按需加载，避免一次性下载整张地图文件
+//
+// 路由：GET /api/map/:id/chunk/:cx/:cy
+// 响应：二进制数据（application/octet-stream）
+//
+//	格式：[width:u16 LE][height:u16 LE][每瓦片5字节: low:u16 LE, high:u16 LE, attr:u8]
+//
+// 前端通过 fetch 获取 ArrayBuffer 后按此格式解码
+func (h *Handler) GetMapChunk(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "无效的地图ID"})
+		return
+	}
+
+	cxStr := c.Param("cx")
+	cx, err := strconv.Atoi(cxStr)
+	if err != nil || cx < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "无效的区块X坐标"})
+		return
+	}
+
+	cyStr := c.Param("cy")
+	cy, err := strconv.Atoi(cyStr)
+	if err != nil || cy < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "无效的区块Y坐标"})
+		return
+	}
+
+	// 获取地图配置
+	mapBase, err := h.service.GetMapBase(uint32(id))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "msg": "地图不存在"})
+		return
+	}
+
+	// 获取已加载的 GameMap
+	gameMap := GetGameMap(mapBase.MapFile)
+	if gameMap == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "msg": "地图文件未加载"})
+		return
+	}
+
+	// 获取区块数据
+	chunkSize := 64
+	data := gameMap.GetChunkData(cx, cy, chunkSize)
+	if data == nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "msg": "区块超出地图范围"})
+		return
+	}
+
+	// 返回二进制数据
+	c.Header("Content-Type", "application/octet-stream")
+	c.Header("Content-Length", strconv.Itoa(len(data)))
+	c.Header("Cache-Control", "public, max-age=86400") // 缓存1天（区块数据不变）
+	c.Data(http.StatusOK, "application/octet-stream", data)
 }

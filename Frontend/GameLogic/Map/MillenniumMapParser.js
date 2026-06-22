@@ -18,6 +18,18 @@ class MillenniumMapParser {
       object: [],             // Layer 1: 物体层
       overlay: []             // Layer 2: 覆盖层（桥梁、屋顶）
     };
+
+    // ★ 分块管理器引用（可选，由 MapEngine 注入）
+    // 当启用分块模式时，getZSortedRenderList 会委托给 chunkManager 获取瓦片数据
+    this.chunkManager = null;
+  }
+
+  /**
+   * 注入分块管理器
+   * 启用后 getZSortedRenderList 会通过 chunkManager 按需获取瓦片
+   */
+  setChunkManager(cm) {
+    this.chunkManager = cm;
   }
 
   loadMap(arrayBuffer) {
@@ -280,55 +292,96 @@ class MillenniumMapParser {
   /**
    * 获取指定位置的Z排序渲染列表（包含瓦片和物体）
    * 用于游戏渲染器按正确顺序绘制
+   *
+   * ★ 性能优化：支持视口裁剪参数，只收集视口内的瓦片
+   *    不传视口参数时退化为全图遍历（兼容旧调用）
+   *
    * @param {number} playerX - 角色X坐标（瓦片坐标）
    * @param {number} playerY - 角色Y坐标（瓦片坐标）
+   * @param {object} [viewport] - 视口范围 {startX, startY, endX, endY}（瓦片坐标，可选）
    * @returns {Array} 排序后的渲染项列表
    */
-  getZSortedRenderList(playerX, playerY) {
+  getZSortedRenderList(playerX, playerY, viewport = null) {
     const renderList = [];
 
-    // 1. 添加所有地面层瓦片
-    this.layerData.ground.forEach((tile, idx) => {
-      if (tile && tile.tileId > 0) {
+    // 视口裁剪参数：未提供时使用全图范围（兼容旧调用）
+    const w = this.width;
+    const h = this.height;
+    const startX = viewport ? Math.max(0, viewport.startX) : 0;
+    const startY = viewport ? Math.max(0, viewport.startY) : 0;
+    const endX = viewport ? Math.min(w, viewport.endX) : w;
+    const endY = viewport ? Math.min(h, viewport.endY) : h;
+
+    // 视口内瓦片总数预估（用于预分配数组容量）
+    const vpW = endX - startX;
+    const vpH = endY - startY;
+
+    // ★ 分块模式检测：如果启用了 chunkManager 且处于分块模式，通过它获取瓦片
+    //    这样可以支持"服务端按区块加载"模式，无需全量数据驻留内存
+    const useChunkManager = this.chunkManager && this.chunkManager.enabled;
+
+    // 1. 添加视口内的地面层瓦片
+    //    使用双重循环按视口范围遍历，避免全图 forEach
+    for (let y = startY; y < endY; y++) {
+      const rowBase = y * w;
+      for (let x = startX; x < endX; x++) {
+        const tile = useChunkManager
+          ? this.chunkManager.getTile(x, y, 'ground')
+          : this.layerData.ground[rowBase + x];
+        if (tile && tile.tileId > 0) {
+          renderList.push({
+            type: 'tile',
+            layer: 0,
+            x: x,  // ★ 全局坐标（chunkManager 返回的 tile.x 是区块内局部坐标）
+            y: y,
+            tileId: tile.tileId,
+            zIndex: tile.zIndex
+          });
+        }
+      }
+    }
+
+    // 2. 添加视口内的物体层瓦片
+    for (let y = startY; y < endY; y++) {
+      const rowBase = y * w;
+      for (let x = startX; x < endX; x++) {
+        const tile = useChunkManager
+          ? this.chunkManager.getTile(x, y, 'object')
+          : this.layerData.object[rowBase + x];
+        if (tile && tile.tileId > 0) {
+          renderList.push({
+            type: 'tile_object',
+            layer: 1,
+            x: x,  // ★ 全局坐标
+            y: y,
+            tileId: tile.tileId,
+            zIndex: tile.zIndex
+          });
+        }
+      }
+    }
+
+    // 3. 添加视口内的独立物体对象
+    //    objects 是数组，数量通常较少，用过滤即可
+    if (this.objects && this.objects.length > 0) {
+      for (let i = 0; i < this.objects.length; i++) {
+        const obj = this.objects[i];
+        if (obj.x < startX || obj.x >= endX || obj.y < startY || obj.y >= endY) {
+          continue;
+        }
         renderList.push({
-          type: 'tile',
-          layer: 0,
-          x: tile.x,
-          y: tile.y,
-          tileId: tile.tileId,
-          zIndex: tile.zIndex
+          type: 'object',
+          layer: obj.layer,
+          x: obj.x,
+          y: obj.y,
+          tileId: obj.tileId,
+          zIndex: obj.zIndex,
+          objectId: obj.id,
+          animType: obj.animType,
+          properties: obj.properties
         });
       }
-    });
-
-    // 2. 添加物体层瓦片
-    this.layerData.object.forEach((tile, idx) => {
-      if (tile && tile.tileId > 0) {
-        renderList.push({
-          type: 'tile_object',
-          layer: 1,
-          x: tile.x,
-          y: tile.y,
-          tileId: tile.tileId,
-          zIndex: tile.zIndex
-        });
-      }
-    });
-
-    // 3. 添加独立物体对象
-    this.objects.forEach(obj => {
-      renderList.push({
-        type: 'object',
-        layer: obj.layer,
-        x: obj.x,
-        y: obj.y,
-        tileId: obj.tileId,
-        zIndex: obj.zIndex,
-        objectId: obj.id,
-        animType: obj.animType,
-        properties: obj.properties
-      });
-    });
+    }
 
     // 4. 添加角色（使用动态Z索引）
     if (playerX !== undefined && playerY !== undefined) {
@@ -341,22 +394,29 @@ class MillenniumMapParser {
       });
     }
 
-    // 5. 添加覆盖层瓦片（桥梁等）- 这些在角色之后渲染以产生遮挡效果
-    this.layerData.overlay.forEach((tile, idx) => {
-      if (tile && tile.tileId > 0) {
-        renderList.push({
-          type: 'tile_overlay',
-          layer: 2,
-          x: tile.x,
-          y: tile.y,
-          tileId: tile.tileId,
-          zIndex: tile.zIndex,
-          blocksView: tile.blocksView
-        });
+    // 5. 添加视口内的覆盖层瓦片（桥梁等）- 这些在角色之后渲染以产生遮挡效果
+    for (let y = startY; y < endY; y++) {
+      const rowBase = y * w;
+      for (let x = startX; x < endX; x++) {
+        const tile = useChunkManager
+          ? this.chunkManager.getTile(x, y, 'overlay')
+          : this.layerData.overlay[rowBase + x];
+        if (tile && tile.tileId > 0) {
+          renderList.push({
+            type: 'tile_overlay',
+            layer: 2,
+            x: x,  // ★ 全局坐标
+            y: y,
+            tileId: tile.tileId,
+            zIndex: tile.zIndex,
+            blocksView: tile.blocksView
+          });
+        }
       }
-    });
+    }
 
     // ★ 关键：按zIndex排序实现正确的遮挡关系
+    //    视口裁剪后列表规模大幅缩小（约 vpW*vpH*3 项），排序开销可忽略
     renderList.sort((a, b) => a.zIndex - b.zIndex);
 
     return renderList;
@@ -371,8 +431,16 @@ class MillenniumMapParser {
   isBlockedByOverlay(x, y) {
     if (x < 0 || y < 0 || x >= this.width || y >= this.height) return false;
 
-    const idx = y * this.width + x;
-    const overlay = this.layerData.overlay[idx];
+    // ★ 分块模式下委托给 chunkManager 获取覆盖层瓦片
+    //    服务端模式下 this.layerData.overlay 全为 null，必须通过 chunkManager 获取
+    const useChunkManager = this.chunkManager && this.chunkManager.enabled;
+    let overlay = null;
+    if (useChunkManager) {
+      overlay = this.chunkManager.getTile(x, y, 'overlay');
+    } else {
+      const idx = y * this.width + x;
+      overlay = this.layerData.overlay[idx];
+    }
 
     return overlay && overlay.blocksView === true;
   }

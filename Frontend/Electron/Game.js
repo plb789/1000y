@@ -1148,8 +1148,25 @@ class Game {
       }
       
       // 步骤2: 加载地图数据 (30%)
+      // ★ 智能选择加载模式：
+      //    先查询服务端 chunk_info，如果建议分块模式则使用方案B（按需加载）
+      //    否则使用方案A（下载完整 .map 文件）
       this.updateLoadingProgress(30, '加载地图数据...');
-      await this.mapEngine.loadMapData(mapFile);
+      let useServerChunkMode = false;
+      try {
+        const chunkInfo = await ChunkManager.queryChunkInfo(mapId);
+        if (chunkInfo && chunkInfo.recommend_chunk_mode) {
+          useServerChunkMode = true;
+          console.log(`🗺️ 地图 ${mapId} 较大（${chunkInfo.width}×${chunkInfo.height}），启用按需加载模式`);
+        }
+      } catch (e) {
+        console.warn('查询区块信息失败，使用全量加载模式:', e.message);
+      }
+
+      await this.mapEngine.loadMapData(mapFile, {
+        useServerChunkMode,
+        mapId
+      });
       
       // 步骤3: 加载瓦片图集 (60%)
       this.updateLoadingProgress(60, '加载瓦片图集...');
@@ -1188,9 +1205,9 @@ class Game {
       console.error('地图加载失败:', err);
       
       try {
-        // 尝试不加载瓦片图集再次加载
+        // 尝试不加载瓦片图集再次加载（重试时使用方案A全量加载）
         this.updateLoadingProgress(40, '重试加载地图数据...');
-        await this.mapEngine.loadMapData(mapFile);
+        await this.mapEngine.loadMapData(mapFile, { useServerChunkMode: false, mapId });
         
         this.updateLoadingProgress(60, '跳过瓦片图集...');
         await this.mapEngine.loadTileset(null);

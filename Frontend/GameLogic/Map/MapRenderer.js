@@ -115,6 +115,9 @@ class MapRenderer {
   /**
    * ★ 新版渲染器：Z轴深度排序渲染（支持三层地图+物体对象）
    * 渲染顺序：地面层 → 物体层 → [按Y排序的角色] → 覆盖层（桥梁）
+   *
+   * 性能优化：将视口范围传递给 getZSortedRenderList，从源头只收集视口内瓦片
+   *          避免遍历整张地图（3000×3000地图从2700万次遍历降到约2000次）
    */
   renderWithZSort(map, startX, startY, endX, endY, playerPos) {
     const ts = this.tileSize;
@@ -123,12 +126,14 @@ class MapRenderer {
     const px = playerPos ? playerPos.x : (map.playerX || 0);
     const py = playerPos ? playerPos.y : (map.playerY || 0);
 
-    // 获取Z排序后的渲染列表
-    const renderList = map.getZSortedRenderList(px, py);
+    // ★ 传入视口范围，启用视口裁剪
+    //    这样 getZSortedRenderList 只收集视口内瓦片，大幅降低遍历和排序开销
+    const viewport = { startX, startY, endX, endY };
+    const renderList = map.getZSortedRenderList(px, py, viewport);
 
     // 按排序顺序逐个渲染
     renderList.forEach(item => {
-      // 视野裁剪：只渲染可见区域
+      // 视野裁剪：只渲染可见区域（双重保险，防止 viewport 边界误差）
       if (item.x < startX || item.x >= endX || item.y < startY || item.y >= endY) {
         return;
       }
