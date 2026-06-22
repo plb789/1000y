@@ -41,6 +41,7 @@ type LoadedMap struct {
 	Monsters   map[uint64]*MonsterInstance // key=怪物实例ID
 	NPCs       map[uint64]*NPCInstance     // key=NPC实例ID
 	Players    map[uint64]*PlayerInstance  // key=角色ID
+	playerGrid *SpatialGrid                // ★ 玩家空间网格索引（加速碰撞检测）
 	mu         sync.RWMutex
 }
 
@@ -145,11 +146,16 @@ func (s *Service) LoadMap(mapID uint32) (*LoadedMap, error) {
 
 	// 从全局地图数据获取碰撞数据
 	var collision [][]bool
+	// ★ 在函数作用域声明，供后续 SpatialGrid 初始化使用
+	tileCountX := 0
+	tileCountY := 0
 	gameMap := GetGameMap(mapBase.MapFile)
-	if gameMap != nil && gameMap.Collision != nil {
+	if gameMap != nil && gameMap.Collision != nil && len(gameMap.Collision) > 0 && len(gameMap.Collision[0]) > 0 {
 		collision = gameMap.Collision
+		tileCountX = len(collision[0])
+		tileCountY = len(collision)
 		log.Printf("LoadMap: 使用地图文件 %s 的碰撞数据，尺寸=%dx%d",
-			mapBase.MapFile, len(collision[0]), len(collision))
+			mapBase.MapFile, tileCountX, tileCountY)
 	} else {
 		// 如果地图文件未加载，创建默认碰撞表
 		tileWidth := mapBase.TileWidth
@@ -161,8 +167,8 @@ func (s *Service) LoadMap(mapID uint32) (*LoadedMap, error) {
 			tileHeight = 48
 		}
 
-		tileCountX := mapBase.Width / tileWidth
-		tileCountY := mapBase.Height / tileHeight
+		tileCountX = mapBase.Width / tileWidth
+		tileCountY = mapBase.Height / tileHeight
 		if tileCountX <= 0 {
 			tileCountX = 100
 		}
@@ -190,6 +196,8 @@ func (s *Service) LoadMap(mapID uint32) (*LoadedMap, error) {
 		Monsters:   make(map[uint64]*MonsterInstance),
 		NPCs:       make(map[uint64]*NPCInstance),
 		Players:    make(map[uint64]*PlayerInstance),
+		// ★ 初始化玩家空间网格索引（cellSize=10，加速碰撞检测）
+		playerGrid: NewSpatialGrid(tileCountX, tileCountY, 10),
 	}
 
 	s.loadedMaps[mapID] = lm
@@ -359,6 +367,10 @@ func (s *Service) EnterMap(roleID uint64, mapID uint32, tileX, tileY int) error 
 		X:      actualX,
 		Y:      actualY,
 	}
+	// ★ 同步加入空间网格索引
+	if lm.playerGrid != nil {
+		lm.playerGrid.Add(roleID, actualX, actualY)
+	}
 
 	log.Printf("EnterMap: 玩家 %d 进入地图 %d (tileX=%d, tileY=%d)", roleID, mapID, actualX, actualY)
 	return nil
@@ -396,6 +408,10 @@ func (s *Service) LeaveMap(roleID uint64, mapID uint32) error {
 		// 离开地图时保存玩家位置到数据库
 		common.DBRoleChangePosition(roleID, mapID, player.X, player.Y)
 		log.Printf("LeaveMap: 玩家 %d 离开地图 %d，保存位置 (%d, %d)", roleID, mapID, player.X, player.Y)
+		// ★ 从空间网格索引移除
+		if lm.playerGrid != nil {
+			lm.playerGrid.Remove(roleID, player.X, player.Y)
+		}
 	}
 
 	delete(lm.Players, roleID)
@@ -413,8 +429,13 @@ func (s *Service) UpdatePlayerPosition(roleID uint64, mapID uint32, x, y int) er
 	defer lm.mu.Unlock()
 
 	if player, exists := lm.Players[roleID]; exists {
+		oldX, oldY := player.X, player.Y
 		player.X = x
 		player.Y = y
+		// ★ 同步更新空间网格索引
+		if lm.playerGrid != nil {
+			lm.playerGrid.Move(roleID, oldX, oldY, x, y)
+		}
 		return nil
 	}
 	return errors.New("玩家不在此地图")
@@ -589,6 +610,32 @@ func (s *Service) GetPlayersInView(mapID uint32, centerX, centerY, viewRange int
 	lm.mu.RLock()
 	defer lm.mu.RUnlock()
 
+	// ★ 使用空间网格索引，只查询附近格子而非遍历所有玩家
+	if lm.playerGrid != nil {
+		// 计算需要查询的格子半径：向上取整
+		radius := (viewRange + lm.playerGrid.CellSize() - 1) / lm.playerGrid.CellSize()
+		if radius < 1 {
+			radius = 1
+		}
+		nearbyIDs := lm.playerGrid.QueryNearby(centerX, centerY, radius)
+
+		var result []PlayerInstance
+		viewRangeSq := viewRange * viewRange
+		for roleID := range nearbyIDs {
+			player, exists := lm.Players[roleID]
+			if !exists {
+				continue
+			}
+			dx := player.X - centerX
+			dy := player.Y - centerY
+			if dx*dx+dy*dy <= viewRangeSq {
+				result = append(result, *player)
+			}
+		}
+		return result
+	}
+
+	// 降级：网格未初始化时遍历所有玩家
 	var result []PlayerInstance
 	for _, player := range lm.Players {
 		dx := player.X - centerX
@@ -628,6 +675,37 @@ func (s *Service) GetAllPlayersInMap(mapID uint32) []PlayerInstance {
 	players := make([]PlayerInstance, 0, len(lm.Players))
 	for _, p := range lm.Players {
 		players = append(players, *p)
+	}
+	return players
+}
+
+// GetPlayersNearby 获取指定坐标附近的玩家（用于碰撞检测）
+// ★ 使用空间网格索引，O(1) 复杂度，替代 GetAllPlayersInMap 的 O(N) 遍历
+// radius 为查询的格子半径，实际查询范围 = radius * cellSize
+func (s *Service) GetPlayersNearby(mapID uint32, x, y, radius int) []PlayerInstance {
+	lm, ok := s.GetLoadedMap(mapID)
+	if !ok {
+		return nil
+	}
+
+	lm.mu.RLock()
+	defer lm.mu.RUnlock()
+
+	if lm.playerGrid == nil {
+		// 降级：网格未初始化时返回所有玩家
+		players := make([]PlayerInstance, 0, len(lm.Players))
+		for _, p := range lm.Players {
+			players = append(players, *p)
+		}
+		return players
+	}
+
+	nearbyIDs := lm.playerGrid.QueryNearby(x, y, radius)
+	players := make([]PlayerInstance, 0, len(nearbyIDs))
+	for roleID := range nearbyIDs {
+		if p, exists := lm.Players[roleID]; exists {
+			players = append(players, *p)
+		}
 	}
 	return players
 }

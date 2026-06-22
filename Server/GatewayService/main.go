@@ -85,13 +85,14 @@ func generateToken(accountID, roleID uint64) string {
 
 // ClientManager 客户端管理器
 type ClientManager struct {
-	clients     map[uint64]*Client          // 客户端列表 key=roleID
-	byConn      map[*websocket.Conn]*Client // by connection
-	register    chan *Client                // 注册通道
-	unregister  chan *Client                // 注销通道
-	broadcast   chan *Message               // 广播通道
-	mutex       sync.RWMutex
-	onlineCount int64 // 在线人数（原子计数器）
+	clients      map[uint64]*Client            // 客户端列表 key=roleID
+	byConn       map[*websocket.Conn]*Client   // by connection
+	clientsByMap map[uint32]map[uint64]*Client // 按 mapID 分桶索引（key=roleID），加速同地图查询
+	register     chan *Client                  // 注册通道
+	unregister   chan *Client                  // 注销通道
+	broadcast    chan *Message                 // 广播通道
+	mutex        sync.RWMutex
+	onlineCount  int64 // 在线人数（原子计数器）
 }
 
 // Message 消息结构
@@ -146,11 +147,12 @@ const (
 // NewClientManager 创建客户端管理器
 func NewClientManager() *ClientManager {
 	return &ClientManager{
-		clients:    make(map[uint64]*Client),
-		byConn:     make(map[*websocket.Conn]*Client),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
-		broadcast:  make(chan *Message, broadcastChannelSize),
+		clients:      make(map[uint64]*Client),
+		byConn:       make(map[*websocket.Conn]*Client),
+		clientsByMap: make(map[uint32]map[uint64]*Client),
+		register:     make(chan *Client),
+		unregister:   make(chan *Client),
+		broadcast:    make(chan *Message, broadcastChannelSize),
 	}
 }
 
@@ -214,6 +216,15 @@ func (cm *ClientManager) addClient(client *Client) {
 
 	cm.clients[client.ID] = client
 	cm.byConn[client.Conn] = client
+	// 维护按 mapID 分桶索引
+	if client.MapID > 0 {
+		bucket, ok := cm.clientsByMap[client.MapID]
+		if !ok {
+			bucket = make(map[uint64]*Client)
+			cm.clientsByMap[client.MapID] = bucket
+		}
+		bucket[client.ID] = client
+	}
 	client.Registered = true            // 只有成功添加到列表后才标记为已注册
 	atomic.AddInt64(&cm.onlineCount, 1) // 原子增加在线人数
 }
@@ -226,10 +237,48 @@ func (cm *ClientManager) removeClient(client *Client) {
 		log.Printf("removeClient: 移除玩家 %d, 当前地图=%d", client.ID, client.MapID)
 		delete(cm.clients, client.ID)
 		delete(cm.byConn, client.Conn)
+		// 从 mapID 分桶索引中移除
+		if client.MapID > 0 {
+			if bucket, ok := cm.clientsByMap[client.MapID]; ok {
+				delete(bucket, client.ID)
+				// 如果桶为空，删除整个桶避免内存泄漏
+				if len(bucket) == 0 {
+					delete(cm.clientsByMap, client.MapID)
+				}
+			}
+		}
 		close(client.Send)
 		atomic.AddInt64(&cm.onlineCount, -1) // 原子减少在线人数
 	} else {
 		log.Printf("removeClient: 玩家 %d 不存在于客户端列表", client.ID)
+	}
+}
+
+// updateClientMap 更新客户端所在地图（维护分桶索引）
+// 必须在持有 cm.mutex 写锁的情况下调用
+func (cm *ClientManager) updateClientMap(client *Client, newMapID uint32) {
+	oldMapID := client.MapID
+	if oldMapID == newMapID {
+		return
+	}
+	// 从旧桶移除
+	if oldMapID > 0 {
+		if bucket, ok := cm.clientsByMap[oldMapID]; ok {
+			delete(bucket, client.ID)
+			if len(bucket) == 0 {
+				delete(cm.clientsByMap, oldMapID)
+			}
+		}
+	}
+	// 加入新桶
+	client.MapID = newMapID
+	if newMapID > 0 {
+		bucket, ok := cm.clientsByMap[newMapID]
+		if !ok {
+			bucket = make(map[uint64]*Client)
+			cm.clientsByMap[newMapID] = bucket
+		}
+		bucket[client.ID] = client
 	}
 }
 
@@ -265,21 +314,49 @@ func (cm *ClientManager) sendMessage(msg *Message) {
 }
 
 // BroadcastToMap 广播到地图
+// ★ 优化：本地发送 + 发布到 Redis（支持多 Gateway 实例跨实例广播）
+// 本地客户端由本函数直接发送，其他 Gateway 实例的客户端通过 Redis Pub/Sub 接收
 func (cm *ClientManager) BroadcastToMap(mapID uint32, msg *Message) {
 	cm.mutex.RLock()
-	defer cm.mutex.RUnlock()
 
 	// 封包
 	pkg := make([]byte, 2+len(msg.Data))
 	binary.LittleEndian.PutUint16(pkg[0:2], msg.Type)
 	copy(pkg[2:], msg.Data)
 
-	for _, client := range cm.clients {
-		if client.MapID == mapID && client.ID != msg.From {
-			select {
-			case client.Send <- pkg:
-			default:
+	// ★ 使用分桶索引，O(M) 而非 O(N)（M=同地图人数）
+	bucket, ok := cm.clientsByMap[mapID]
+	if ok {
+		for _, client := range bucket {
+			if client.ID != msg.From {
+				select {
+				case client.Send <- pkg:
+				default:
+				}
 			}
+		}
+	}
+
+	cm.mutex.RUnlock()
+
+	// ★ 发布到 Redis，让其他 Gateway 实例也广播给它们的同地图客户端
+	// 只有 Redis 可用时才发布，避免单实例模式下浪费资源
+	if redisClient != nil {
+		// 解析 msg.Data 为 map（Redis 消息格式要求）
+		var dataMap map[string]interface{}
+		if err := json.Unmarshal(msg.Data, &dataMap); err == nil {
+			broadcastMsg := BroadcastMessage{
+				Type:    "map_msg",
+				MapID:   mapID,
+				FromID:  msg.From,
+				MsgType: msg.Type,
+				Data:    dataMap,
+			}
+			go func() {
+				if err := PublishToMap(broadcastMsg); err != nil {
+					log.Printf("Redis 跨实例广播失败: %v", err)
+				}
+			}()
 		}
 	}
 }
@@ -333,11 +410,14 @@ func (cm *ClientManager) GetMapPlayers(mapID uint32) []*Client {
 	cm.mutex.RLock()
 	defer cm.mutex.RUnlock()
 
-	var players []*Client
-	for _, client := range cm.clients {
-		if client.MapID == mapID {
-			players = append(players, client)
-		}
+	// ★ 使用分桶索引，O(M) 而非 O(N)
+	bucket, ok := cm.clientsByMap[mapID]
+	if !ok {
+		return nil
+	}
+	players := make([]*Client, 0, len(bucket))
+	for _, client := range bucket {
+		players = append(players, client)
 	}
 	return players
 }
@@ -368,11 +448,14 @@ func (cm *ClientManager) GetClientsByMap(mapID uint32) []*Client {
 	cm.mutex.RLock()
 	defer cm.mutex.RUnlock()
 
-	var result []*Client
-	for _, client := range cm.clients {
-		if client.MapID == mapID {
-			result = append(result, client)
-		}
+	// ★ 使用分桶索引，O(M) 而非 O(N)
+	bucket, ok := cm.clientsByMap[mapID]
+	if !ok {
+		return nil
+	}
+	result := make([]*Client, 0, len(bucket))
+	for _, client := range bucket {
+		result = append(result, client)
 	}
 	return result
 }
@@ -775,7 +858,14 @@ func (c *Client) handleEnterMap(body []byte) {
 	}
 
 	// 更新玩家地图（位置由notifyGameServiceEnterMap已设置，不要用客户端坐标覆盖）
-	c.MapID = req.MapID
+	// ★ 使用 updateClientMap 维护分桶索引（已注册时同步更新桶；未注册时 addClient 会自动加入桶）
+	if c.Registered {
+		GlobalManager.mutex.Lock()
+		GlobalManager.updateClientMap(c, req.MapID)
+		GlobalManager.mutex.Unlock()
+	} else {
+		c.MapID = req.MapID
+	}
 	// 注意：c.X 和 c.Y 保持不变，因为 notifyGameServiceEnterMap 已经设置了正确的数据库位置
 
 	// 如果还未注册，现在注册（直接调用addClient，确保同步）

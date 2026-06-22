@@ -282,7 +282,9 @@ func (e *EntityCollisionCheckerImpl) CheckEntityCollision(mapID uint32, x, y int
 
 	// 2. 检查玩家碰撞
 	if e.mapSvc != nil {
-		players := e.mapSvc.GetAllPlayersInMap(mapID)
+		// ★ 使用空间网格索引，只查询附近玩家而非遍历所有玩家
+		// cellSize=10，radius=1 表示查询 3×3 格子（30×30 瓦片范围），覆盖碰撞半径
+		players := e.mapSvc.GetPlayersNearby(mapID, x, y, 1)
 
 		for _, p := range players {
 			// 排除自身（如果excludeID是玩家ID）

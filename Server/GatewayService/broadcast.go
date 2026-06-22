@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"time"
 
@@ -23,12 +24,18 @@ var VIEW_RANGE int
 // MOVE_MERGE_DELAY 移动消息合并延迟（毫秒）- 从配置文件读取
 var MOVE_MERGE_DELAY int
 
+// gatewayInstanceID 当前 Gateway 实例ID（用于跨实例广播时避免循环）
+// 启动时生成，保证全局唯一
+var gatewayInstanceID string
+
 // initBroadcastConfig 初始化广播配置
 func initBroadcastConfig() {
 	_, _, _, viewRange, moveMergeDelay := common.AppConfig.GetGatewayConfig()
 	VIEW_RANGE = viewRange
 	MOVE_MERGE_DELAY = moveMergeDelay
-	log.Printf("广播配置: ViewRange=%d, MoveMergeDelay=%dms", VIEW_RANGE, MOVE_MERGE_DELAY)
+	// 生成实例ID：进程PID + 时间戳，保证多实例唯一
+	gatewayInstanceID = fmt.Sprintf("gw-%d-%d", os.Getpid(), time.Now().UnixNano())
+	log.Printf("广播配置: ViewRange=%d, MoveMergeDelay=%dms, InstanceID=%s", VIEW_RANGE, MOVE_MERGE_DELAY, gatewayInstanceID)
 }
 
 // MoveMergeItem 待合并的移动消息
@@ -100,6 +107,12 @@ func subscribeToMapChannels() {
 			continue
 		}
 
+		// ★ 跳过自己实例发布的消息（避免循环广播）
+		// 发布方已经处理过本地客户端，订阅方只处理其他实例的消息
+		if broadcastMsg.SourceInstance == gatewayInstanceID {
+			continue
+		}
+
 		// 根据消息类型处理
 		switch broadcastMsg.Type {
 		case "move":
@@ -110,28 +123,77 @@ func subscribeToMapChannels() {
 			handleLeaveBroadcast(broadcastMsg)
 		case "chat":
 			handleChatBroadcast(broadcastMsg)
+		case "map_msg":
+			// ★ 通用地图消息（替代 BroadcastToMap 的跨实例广播）
+			handleMapMsgBroadcast(broadcastMsg)
 		}
 	}
 }
 
 // BroadcastMessage Redis 广播消息结构
 type BroadcastMessage struct {
-	Type   string                 `json:"type"`
-	MapID  uint32                 `json:"map_id"`
-	FromID uint64                 `json:"from_id"`
-	FromX  int                    `json:"from_x"`
-	FromY  int                    `json:"from_y"`
-	Data   map[string]interface{} `json:"data"`
+	Type           string                 `json:"type"`
+	MapID          uint32                 `json:"map_id"`
+	FromID         uint64                 `json:"from_id"`
+	FromX          int                    `json:"from_x"`
+	FromY          int                    `json:"from_y"`
+	SourceInstance string                 `json:"source_instance"` // ★ 来源 Gateway 实例ID
+	MsgType        uint16                 `json:"msg_type"`        // ★ 通用消息类型（用于 map_msg）
+	Data           map[string]interface{} `json:"data"`
 }
 
 // PublishToMap 通过 Redis 发布消息到地图频道
 func PublishToMap(msg BroadcastMessage) error {
+	// ★ 自动填充来源实例ID（调用方无需设置）
+	msg.SourceInstance = gatewayInstanceID
 	channel := fmt.Sprintf("map:%d", msg.MapID)
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}
 	return redisClient.Publish(ctx, channel, data).Err()
+}
+
+// handleMapMsgBroadcast 处理通用地图消息（跨实例 BroadcastToMap）
+// 收到其他 Gateway 实例发布的消息，转发给本实例的同地图玩家
+func handleMapMsgBroadcast(msg BroadcastMessage) {
+	GlobalManager.mutex.RLock()
+
+	// 封包：[cmd(2字节)][body(N字节)]
+	data, _ := json.Marshal(msg.Data)
+	pkg := make([]byte, 2+len(data))
+	binary.LittleEndian.PutUint16(pkg[0:2], msg.MsgType)
+	copy(pkg[2:], data)
+
+	// ★ 使用分桶索引，O(M) 而非 O(N)
+	bucket, ok := GlobalManager.clientsByMap[msg.MapID]
+	if !ok {
+		GlobalManager.mutex.RUnlock()
+		return
+	}
+
+	var targets []*Client
+	for _, client := range bucket {
+		if client.ID != msg.FromID {
+			targets = append(targets, client)
+		}
+	}
+
+	GlobalManager.mutex.RUnlock()
+
+	// 并发发送
+	var wg sync.WaitGroup
+	wg.Add(len(targets))
+	for _, client := range targets {
+		go func(c *Client, p []byte) {
+			defer wg.Done()
+			select {
+			case c.Send <- p:
+			default:
+			}
+		}(client, pkg)
+	}
+	wg.Wait()
 }
 
 // MergeAndBroadcastMove 合并并广播移动消息
@@ -204,10 +266,17 @@ func (cm *ClientManager) BroadcastToViewRangeConcurrent(mapID uint32, fromX, fro
 	// 计算视野范围的平方（避免开方运算）
 	viewRangeSq := VIEW_RANGE * VIEW_RANGE
 
+	// ★ 使用分桶索引，O(M) 而非 O(N)（M=同地图人数）
+	bucket, ok := cm.clientsByMap[mapID]
+	if !ok {
+		cm.mutex.RUnlock()
+		return
+	}
+
 	// 收集视野范围内的目标玩家
 	var targets []*Client
-	for _, client := range cm.clients {
-		if client.MapID == mapID && client.ID != msg.From {
+	for _, client := range bucket {
+		if client.ID != msg.From {
 			dx := client.X - fromX
 			dy := client.Y - fromY
 			distanceSq := dx*dx + dy*dy
@@ -251,8 +320,13 @@ func (cm *ClientManager) BroadcastToViewRange(mapID uint32, fromX, fromY int, ms
 	// 计算视野范围的平方（避免开方运算）
 	viewRangeSq := VIEW_RANGE * VIEW_RANGE
 
-	for _, client := range cm.clients {
-		if client.MapID == mapID && client.ID != msg.From {
+	// ★ 使用分桶索引，O(M) 而非 O(N)
+	bucket, ok := cm.clientsByMap[mapID]
+	if !ok {
+		return
+	}
+	for _, client := range bucket {
+		if client.ID != msg.From {
 			// 计算距离平方
 			dx := client.X - fromX
 			dy := client.Y - fromY
@@ -307,10 +381,17 @@ func handleMoveBroadcast(msg BroadcastMessage) {
 
 	viewRangeSq := VIEW_RANGE * VIEW_RANGE
 
+	// ★ 使用分桶索引，O(M) 而非 O(N)
+	bucket, ok := GlobalManager.clientsByMap[msg.MapID]
+	if !ok {
+		GlobalManager.mutex.RUnlock()
+		return
+	}
+
 	// 收集目标玩家
 	var targets []*Client
-	for _, client := range GlobalManager.clients {
-		if client.MapID == msg.MapID && client.ID != msg.FromID {
+	for _, client := range bucket {
+		if client.ID != msg.FromID {
 			dx := client.X - msg.FromX
 			dy := client.Y - msg.FromY
 			distanceSq := dx*dx + dy*dy
@@ -351,9 +432,16 @@ func handleEnterBroadcast(msg BroadcastMessage) {
 
 	viewRangeSq := VIEW_RANGE * VIEW_RANGE
 
+	// ★ 使用分桶索引，O(M) 而非 O(N)
+	bucket, ok := GlobalManager.clientsByMap[msg.MapID]
+	if !ok {
+		GlobalManager.mutex.RUnlock()
+		return
+	}
+
 	var targets []*Client
-	for _, client := range GlobalManager.clients {
-		if client.MapID == msg.MapID && client.ID != msg.FromID {
+	for _, client := range bucket {
+		if client.ID != msg.FromID {
 			dx := client.X - msg.FromX
 			dy := client.Y - msg.FromY
 			distanceSq := dx*dx + dy*dy
@@ -392,9 +480,16 @@ func handleLeaveBroadcast(msg BroadcastMessage) {
 	binary.LittleEndian.PutUint16(pkg[0:2], CmdLeaveMap)
 	copy(pkg[2:], data)
 
+	// ★ 使用分桶索引，O(M) 而非 O(N)
+	bucket, ok := GlobalManager.clientsByMap[msg.MapID]
+	if !ok {
+		GlobalManager.mutex.RUnlock()
+		return
+	}
+
 	var targets []*Client
-	for _, client := range GlobalManager.clients {
-		if client.MapID == msg.MapID && client.ID != msg.FromID {
+	for _, client := range bucket {
+		if client.ID != msg.FromID {
 			targets = append(targets, client)
 		}
 	}
@@ -427,9 +522,16 @@ func handleChatBroadcast(msg BroadcastMessage) {
 	binary.LittleEndian.PutUint16(pkg[0:2], CmdChat)
 	copy(pkg[2:], data)
 
+	// ★ 使用分桶索引，O(M) 而非 O(N)
+	bucket, ok := GlobalManager.clientsByMap[msg.MapID]
+	if !ok {
+		GlobalManager.mutex.RUnlock()
+		return
+	}
+
 	var targets []*Client
-	for _, client := range GlobalManager.clients {
-		if client.MapID == msg.MapID && client.ID != msg.FromID {
+	for _, client := range bucket {
+		if client.ID != msg.FromID {
 			targets = append(targets, client)
 		}
 	}
