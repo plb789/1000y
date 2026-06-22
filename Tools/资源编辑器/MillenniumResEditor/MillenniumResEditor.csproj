@@ -6,7 +6,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <PlatformTarget>x86</PlatformTarget>
-    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyTitle>千年江湖资源编辑器</AssemblyTitle>
     <AssemblyProduct>千年江湖资源编辑器</AssemblyProduct>
     <AssemblyVersion>1.0.0.0</AssemblyVersion>

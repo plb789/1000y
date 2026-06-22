@@ -2,7 +2,25 @@
 <Project ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup />
   <ItemGroup>
+    <Compile Update="FormAtzViewer.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="FormBatchExport.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="FormCharacterExporter.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="FormDdsViewer.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Update="FormMain.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="FormMapEditor.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="FormSprViewer.cs">
       <SubType>Form</SubType>
     </Compile>
   </ItemGroup>

@@ -55,5 +55,33 @@ namespace MillenniumResEditor
                 ddsForm.Show();
             }
         }
+
+        // 打开ATZ动画预览与导出
+        private void btnOpenAtz_Click(object sender, EventArgs e)
+        {
+            var atzForm = new FormAtzViewer();
+            atzForm.Show();
+        }
+
+        // 打开EFT特效查看与导出
+        private void btnOpenEft_Click(object sender, EventArgs e)
+        {
+            var eftForm = new FormEftViewer();
+            eftForm.Show();
+        }
+
+        // 打开通用DAT解包查看器
+        private void btnOpenDat_Click(object sender, EventArgs e)
+        {
+            var datForm = new FormDatViewer();
+            datForm.Show();
+        }
+
+        // 打开MAP DAT包查看器
+        private void btnOpenMapDat_Click(object sender, EventArgs e)
+        {
+            var mapDatForm = new FormMapDatViewer();
+            mapDatForm.Show();
+        }
     }
 }
