@@ -640,12 +640,41 @@ func DBSkillUnequip(roleID uint64, skillID uint32) error {
 	return nil
 }
 
-// DBSkillAddExp 增加武学熟练度
+// DBSkillAddExp 增加武学熟练度（基础版本，仅增加经验）
 func DBSkillAddExp(roleID uint64, skillID uint32, exp int64) (bool, int, int64, error) {
 	resp, err := DBPost("/api/skill/add_exp", map[string]interface{}{
 		"role_id":  roleID,
 		"skill_id": skillID,
 		"exp":      exp,
+	})
+	if err != nil {
+		return false, 0, 0, err
+	}
+
+	if resp["code"].(float64) != 0 {
+		return false, 0, 0, fmt.Errorf("增加熟练度失败: %v", resp["msg"])
+	}
+
+	data, _ := json.Marshal(resp["data"])
+	var result struct {
+		LeveledUp bool  `json:"leveled_up"`
+		Level     int   `json:"level"`
+		Exp       int64 `json:"exp"`
+	}
+	json.Unmarshal(data, &result)
+
+	return result.LeveledUp, result.Level, result.Exp, nil
+}
+
+// DBSkillAddExpWithLevel 增加武学熟练度（带等级更新）
+// level 由 GameService 根据 skills.json 计算
+func DBSkillAddExpWithLevel(roleID uint64, skillID uint32, exp int64, level int, leveledUp bool) (bool, int, int64, error) {
+	resp, err := DBPost("/api/skill/add_exp", map[string]interface{}{
+		"role_id":    roleID,
+		"skill_id":   skillID,
+		"exp":        exp,
+		"level":      level,
+		"leveled_up": leveledUp,
 	})
 	if err != nil {
 		return false, 0, 0, err

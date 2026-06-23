@@ -169,6 +169,12 @@ class Game {
     if (window.SkillBar) {
       this.skillBar = new window.SkillBar(this);
     }
+
+    // 初始化武学面板
+    if (window.SkillPanel) {
+      this.skillPanel = new window.SkillPanel(this);
+      window.__skillPanel = this.skillPanel; // 供全局onclick调用
+    }
     
     // 初始化背包
     if (window.Inventory) {
@@ -976,14 +982,22 @@ class Game {
       // 设置角色信息
       this.player.id = data.role_id;
       this.player.name = data.name;
-      this.player.level = data.level || 1;
-      this.player.hp = data.hp || 100;
-      this.player.maxHp = data.max_hp || 100;
-      this.player.mp = data.mp || 100;
-      this.player.maxMp = data.max_mp || 100;
-      this.player.attack = data.attack || 10;
-      this.player.defense = data.defense || 5;
-      this.player.speed = data.speed || 10;
+      this.player.level = data.level !== undefined ? data.level : 1;
+      this.player.hp = data.hp !== undefined ? data.hp : 100;
+      this.player.maxHp = data.max_hp !== undefined ? data.max_hp : 100;
+      this.player.mp = data.mp !== undefined ? data.mp : 100;
+      this.player.maxMp = data.max_mp !== undefined ? data.max_mp : 100;
+      this.player.attack = data.attack !== undefined ? data.attack : 10;
+      this.player.defense = data.defense !== undefined ? data.defense : 5;
+      this.player.speed = data.speed !== undefined ? data.speed : 10;
+      
+      // 保存基础属性（用于装备/武学加成计算）
+      this.player.baseMaxHp = this.player.maxHp;
+      this.player.baseMaxMp = this.player.maxMp;
+      this.player.baseAttack = this.player.attack;
+      this.player.baseDefense = this.player.defense;
+      this.player.baseSpeed = this.player.speed;
+      this.player.attackSpeed = data.attack_speed || data.speed || 10; // 攻速，默认同速度值
       this.player.gold = data.gold || 0;
       this.player.mapId = data.map_id || 1;
       this.player.x = data.x || 0;
@@ -1090,6 +1104,11 @@ class Game {
     // 显示欢迎提示
     if (this.uiManager) {
       this.uiManager.toast('欢迎来到千年江湖！', 'success', 3000);
+    }
+    
+    // 初始化技能栏（登录完成后触发）
+    if (this.skillBar) {
+      this.skillBar.onGameEnter();
     }
     
     // 开始游戏循环
@@ -2142,15 +2161,15 @@ class Game {
    * 处理复活消息
    */
   handleRespawn(data) {
-    const targetId = data.target_id;
+    const targetId = data.role_id || data.target_id;  // 兼容 role_id 和 target_id
     
     if (targetId === this.player.id) {
       // 自己复活
       this.player.isDead = false; // 清除死亡状态
       this.player.x = data.x || this.player.x;
       this.player.y = data.y || this.player.y;
-      this.player.hp = data.hp || this.player.maxHp;
-      this.player.mp = data.mp || this.player.maxMp;
+      this.player.hp = data.hp !== undefined ? data.hp : this.player.maxHp;
+      this.player.mp = data.mp !== undefined ? data.mp : this.player.maxMp;
       
       // 更新位置到地图引擎
       this.syncPlayerPosition();
@@ -2802,6 +2821,10 @@ class Game {
         this.selectedTargetId = hit.id;
         this.selectedTarget = hit.target;
         this.selectedTargetKind = hit.kind;
+        // 同步设置到 battleSystem（用于技能释放）
+        if (this.battleSystem) {
+          this.battleSystem.selectedTarget = hit.id;
+        }
         this.showTargetInfo(hit.target, hit.kind, true);
         // 怪物：发起攻击；玩家：仅选中（PVP需手动攻击）
         if (hit.kind === 'monster') {
@@ -2972,6 +2995,11 @@ class Game {
   }
 
   tryMove(newX, newY) {
+    // 移动时取消施法前摇
+    if (this.battleSystem && this.battleSystem.isCasting()) {
+      this.battleSystem.cancelCast();
+    }
+
     // 检查地图碰撞
     if (this.currentMap?.tiles?.[newY]?.[newX] === 1) {
       return; // 地图障碍物碰撞
@@ -3013,21 +3041,55 @@ class Game {
   }
   
   useSkill(skillId) {
-    // 检查冷却
-    const cooldownEnd = this.skillCooldowns.get(skillId) || 0;
-    if (Date.now() < cooldownEnd) {
-      // 显示冷却提示
-      if (this.uiManager) {
-        this.uiManager.toast('技能冷却中', 'warning', 1000);
+    // === 判断该技能走冷却还是走攻速 ===
+    let fixedCooldown = 0; // 固定冷却时间(毫秒)，=0表示无冷却
+    if (this.skillBar) {
+      fixedCooldown = this.skillBar.getSkillCooldown(skillId);
+    }
+
+    if (fixedCooldown > 0) {
+      // ===== 有固定冷却 → 走冷却机制 =====
+      const cooldownEnd = this.skillCooldowns.get(skillId) || 0;
+      if (Date.now() < cooldownEnd) {
+        if (this.uiManager) {
+          this.uiManager.toast('技能冷却中', 'warning', 1000);
+        }
+        return;
       }
-      return;
+    } else {
+      // ===== 无固定冷却 → 走攻速机制 =====
+      if (!this.lastSkillUseTime) this.lastSkillUseTime = new Map();
+      if (this.skillBar && this.skillBar.isInAttackSpeedCooldown(skillId)) {
+        // 攻速CD中，静默拒绝（不弹提示，避免频繁攻击时刷屏）
+        return;
+      }
+    }
+
+    // 检查MP消耗（从技能栏配置读取）
+    if (skillId > 0 && this.skillBar) {
+      const mpCost = this.skillBar.getSkillMpCost(skillId);
+      if ((this.player.mp || 0) < mpCost) {
+        if (this.uiManager) {
+          this.uiManager.toast(`内力不足，需要 ${mpCost}MP`, 'error', 1500);
+        }
+        return;
+      }
     }
 
     // 获取当前选中目标（技能需要目标）
     const targetId = (this.battleSystem && this.battleSystem.selectedTarget) || 0;
+    
+    // 无目标时，判断是否为被动/辅助技能
     if (!targetId) {
-      // 无目标时，skill_id=0 为无目标技能（如内功心法），其他技能需要目标
-      if (skillId > 0) {
+      if (skillId > 0 && this.skillBar) {
+        const config = this.skillBar.skillConfigCache.get(skillId);
+        if (config && (config.damage > 0 || config.type >= 5)) {
+          if (this.uiManager) {
+            this.uiManager.toast('请先选择目标', 'warning', 1000);
+          }
+          return;
+        }
+      } else if (skillId > 0) {
         if (this.uiManager) {
           this.uiManager.toast('请先选择目标', 'warning', 1000);
         }
@@ -3036,11 +3098,9 @@ class Game {
     }
 
     // 判断目标类型：1=玩家（PVP），2=怪物（PVE）
-    // 优先检查 players Map，命中则为玩家目标
     let targetType = 2;
     if (targetId && this.players && this.players.has(targetId)) {
       targetType = 1;
-      // PVP前检查：和平模式禁止攻击玩家
       if (this.player.pkMode === 0 && skillId >= 0) {
         if (this.uiManager) {
           this.uiManager.toast('和平模式无法攻击玩家，请切换PK模式', 'warning', 2000);
@@ -3049,7 +3109,8 @@ class Game {
       }
     }
 
-    // 发送技能请求（使用CMD_USE_SKILL=2003，Gateway复用攻击流程转发）
+    // 发送技能请求
+    console.log('[Game] 发送技能请求: skillId=', skillId, 'targetId=', targetId, 'targetType=', targetType);
     window.GameWS.send(Protocol.CMD_USE_SKILL, {
       skill_id: skillId,
       target_id: targetId,
@@ -3058,13 +3119,36 @@ class Game {
       y: this.player.y
     });
 
-    // 触发技能特效
+    // ===== 施法前摇动画（有施法时间的技能）=====
+    if (skillId > 0 && this.skillBar && this.battleSystem) {
+      const castTime = this.skillBar.getSkillCastTime(skillId);
+      if (castTime > 0) {
+        const targetMonster = this.battleSystem.selectedTarget;
+        const targetX = targetMonster ? targetMonster.x : this.player.x;
+        const targetY = targetMonster ? targetMonster.y : this.player.y;
+        const skillConfig = this.skillBar.skillConfigCache.get(skillId);
+        const skillName = skillConfig ? skillConfig.name : `技能${skillId}`;
+        this.battleSystem.startCastAnimation(
+          skillId, skillName, castTime,
+          this.player.x, this.player.y,
+          targetX, targetY
+        );
+      }
+    }
+
+    // 扣除MP消耗
+    if (skillId > 0 && this.skillBar) {
+      const mpCost = this.skillBar.getSkillMpCost(skillId);
+      console.log('[Game] 扣除MP: skillId=', skillId, 'mpCost=', mpCost, '当前MP=', this.player.mp);
+      if (mpCost > 0 && this.player.mp !== undefined) {
+        this.player.mp -= mpCost;
+        if (this.player.mp < 0) this.player.mp = 0;
+      }
+    }
+
+    // 触发特效/音效/动画
     this.triggerSkillEffect(skillId);
-
-    // 播放技能音效
     this.playSkillSound(skillId);
-
-    // 触发角色施法动画（技能ID>0 时为施法，=0 时为普通攻击挥砍）
     if (this.characterRenderer) {
       if (skillId > 0) {
         this.characterRenderer.playCast();
@@ -3073,9 +3157,16 @@ class Game {
       }
     }
 
-    // 设置冷却（普通攻击1秒，技能3秒）
-    const cooldown = skillId === 0 ? 1000 : 3000;
-    this.skillCooldowns.set(skillId, Date.now() + cooldown);
+    // === 记录使用时间（核心分支） ===
+    const now = Date.now();
+    if (fixedCooldown > 0) {
+      // 有冷却 → 设置冷却结束时间
+      this.skillCooldowns.set(skillId, now + fixedCooldown);
+    } else {
+      // 无冷却 → 仅记录上次使用时间（供攻速检测用）
+      if (!this.lastSkillUseTime) this.lastSkillUseTime = new Map();
+      this.lastSkillUseTime.set(skillId, now);
+    }
   }
 
   /**
@@ -3436,6 +3527,63 @@ class Game {
         break;
         
       default:
+        // 处理BUFF定时Tick消息（持续伤害/恢复效果）
+        if (data.cmd === 'buff_tick' || data.type === 'buff_tick') {
+          if (this.battleSystem) {
+            this.battleSystem.handleBuffTick(data);
+          }
+          // 更新玩家自身HP/MP（如果是自己受到的buff效果）
+          if (data.target_id === this.player.id) {
+            if (data.hp_change !== 0) {
+              this.player.hp = Math.max(0, Math.min(this.player.max_hp || 9999, 
+                (this.player.hp || 0) + data.hp_change));
+            }
+            if (data.mp_change !== 0) {
+              this.player.mp = Math.max(0, Math.min(this.player.max_mp || 999,
+                (this.player.mp || 0) + data.mp_change));
+            }
+            this.updatePlayerUI();
+            
+            // 检查是否被BUFF效果致死
+            if (this.player.hp <= 0 && !data.is_dead) {
+              this.onPlayerDeath({ ...data, is_dead: true, death_reason: 'buff_tick' });
+            }
+          }
+          break;
+        }
+
+        // 处理批量BUFF Tick消息（性能优化版本）
+        if (data.cmd === 'buff_tick_batch' || data.type === 'buff_tick_batch') {
+          if (this.battleSystem && data.ticks && Array.isArray(data.ticks)) {
+            // 遍历批量中的每个tick结果
+            data.ticks.forEach(tickData => {
+              this.battleSystem.handleBuffTick(tickData);
+              
+              // 更新玩家自身HP/MP
+              if (tickData.target_id === this.player.id) {
+                if (tickData.hp_change !== 0) {
+                  this.player.hp = Math.max(0, Math.min(this.player.max_hp || 9999, 
+                    (this.player.hp || 0) + tickData.hp_change));
+                }
+                if (tickData.mp_change !== 0) {
+                  this.player.mp = Math.max(0, Math.min(this.player.max_mp || 999,
+                    (this.player.mp || 0) + tickData.mp_change));
+                }
+                
+                // 检查是否被BUFF效果致死
+                if (this.player.hp <= 0) {
+                  this.onPlayerDeath({ ...tickData, is_dead: true, death_reason: 'buff_tick_batch' });
+                }
+              }
+            });
+            
+            // 批量更新UI（只更新一次，避免频繁刷新）
+            this.updatePlayerUI();
+            
+            console.log(`[BUFF-TICK-BATCH] 处理完成，共${data.tick_count || data.ticks.length}个目标`);
+          }
+          break;
+        }
         console.log('未知战斗消息:', data);
     }
   }

@@ -3,6 +3,7 @@ package skill
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	common "game-server/Common"
 	"math"
 )
@@ -69,6 +70,15 @@ func (s *Service) GetSkillBase(skillID uint32) (map[string]interface{}, error) {
 		"buff_id":       config.BuffID,
 		"skill_effect":  config.SkillEffect,
 		"is_active":     config.IsActive,
+		"weapon_type":   config.WeaponType,
+		// 战斗属性
+		"damage":       config.Damage,
+		"mp_cost":      config.MpCost,
+		"cooldown":     config.Cooldown,
+		"range":        config.Range,
+		"cast_time":    config.CastTime,
+		"aoe_radius":   config.AoeRadius,
+		"attack_speed": config.AttackSpeed,
 	}, nil
 }
 
@@ -96,6 +106,15 @@ func (s *Service) GetAllSkillBase() ([]map[string]interface{}, error) {
 			"buff_id":       config.BuffID,
 			"skill_effect":  config.SkillEffect,
 			"is_active":     config.IsActive,
+			"weapon_type":   config.WeaponType,
+			// 战斗属性
+			"damage":       config.Damage,
+			"mp_cost":      config.MpCost,
+			"cooldown":     config.Cooldown,
+			"range":        config.Range,
+			"cast_time":    config.CastTime,
+			"aoe_radius":   config.AoeRadius,
+			"attack_speed": config.AttackSpeed,
 		})
 	}
 	return result, nil
@@ -126,6 +145,15 @@ func (s *Service) GetSkillBaseByType(skillType uint8) ([]map[string]interface{},
 				"buff_id":       config.BuffID,
 				"skill_effect":  config.SkillEffect,
 				"is_active":     config.IsActive,
+				"weapon_type":   config.WeaponType,
+				// 战斗属性
+				"damage":       config.Damage,
+				"mp_cost":      config.MpCost,
+				"cooldown":     config.Cooldown,
+				"range":        config.Range,
+				"cast_time":    config.CastTime,
+				"aoe_radius":   config.AoeRadius,
+				"attack_speed": config.AttackSpeed,
 			})
 		}
 	}
@@ -138,8 +166,50 @@ func (s *Service) GetSkillBaseByType(skillType uint8) ([]map[string]interface{},
 // exp: 增加的熟练度
 // 返回: 是否升级及错误信息
 func (s *Service) AddExp(roleID uint64, skillID uint32, exp int64) (bool, uint32, error) {
-	leveledUp, level, _, err := common.DBSkillAddExp(roleID, skillID, exp)
-	return leveledUp, uint32(level), err
+	// 获取武学配置
+	skillConfig := common.GetSkillConfig(skillID)
+	if skillConfig == nil {
+		return false, 0, errors.New("武学不存在")
+	}
+
+	// 获取角色当前武学数据
+	skills, err := common.DBSkillGetList(roleID)
+	if err != nil {
+		return false, 0, err
+	}
+
+	var currentLevel int = 1
+	var currentExp int64 = 0
+	for _, skill := range skills {
+		if sid, ok := skill["skill_id"].(float64); ok && uint32(sid) == skillID {
+			if level, ok := skill["level"].(float64); ok {
+				currentLevel = int(level)
+			}
+			if e, ok := skill["exp"].(float64); ok {
+				currentExp = int64(e)
+			}
+			break
+		}
+	}
+
+	// 计算升级
+	leveledUp := false
+	newExp := currentExp + exp
+	newLevel := currentLevel
+
+	for newExp >= int64(skillConfig.ExpFactor)*int64(newLevel)*int64(newLevel) && uint32(newLevel) < skillConfig.MaxLevel {
+		newExp -= int64(skillConfig.ExpFactor) * int64(newLevel) * int64(newLevel)
+		newLevel++
+		leveledUp = true
+	}
+
+	// 调用DBService更新
+	_, _, _, err = common.DBSkillAddExpWithLevel(roleID, skillID, newExp, newLevel, leveledUp)
+	if err != nil {
+		return false, 0, err
+	}
+
+	return leveledUp, uint32(newLevel), nil
 }
 
 // UpgradeSkill 手动升级武学（使用道具或其他方式）
@@ -180,6 +250,34 @@ func (s *Service) UpgradeSkill(roleID uint64, skillID uint32) (uint32, error) {
 // 千年游戏中,外功/拳法/剑法/刀法/枪法/斧法只能装备一个
 // 内功/身法/护体可以各装备一个
 func (s *Service) EquipSkill(roleID uint64, skillID uint32) error {
+	// 获取要装备的武学配置
+	config := common.GetSkillConfig(skillID)
+	if config == nil {
+		return errors.New("武学不存在")
+	}
+
+	// 获取角色已装备的武学
+	equipped, err := s.GetEquippedSkills(roleID)
+	if err != nil {
+		return err
+	}
+
+	// 需要互斥的武学类型：外功(2)/拳法(5)/剑法(6)/刀法(7)/枪法(8)/斧法(9)
+	exclusiveTypes := map[uint8]bool{2: true, 5: true, 6: true, 7: true, 8: true, 9: true}
+
+	// 如果当前武学类型需要互斥，先卸下同类型的已装备武学
+	if exclusiveTypes[config.Type] {
+		for _, skill := range equipped {
+			skillType, _ := skill["type"].(float64)
+			if uint8(skillType) == config.Type {
+				skillID, _ := skill["skill_id"].(float64)
+				if err := common.DBSkillUnequip(roleID, uint32(skillID)); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	return common.DBSkillEquip(roleID, skillID)
 }
 
@@ -237,7 +335,7 @@ func (s *Service) CalculateSkillBonus(roleID uint64) (map[string]int, error) {
 		bonus["attack"] += int(math.Ceil(float64(addAttack) * level))
 
 		addDef := 0
-		if v, ok := skill["def_bonus"].(float64); ok {
+		if v, ok := skill["defense_bonus"].(float64); ok {
 			addDef = int(v)
 		}
 		bonus["defense"] += int(math.Ceil(float64(addDef) * level))
@@ -299,18 +397,14 @@ func (s *Service) GetSkillExpProgress(roleID uint64, skillID uint32) (currentExp
 
 // CanLearnSkillByLevel 检查角色等级是否满足武学学习条件
 func (s *Service) CanLearnSkillByLevel(roleLevel uint32, skillID uint32) (bool, error) {
-	skillInfo, err := common.DBSkillGetBase(skillID)
-	if err != nil {
+	// 使用本地配置（与 /api/skill/base/list 同源）
+	config := common.GetSkillConfig(skillID)
+	if config == nil {
 		return false, errors.New("武学不存在")
 	}
 
-	requiredLevel := uint32(1)
-	if rl, ok := skillInfo["level"].(float64); ok {
-		requiredLevel = uint32(rl)
-	}
-
-	if roleLevel < requiredLevel {
-		return false, errors.New("角色等级不足")
+	if roleLevel < config.Level {
+		return false, fmt.Errorf("需要等级%d, 当前等级%d", config.Level, roleLevel)
 	}
 
 	return true, nil
@@ -336,7 +430,7 @@ type SkillBaseInfo struct {
 	HpBonus     int    `json:"hp_bonus"`
 	MpBonus     int    `json:"mp_bonus"`
 	AttackBonus int    `json:"attack_bonus"`
-	DefBonus    int    `json:"def_bonus"`
+	DefBonus    int    `json:"defense_bonus"`
 	SpeedBonus  int    `json:"speed_bonus"`
 	HitBonus    int    `json:"hit_bonus"`
 	DodgeBonus  int    `json:"dodge_bonus"`
@@ -387,7 +481,7 @@ func parseSkillBase(data map[string]interface{}) SkillBaseInfo {
 	if v, ok := data["attack_bonus"].(float64); ok {
 		info.AttackBonus = int(v)
 	}
-	if v, ok := data["def_bonus"].(float64); ok {
+	if v, ok := data["defense_bonus"].(float64); ok {
 		info.DefBonus = int(v)
 	}
 	if v, ok := data["speed_bonus"].(float64); ok {

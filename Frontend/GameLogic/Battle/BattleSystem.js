@@ -48,6 +48,36 @@ class BattleSystem {
     // 连击数追踪（用于显示连击）
     this.comboTracker = { count: 0, lastHitTime: 0, timeout: 2000 };
 
+    // ===== 施法动画系统（前摇读条）=====
+    // 格式: { skillId, skillName, startTime, duration, x, y, targetX, targetY }
+    this.castAnimation = null;
+
+    // ===== 技能释放特效系统（后摇）=====
+    // 格式: { startTime, duration, type, x, y, skillType, skillName }
+    this.skillEffects = [];
+
+    // ===== 闪避/格挡特效增强 =====
+    // 格式: { targetId, type, startTime, duration, x, y }
+    this.dodgeEffects = new Map();
+
+    // ===== 玩家BUFF状态栏 =====
+    // 格式: { buffId: { name, type, stack, duration, remaining, startTime } }
+    this.playerBuffs = new Map();
+    // BUFF名称映射（用于显示，后续可从服务端获取）
+    this.buffNameMap = {
+      1: '打坐', 2: '中毒', 3: '虚弱', 4: '力量祝福', 5: '防御强化',
+      6: '疾风术', 7: '眩晕', 8: '沉默', 9: '减速', 10: '无敌',
+      11: '生命恢复', 12: '内力恢复', 13: '破甲', 14: '混乱', 15: '隐身',
+      16: '灼烧', 17: '冰冻', 18: '石化', 19: '吸血', 20: '反弹伤害'
+    };
+    // BUFF颜色映射（按类型：1=增益绿, 2=减益红, 3=控制紫）
+    this.buffColorMap = {
+      1: '#44FF44', 2: '#FF4444', 3: '#AA44FF', 4: '#44FF44', 5: '#44FF44',
+      6: '#44FF44', 7: '#AA44FF', 8: '#AA44FF', 9: '#FF4444', 10: '#00FFFF',
+      11: '#44FF44', 12: '#44FF44', 13: '#FF4444', 14: '#AA44FF', 15: '#00FFFF',
+      16: '#FF4444', 17: '#AA44FF', 18: '#AA44FF', 19: '#44FF44', 20: '#44FF44'
+    };
+
     console.log('战斗系统初始化完成');
   }
   
@@ -348,6 +378,9 @@ class BattleSystem {
     
     // 渲染掉落物品
     this.renderDroppedItems(ctx, tileSize);
+
+    // 渲染屏幕边缘闪烁效果（BUFF持续伤害提示）
+    this.renderScreenEdgeFlashes(ctx);
   }
   
   /**
@@ -591,6 +624,14 @@ class BattleSystem {
     
     const player = this.game.player;
     
+    // 更新玩家MP（使用服务端返回的值同步）
+    if (result.CurrentMP !== undefined) {
+      player.mp = result.CurrentMP;
+      if (result.MaxMP !== undefined) {
+        player.maxMp = result.MaxMP;
+      }
+    }
+    
     // 更新怪物血量
     if (target && result.CurrentHP !== undefined) {
       target.hp = result.CurrentHP;
@@ -712,6 +753,14 @@ class BattleSystem {
     const currentHp = data.current_hp;
     const isDead = data.is_dead || false;
 
+    // 更新玩家MP（使用服务端返回的值同步）
+    if (data.current_mp !== undefined) {
+      this.game.player.mp = data.current_mp;
+      if (data.max_mp !== undefined) {
+        this.game.player.maxMp = data.max_mp;
+      }
+    }
+
     // 更新怪物HP
     const monster = this.monsters.get(targetId);
     if (monster) {
@@ -743,6 +792,13 @@ class BattleSystem {
     const targetPos = monster ? { x: monster.x, y: monster.y } : { x: data.target_x, y: data.target_y };
     this.addDamageNumber(targetPos.x, targetPos.y, damage, isCrit, isMiss, isBlocked);
 
+    // ===== 闪避/格挡特效增强 =====
+    if (isMiss) {
+      this.triggerDodgeEffect(targetId, targetPos.x, targetPos.y);
+    } else if (isBlocked && !isCrit) {
+      this.triggerBlockEffect(targetId, targetPos.x, targetPos.y);
+    }
+
     // 触发受击动画（怪物被击中时闪烁、震动）
     if (monster && !isMiss) {
       this.triggerHitAnimation(targetId, isCrit, isBlocked);
@@ -763,11 +819,105 @@ class BattleSystem {
       this.updateComboTracker();
     }
 
-    // 技能攻击时显示技能名飘字
+    // 技能攻击：显示技能名飘字 + 触发技能释放特效（后摇）
     if (data.is_skill_attack && data.skill_name) {
       const skillColor = isCrit ? '#FFD700' : '#00BFFF';
       if (this.game.showFloatingText) {
         this.game.showFloatingText(data.skill_name, targetPos.x, targetPos.y - 0.5, skillColor);
+      }
+      // 技能释放弹道特效
+      const player = this.game.player;
+      const fromX = player ? player.x : (data.attacker_x || targetPos.x);
+      const fromY = player ? player.y : (data.attacker_y || targetPos.y);
+      this.triggerSkillEffect(
+        data.skill_type || 0,
+        data.skill_name,
+        fromX, fromY,
+        targetPos.x, targetPos.y,
+        isCrit
+      );
+    }
+
+    // ===== BUFF效果飘字反馈 =====
+
+    // 无敌免疫
+    if (data.invulnerable && this.game.showFloatingText) {
+      this.game.showFloatingText('免疫!', targetPos.x, targetPos.y - 1, '#00FFFF');
+      this.addDamageNumber(targetPos.x, targetPos.y, 'IMMUNE', '#00FFFF', false, false);
+    }
+
+    // 反弹伤害
+    if (data.reflect_damage > 0 && this.game.player) {
+      const px = this.game.player.x;
+      const py = this.game.player.y;
+      this.addDamageNumber(px, py, `-${data.reflect_damage}`, '#FF4444', false, false);
+      if (this.game.showFloatingText) {
+        this.game.showFloatingText(`反弹 ${data.reflect_damage}`, px, py - 1, '#FF4444');
+      }
+    }
+
+    // 吸血回复
+    if (data.lifesteal_heal > 0 && this.game.player) {
+      const px = this.game.player.x;
+      const py = this.game.player.y;
+      this.addDamageNumber(px, py, `+${data.lifesteal_heal}`, '#00FF00', false, false);
+      if (this.game.showFloatingText) {
+        this.game.showFloatingText(`吸血 +${data.lifesteal_heal}HP`, px, py - 1.2, '#00FF00');
+      }
+    }
+
+    // 自身BUFF附加提示
+    if (data.self_buff_applied > 0 && this.game.player) {
+      const px = this.game.player.x;
+      const py = this.game.player.y;
+      if (this.game.showFloatingText) {
+        this.game.showFloatingText('增益生效!', px, py - 1.3, '#00FF88');
+      }
+      // 记录到玩家BUFF列表（用于状态栏显示）
+      this.addPlayerBuff(data.self_buff_applied);
+    }
+
+    // 目标被附加DEBUFF提示
+    if (data.buff_applied > 0 && this.game.showFloatingText) {
+      this.game.showFloatingText(`DEBUFF!`, targetPos.x, targetPos.y + 1, '#FF6600');
+    }
+
+    // AOE多目标伤害显示（aoe_targets包含被波及的怪物列表）
+    if (data.aoe_targets && Array.isArray(data.aoe_targets) && data.aoe_targets.length > 0) {
+      data.aoe_targets.forEach(aoeTarget => {
+        const aoeMonster = this.monsters.get(aoeTarget.target_id);
+        const aoeX = aoeMonster ? aoeMonster.x : (aoeTarget.x || targetPos.x);
+        const aoeY = aoeMonster ? aoeMonster.y : (aoeTarget.y || targetPos.y);
+
+        // 更新AOE怪物血量
+        if (aoeMonster) {
+          aoeMonster.hp = aoeTarget.current_hp;
+          if (aoeTarget.is_dead) {
+            aoeMonster.status = 4;
+            setTimeout(() => this.removeMonster(aoeTarget.target_id), 3000);
+            this.triggerDeathAnimation(aoeTarget.target_id);
+          }
+        }
+
+        // AOE溅射伤害飘字（橙色，比主伤害小）
+        this.addDamageNumber(aoeX, aoeY, String(aoeTarget.damage), '#FF8C00', false);
+
+        // AOE受击动画
+        if (aoeMonster && !aoeTarget.is_dead) {
+          this.triggerHitAnimation(aoeTarget.target_id, false, false);
+        }
+
+        // AOE击杀提示
+        if (aoeTarget.is_dead && this.game.showFloatingText) {
+          this.game.showFloatingText(`AOE击杀 ${aoeTarget.name}`, aoeX, aoeY - 1, '#FF4444');
+        }
+      });
+
+      // AOE范围特效提示
+      if (this.game.showFloatingText) {
+        this.game.showFloatingText(
+          `AOE! x${data.aoe_targets.length}`, targetPos.x, targetPos.y + 1, '#FF6600'
+        );
       }
     }
 
@@ -812,11 +962,287 @@ class BattleSystem {
   /**
    * 触发死亡动画
    */
+  // ========== BUFF Tick效果处理 ==========
+
+  /**
+   * 处理BUFF定时Tick消息（持续伤害/恢复效果）
+   * @param {Object} data - 服务端推送的buff_tick数据
+   * {
+   *   target_id: 目标ID,
+   *   target_type: 1=玩家, 2=怪物,
+   *   hp_change: HP变化（正=恢复, 负=伤害）,
+   *   mp_change: MP变化（正=恢复, 负=消耗）,
+   *   tick_type: 'buff'
+   * }
+   */
+  handleBuffTick(data) {
+    const targetId = data.target_id;
+    const targetType = data.target_type;
+    const hpChange = data.hp_change || 0;
+    const mpChange = data.mp_change || 0;
+
+    if (hpChange === 0 && mpChange === 0) return;
+
+    let x = 0, y = 0;
+    let targetName = '未知';
+
+    if (targetType === 2) { // 怪物
+      const monster = this.monsters.get(targetId);
+      if (monster) {
+        x = monster.x;
+        y = monster.y;
+        targetName = monster.name || '怪物';
+        // 更新怪物HP
+        if (hpChange !== 0) {
+          monster.hp = Math.max(0, (monster.hp || 0) + hpChange);
+          // 检查是否被BUFF致死
+          if (monster.hp <= 0) {
+            monster.status = 4; // 死亡状态
+            setTimeout(() => this.removeMonster(targetId), 3000);
+            this.triggerDeathAnimation(targetId);
+            // 显示击杀提示
+            if (this.game.showFloatingText) {
+              this.game.showFloatingText(`BUFF击杀 ${targetName}`, x, y - 1.5, '#FF00FF');
+            }
+          } else {
+            // 触发受击动画
+            this.triggerHitAnimation(targetId, false, false);
+          }
+        }
+      }
+    } else if (targetType === 1) { // 玩家
+      const player = this.game.player;
+      if (player && player.id === targetId) {
+        x = player.x;
+        y = player.y;
+        targetName = player.roleName || '玩家';
+      }
+    }
+
+    // HP飘字显示
+    if (hpChange !== 0 && (x !== 0 || y !== 0)) {
+      const text = hpChange > 0 ? `+${hpChange} HP` : `${hpChange} HP`;
+      const color = hpChange > 0 ? '#00FF00' : '#FF00FF'; // 绿色=恢复，紫色=持续伤害
+      
+      this.addDamageNumber(x, y, text, color, false);
+      
+      if (this.game.showFloatingText) {
+        const effectText = hpChange > 0 ? '回血' : '持续伤害';
+        this.game.showFloatingText(`${effectText} ${hpChange}HP`, x, y - 1.2, color);
+      }
+
+      // 持续伤害时添加屏幕边缘红色闪烁提示（仅对自身）
+      if (hpChange < 0 && data.target_id === this.game?.player?.id) {
+        this.addScreenEdgeFlash('#FF0000', 300); // 红色闪烁300ms
+      }
+    }
+
+    // MP飘字显示
+    if (mpChange !== 0 && (x !== 0 || y !== 0)) {
+      const text = mpChange > 0 ? `+${mpChange} MP` : `${mpChange} MP`;
+      const color = mpChange > 0 ? '#00BFFF' : '#FF6600'; // 蓝色=回蓝，橙色=耗蓝
+      
+      this.addDamageNumber(x, y + 0.5, text, color, false); // MP飘字稍微偏下，避免重叠
+      
+      if (this.game.showFloatingText) {
+        const effectText = mpChange > 0 ? '回蓝' : '消耗MP';
+        this.game.showFloatingText(`${effectText} ${mpChange}MP`, x, y - 0.8, color);
+      }
+    }
+
+    console.log(`[BUFF-TICK] ${targetName}(ID:${targetId}) HP:${hpChange} MP:${mpChange}`);
+  }
+
+  /**
+   * 屏幕边缘闪烁效果（用于中毒等持续伤害提示）
+   * @param {string} color - 闪烁颜色
+   * @param {number} duration - 持续时间(毫秒)
+   */
+  addScreenEdgeFlash(color = '#FF0000', duration = 300) {
+    if (!this.screenFlashes) {
+      this.screenFlashes = [];
+    }
+    
+    this.screenFlashes.push({
+      color,
+      startTime: Date.now(),
+      duration,
+      alpha: 0.3
+    });
+  }
+
+  /**
+   * 渲染屏幕边缘闪烁效果
+   */
+  renderScreenEdgeFlashes(ctx) {
+    if (!this.screenFlashes || this.screenFlashes.length === 0) return;
+
+    const now = Date.now();
+    const width = ctx.canvas.width;
+    const height = ctx.canvas.height;
+
+    this.screenFlashes = this.screenFlashes.filter(flash => {
+      const elapsed = now - flash.startTime;
+      if (elapsed > flash.duration) return false;
+
+      const progress = elapsed / flash.duration;
+      const alpha = flash.alpha * (1 - progress); // 渐隐
+
+      // 绘制四边半透明边框
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = flash.color;
+      
+      const borderSize = 20; // 边框宽度
+
+      // 上边框
+      ctx.fillRect(0, 0, width, borderSize);
+      // 下边框
+      ctx.fillRect(0, height - borderSize, width, borderSize);
+      // 左边框
+      ctx.fillRect(0, 0, borderSize, height);
+      // 右边框
+      ctx.fillRect(width - borderSize, 0, borderSize, height);
+
+      ctx.restore();
+      return true;
+    });
+  }
+
   triggerDeathAnimation(monsterId) {
     this.deathAnimations.set(monsterId, {
       startTime: Date.now(),
       duration: 1500,
       originalAlpha: 1.0
+    });
+  }
+
+  // ========== 施法前摇动画 ==========
+
+  /**
+   * 开始施法动画（前摇读条）
+   * @param {number} skillId - 技能ID
+   * @param {string} skillName - 技能名称
+   * @param {number} castTime - 施法时间(毫秒)
+   * @param {number} x - 施法者X
+   * @param {number} y - 施法者Y
+   * @param {number} targetX - 目标X
+   * @param {number} targetY - 目标Y
+   */
+  startCastAnimation(skillId, skillName, castTime, x, y, targetX, targetY) {
+    if (castTime <= 0) return; // 无施法时间则不显示
+
+    // 取消之前的施法（同一时间只能施放一个技能）
+    if (this.castAnimation) {
+      this.finishCastEarly();
+    }
+
+    this.castAnimation = {
+      skillId,
+      skillName,
+      startTime: Date.now(),
+      duration: castTime,
+      x, y,
+      targetX, targetY,
+      cancelled: false
+    };
+
+    // 显示施法提示飘字
+    if (this.game.showFloatingText) {
+      this.game.showFloatingText(`施法: ${skillName}`, x, y - 1.2, '#00BFFF');
+    }
+  }
+
+  /**
+   * 检查施法是否完成
+   * @returns {boolean} true=施法完成/无施法, false=正在施法中
+   */
+  isCasting() {
+    if (!this.castAnimation) return false;
+    const elapsed = Date.now() - this.castAnimation.startTime;
+    return elapsed < this.castAnimation.duration && !this.castAnimation.cancelled;
+  }
+
+  /**
+   * 提前取消施法（移动时调用）
+   */
+  cancelCast() {
+    if (this.castAnimation) {
+      this.castAnimation.cancelled = true;
+      if (this.game.showFloatingText) {
+        this.game.showFloatingText('施法中断', this.castAnimation.x, this.castAnimation.y - 1, '#FF8800');
+      }
+      this.castAnimation = null;
+    }
+  }
+
+  /**
+   * 施法完成（正常结束）
+   */
+  finishCastEarly() {
+    this.castAnimation = null;
+  }
+
+  // ========== 技能释放特效（后摇）==========
+
+  /**
+   * 触发技能释放特效
+   * @param {number} skillType - 技能类型(1-9)
+   * @param {string} skillName - 技能名称
+   * @param {number} fromX - 起点X
+   * @param {number} fromY - 起点Y
+   * @param {number} toX - 终点X
+   * @param {number} toY - 终点Y
+   * @param {boolean} isCrit - 是否暴击
+   */
+  triggerSkillEffect(skillType, skillName, fromX, fromY, toX, toY, isCrit = false) {
+    const effectColors = {
+      1: '#4CAF50', // 内功 - 绿色
+      2: '#FF5722', // 外功 - 橙红
+      3: '#00BCD4', // 身法 - 青色
+      4: '#9C27B0', // 护体 - 紫色
+      5: '#FF9800', // 拳法 - 金橙
+      6: '#E91E63', // 剑法 - 粉红
+      7: '#F44336', // 刀法 - 红色
+      8: '#3F51B5', // 枪法 - 靛蓝
+      9: '#795548', // 斧法 - 棕色
+    };
+    const color = effectColors[skillType] || '#FFFFFF';
+
+    this.skillEffects.push({
+      startTime: Date.now(),
+      duration: isCrit ? 500 : 350,
+      type: skillType,
+      fromX, fromY, toX, toY,
+      skillName,
+      color,
+      isCrit
+    });
+  }
+
+  // ========== 闪避/格挡特效增强 ==========
+
+  /**
+   * 触发闪避特效
+   */
+  triggerDodgeEffect(targetId, x, y) {
+    this.dodgeEffects.set(targetId, {
+      type: 'dodge',
+      startTime: Date.now(),
+      duration: 600,
+      x, y
+    });
+  }
+
+  /**
+   * 触发格挡特效
+   */
+  triggerBlockEffect(targetId, x, y) {
+    this.dodgeEffects.set(targetId, {
+      type: 'block',
+      startTime: Date.now(),
+      duration: 400,
+      x, y
     });
   }
 
@@ -1095,11 +1521,443 @@ class BattleSystem {
         ctx.textAlign = 'center';
         ctx.fillText(item.itemName, worldX, worldY - 15);
       }
-      
+
+      ctx.restore();
+    });
+
+    // ===== 渲染施法前摇读条 =====
+    this.renderCastBar(ctx, tileSize);
+
+    // ===== 渲染技能释放特效 =====
+    this.renderSkillEffects(ctx, tileSize);
+
+    // ===== 渲染闪避/格挡特效 =====
+    this.renderDodgeEffects(ctx, tileSize);
+
+    // ===== 渲染玩家BUFF状态栏 =====
+    this.renderPlayerBuffBar(ctx, tileSize);
+  }
+
+  /**
+   * 渲染施法前摇读条（显示在玩家头顶）
+   */
+  renderCastBar(ctx, tileSize) {
+    if (!this.castAnimation) return;
+
+    const cast = this.castAnimation;
+    const elapsed = Date.now() - cast.startTime;
+
+    // 施法完成或取消后清除
+    if (elapsed >= cast.duration || cast.cancelled) {
+      this.castAnimation = null;
+      return;
+    }
+
+    const progress = Math.min(1, elapsed / cast.duration);
+    const worldX = cast.x * tileSize + tileSize / 2;
+    const worldY = cast.y * tileSize; // 玩家头顶位置
+
+    ctx.save();
+
+    // 背景条
+    const barWidth = tileSize * 1.2;
+    const barHeight = 6;
+    const barX = worldX - barWidth / 2;
+    const barY = worldY - tileSize * 0.9 - 20;
+
+    // 外框（深色背景）
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.fillRect(barX - 1, barY - 1, barWidth + 2, barHeight + 2);
+
+    // 进度条（渐变色：蓝→青→白）
+    const gradient = ctx.createLinearGradient(barX, barY, barX + barWidth * progress, barY);
+    gradient.addColorStop(0, '#0066FF');
+    gradient.addColorStop(0.5, '#00CCFF');
+    gradient.addColorStop(1, '#00FFFF');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(barX, barY, barWidth * progress, barHeight);
+
+    // 边框
+    ctx.strokeStyle = '#88CCFF';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(barX, barY, barWidth, barHeight);
+
+    // 技能名称
+    ctx.font = 'bold 10px Arial';
+    ctx.fillStyle = '#FFFFFF';
+    ctx.textAlign = 'center';
+    ctx.shadowColor = '#000';
+    ctx.shadowBlur = 3;
+    ctx.fillText(cast.skillName || '施法中...', worldX, barY - 4);
+    ctx.shadowBlur = 0;
+
+    // 剩余时间提示
+    const remainingMs = cast.duration - elapsed;
+    if (remainingMs > 500) {
+      const remainingSec = (remainingMs / 1000).toFixed(1);
+      ctx.font = '9px Arial';
+      ctx.fillStyle = '#AAEEFF';
+      ctx.fillText(`${remainingSec}s`, worldX, barY + barHeight + 12);
+    }
+
+    // 连接线到目标（虚线指示方向）
+    if (cast.targetX !== undefined && cast.targetY !== undefined) {
+      const targetScreenX = cast.targetX * tileSize + tileSize / 2;
+      const targetScreenY = cast.targetY * tileSize + tileSize / 2;
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = `rgba(0, 180, 255, ${0.3 * (1 - progress)})`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(worldX, worldY);
+      ctx.lineTo(targetScreenX, targetScreenY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    ctx.restore();
+  }
+
+  /**
+   * 渲染技能释放特效（从施法者到目标的轨迹/冲击波）
+   */
+  renderSkillEffects(ctx, tileSize) {
+    if (this.skillEffects.length === 0) return;
+
+    const now = Date.now();
+    this.skillEffects = this.skillEffects.filter(effect => {
+      const elapsed = now - effect.startTime;
+      if (elapsed >= effect.duration) return false;
+
+      const progress = elapsed / effect.duration;
+      const alpha = 1 - progress;
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+
+      // 计算当前插值位置（从起点到终点）
+      const currentX = effect.fromX + (effect.toX - effect.fromX) * progress;
+      const currentY = effect.fromY + (effect.toY - effect.fromY) * progress;
+
+      const screenX = currentX * tileSize + tileSize / 2;
+      const screenY = currentY * tileSize + tileSize / 2;
+
+      if (effect.isCrit) {
+        // 暴击：大范围爆炸光环+星芒
+        const radius = progress * tileSize * 1.5;
+        const grad = ctx.createRadialGradient(screenX, screenY, 0, screenX, screenY, radius);
+        grad.addColorStop(0, `${effect.color}FF`);
+        grad.addColorStop(0.5, `${effect.color}88`);
+        grad.addColorStop(1, `${effect.color}00`);
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(screenX, screenY, radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 暴击星芒射线
+        ctx.strokeStyle = '#FFD700';
+        ctx.lineWidth = 2 * alpha;
+        for (let i = 0; i < 6; i++) {
+          const angle = (i / 6) * Math.PI * 2 + progress * Math.PI;
+          const len = radius * 0.8;
+          ctx.beginPath();
+          ctx.moveTo(screenX, screenY);
+          ctx.lineTo(screenX + Math.cos(angle) * len, screenY + Math.sin(angle) * len);
+          ctx.stroke();
+        }
+      } else {
+        // 普通技能：根据类型绘制不同形状的弹道/冲击
+        const size = effect.type >= 5 ? tileSize * 0.4 : tileSize * 0.25;
+
+        if (effect.type === 5 || effect.type === 9) {
+          // 拳法/斧法：圆形冲击波
+          ctx.fillStyle = effect.color;
+          ctx.globalAlpha = alpha * 0.5;
+          ctx.beginPath();
+          ctx.arc(screenX, screenY, size * progress, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (effect.type === 6 || effect.type === 7) {
+          // 剑法/刀法：新月形斩击弧线
+          ctx.strokeStyle = effect.color;
+          ctx.lineWidth = 3 * alpha;
+          ctx.globalAlpha = alpha;
+          ctx.beginPath();
+          ctx.arc(screenX, screenY, size, -Math.PI * 0.6, Math.PI * 0.6, false);
+          ctx.stroke();
+        } else if (effect.type === 8) {
+          // 枪法：直线穿刺
+          ctx.strokeStyle = effect.color;
+          ctx.lineWidth = 2 * alpha;
+          ctx.globalAlpha = alpha;
+          const dx = effect.toX - effect.fromX;
+          const dy = effect.toY - effect.fromY;
+          const dist = Math.hypot(dx, dy) || 1;
+          ctx.beginPath();
+          ctx.moveTo(screenX - (dx / dist) * size, screenY - (dy / dist) * size);
+          ctx.lineTo(screenX + (dx / dist) * size, screenY + (dy / dist) * size);
+          ctx.stroke();
+        } else {
+          // 内功/外功等：光球
+          const grad = ctx.createRadialGradient(screenX, screenY, 0, screenX, screenY, size);
+          grad.addColorStop(0, `${effect.color}FF`);
+          grad.addColorStop(1, `${effect.color}00`);
+          ctx.fillStyle = grad;
+          ctx.beginPath();
+          ctx.arc(screenX, screenY, size, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      ctx.restore();
+      return true;
+    });
+  }
+
+  /**
+   * 渲染闪避/格挡特效增强
+   */
+  renderDodgeEffects(ctx, tileSize) {
+    if (this.dodgeEffects.size === 0) return;
+
+    const now = Date.now();
+
+    this.dodgeEffects.forEach((effect, targetId) => {
+      const elapsed = now - effect.startTime;
+      if (elapsed >= effect.duration) {
+        this.dodgeEffects.delete(targetId);
+        return;
+      }
+
+      const progress = elapsed / effect.duration;
+      const alpha = 1 - progress;
+      const worldX = effect.x * tileSize + tileSize / 2;
+      const worldY = effect.y * tileSize + tileSize / 2;
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+
+      if (effect.type === 'dodge') {
+        // 闪避：残影分身效果
+        const offsetAngle = ((targetId * 137.5) % 360) * Math.PI / 180;
+        const offsetDist = 15 * Math.sin(progress * Math.PI);
+
+        for (let i = 1; i <= 2; i++) {
+          const ghostX = worldX + Math.cos(offsetAngle + i * 0.8) * offsetDist * i * 0.6;
+          const ghostY = worldY + Math.sin(offsetAngle + i * 0.8) * offsetDist * i * 0.6;
+          ctx.globalAlpha = alpha * (0.3 / i);
+          ctx.font = 'bold 14px Arial';
+          ctx.textAlign = 'center';
+          ctx.fillText('MISS', ghostX, ghostY);
+        }
+
+        // 主飘字（向上飘+轻微摇摆）
+        ctx.globalAlpha = alpha;
+        ctx.translate(worldX, worldY - 10 - progress * 20);
+        ctx.rotate(Math.sin(progress * Math.PI * 2) * 0.2);
+        ctx.font = 'bold 16px Arial';
+        ctx.fillStyle = '#EEEEEE';
+        ctx.strokeStyle = '#666666';
+        ctx.lineWidth = 2;
+        ctx.strokeText('闪避!', 0, 0);
+        ctx.fillText('闪避!', 0, 0);
+
+      } else if (effect.type === 'block') {
+        // 格挡：盾牌光盾效果
+        const shieldSize = tileSize * 0.5 * (1 + progress * 0.3);
+
+        ctx.strokeStyle = '#AAAAAA';
+        ctx.lineWidth = 3 * alpha;
+        ctx.fillStyle = `rgba(200, 200, 200, ${alpha * 0.2})`;
+        ctx.beginPath();
+        ctx.arc(worldX, worldY, shieldSize, Math.PI * 0.75, Math.PI * 2.25, false);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.font = 'bold 14px Arial';
+        ctx.fillStyle = '#CCCCCC';
+        ctx.textAlign = 'center';
+        ctx.fillText('格挡', worldX, worldY - shieldSize - 5);
+      }
+
       ctx.restore();
     });
   }
-  
+
+  // ========== 玩家BUFF状态栏 ==========
+
+  /**
+   * 添加/刷新玩家自身BUFF（技能释放时触发）
+   */
+  addPlayerBuff(buffId) {
+    const name = this.buffNameMap[buffId] || `BUFF${buffId}`;
+    const color = this.buffColorMap[buffId] || '#FFFFFF';
+    const existing = this.playerBuffs.get(buffId);
+    if (existing) {
+      // 已存在则刷新时间
+      existing.startTime = Date.now();
+      existing.stack = Math.min((existing.stack || 1) + 1, 5);
+    } else {
+      // 新增BUFF
+      this.playerBuffs.set(buffId, {
+        id: buffId,
+        name: name,
+        type: buffId <= 4 ? 1 : (buffId <= 9 ? 2 : (buffId <= 15 ? 3 : 1)),
+        stack: 1,
+        duration: 300,
+        startTime: Date.now(),
+        color: color
+      });
+    }
+  }
+
+  /**
+   * 移除玩家BUFF
+   */
+  removePlayerBuff(buffId) {
+    this.playerBuffs.delete(buffId);
+  }
+
+  /**
+   * 清除所有过期BUFF
+   */
+  cleanupExpiredPlayerBuffs() {
+    const now = Date.now();
+    for (const [buffId, buff] of this.playerBuffs) {
+      if (buff.duration > 0) {
+        const elapsed = (now - buff.startTime) / 1000;
+        if (elapsed >= buff.duration) {
+          this.playerBuffs.delete(buffId);
+        }
+      }
+    }
+  }
+
+  /**
+   * 渲染玩家BUFF状态栏（屏幕左下角）
+   */
+  renderPlayerBuffBar(ctx, tileSize) {
+    this.cleanupExpiredPlayerBuffs();
+
+    if (this.playerBuffs.size === 0) return;
+
+    const now = Date.now();
+    const buffs = Array.from(this.playerBuffs.values());
+    const iconSize = 28;
+    const gap = 4;
+    const startX = 10;
+    const startY = ctx.canvas.height - 120;
+
+    ctx.save();
+
+    for (let i = 0; i < buffs.length; i++) {
+      const buff = buffs[i];
+      const x = startX + i * (iconSize + gap);
+      const y = startY;
+
+      // 剩余时间计算
+      let remainingSec = '';
+      let progress = 1;
+      if (buff.duration > 0) {
+        const elapsed = (now - buff.startTime) / 1000;
+        const remaining = buff.duration - elapsed;
+        progress = Math.max(0, remaining / buff.duration);
+        remainingSec = remaining > 0 ? Math.ceil(remaining) + 's' : '0s';
+      } else {
+        remainingSec = '∞';
+      }
+
+      // 进度环背景
+      ctx.beginPath();
+      ctx.arc(x + iconSize / 2, y + iconSize / 2, iconSize / 2 + 1, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // 进度环（剩余时间）
+      if (progress < 1 && progress > 0) {
+        ctx.beginPath();
+        ctx.arc(x + iconSize / 2, y + iconSize / 2, iconSize / 2 + 1, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * progress);
+        ctx.strokeStyle = buff.color;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+
+      // BUFF图标背景（带呼吸效果）
+      const bgAlpha = 0.3 + Math.sin(now / 500 + i) * 0.08;
+      ctx.globalAlpha = bgAlpha;
+      ctx.fillStyle = buff.color;
+      ctx.fillRect(x, y, iconSize, iconSize);
+      ctx.globalAlpha = 1;
+
+      // 边框
+      ctx.strokeStyle = buff.color;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(x, y, iconSize, iconSize);
+
+      // 名称缩写
+      ctx.font = 'bold 9px Arial';
+      ctx.fillStyle = '#FFFFFF';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const shortName = buff.name.length > 2 ? buff.name.substring(0, 2) : buff.name;
+      ctx.fillText(shortName, x + iconSize / 2, y + iconSize / 2 - 3);
+
+      // 叠加层数
+      if (buff.stack > 1) {
+        ctx.font = 'bold 8px Arial';
+        ctx.fillStyle = '#FFD700';
+        ctx.fillText(`${buff.stack}`, x + iconSize - 6, y + 8);
+      }
+
+      // 剩余时间
+      ctx.font = '8px Arial';
+      
+      // 低时间警告：剩余时间<5秒时红色闪烁
+      if (buff.duration > 0 && remaining > 0 && remaining <= 5) {
+        const flashAlpha = 0.5 + Math.sin(now / 150) * 0.3;
+        ctx.fillStyle = `rgba(255, 68, 68, ${flashAlpha})`;
+        
+        // 红色闪烁边框
+        ctx.strokeStyle = `rgba(255, 68, 68, ${flashAlpha})`;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x - 1, y - 1, iconSize + 2, iconSize + 2);
+      } else {
+        ctx.fillStyle = '#CCCCCC';
+      }
+      
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(remainingSec, x + iconSize / 2, y + iconSize - 1);
+    }
+
+    // 底部标签（根据BUFF类型显示不同颜色）
+    const buffTypeCount = {
+      positive: buffs.filter(b => b.type === 1).length,
+      negative: buffs.filter(b => b.type === 2).length,
+      control: buffs.filter(b => b.type === 3).length
+    };
+    
+    let labelText = `[增益 ${buffTypeCount.positive}]`;
+    if (buffTypeCount.negative > 0) labelText += ` | 减益 ${buffTypeCount.negative}`;
+    if (buffTypeCount.control > 0) labelText += ` | 控制 ${buffTypeCount.control}`;
+    
+    ctx.font = '10px Arial';
+    
+    // 如果有减益或控制效果，标签颜色变红/紫警示
+    if (buffTypeCount.control > 0) {
+      ctx.fillStyle = '#AA44FF'; // 控制效果紫色警示
+    } else if (buffTypeCount.negative > 0) {
+      ctx.fillStyle = '#FF6644'; // 减益效果橙红色警示
+    } else {
+      ctx.fillStyle = '#888888';
+    }
+    
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText(labelText, startX, startY + iconSize + 3);
+
+    ctx.restore();
+  }
+
   /**
    * 检查是否可以拾取物品
    */

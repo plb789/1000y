@@ -1,6 +1,7 @@
 package buff
 
 import (
+	"log"
 	"sync"
 	"time"
 
@@ -9,13 +10,13 @@ import (
 
 // ActiveBuff 激活的BUFF实例
 type ActiveBuff struct {
-	BuffID      uint32    // BUFF配置ID
-	TargetID    uint64    // 目标角色ID
-	TargetType  uint8     // 1=玩家, 2=怪物
-	Stack       int       // 当前叠加层数
-	ExpireAt    time.Time // 过期时间（duration=0表示永久，如打坐）
-	LastTickAt  time.Time // 上次tick时间（用于持续伤害/恢复）
-	SourceID    uint64    // 来源ID（施放者）
+	BuffID     uint32    // BUFF配置ID
+	TargetID   uint64    // 目标角色ID
+	TargetType uint8     // 1=玩家, 2=怪物
+	Stack      int       // 当前叠加层数
+	ExpireAt   time.Time // 过期时间（duration=0表示永久，如打坐）
+	LastTickAt time.Time // 上次tick时间（用于持续伤害/恢复）
+	SourceID   uint64    // 来源ID（施放者）
 }
 
 // IsPermanent 是否永久BUFF（duration=0）
@@ -33,19 +34,22 @@ func (b *ActiveBuff) IsExpired() bool {
 
 // BuffEffectSummary BUFF对属性的当前总加成（含叠加层数）
 type BuffEffectSummary struct {
-	HpChange     int
-	MpChange     int
-	AttackChange int
-	DefChange    int
-	SpeedChange  int
-	HitChange    int
-	DodgeChange  int
-	CritChange   int
+	HpChange           int
+	MpChange           int
+	AttackChange       int
+	DefChange          int
+	SpeedChange        int
+	HitChange          int
+	DodgeChange        int
+	CritChange         int
+	DamageReductionPct int // 总减伤百分比（可叠加，负值=易伤）
+	ReflectPct         int // 总反弹百分比
+	LifestealPct       int // 总吸血百分比
 }
 
 // Manager BUFF管理器（全局单例）
 type Manager struct {
-	mu    sync.RWMutex
+	mu sync.RWMutex
 	// buffs[targetID] = 该目标身上所有激活的BUFF
 	buffs map[uint64][]*ActiveBuff // key: targetID
 }
@@ -186,6 +190,9 @@ func (m *Manager) CalculateEffect(targetID uint64) BuffEffectSummary {
 		summary.HitChange += config.HitChange * stack
 		summary.DodgeChange += config.DodgeChange * stack
 		summary.CritChange += config.CritChange * stack
+		summary.DamageReductionPct += config.DamageReductionPct * stack
+		summary.ReflectPct += config.ReflectPct * stack
+		summary.LifestealPct += config.LifestealPct * stack
 	}
 	return summary
 }
@@ -305,13 +312,16 @@ func (m *Manager) GetBuffListInfo(targetID uint64) []map[string]interface{} {
 			continue
 		}
 		info := map[string]interface{}{
-			"buff_id":    b.BuffID,
-			"name":       config.Name,
-			"type":       config.Type,
-			"stack":      b.Stack,
-			"duration":   config.Duration,
-			"can_cancel": config.CanCancel,
-			"desc":       config.Description,
+			"buff_id":              b.BuffID,
+			"name":                 config.Name,
+			"type":                 config.Type,
+			"stack":                b.Stack,
+			"duration":             config.Duration,
+			"can_cancel":           config.CanCancel,
+			"desc":                 config.Description,
+			"damage_reduction_pct": config.DamageReductionPct,
+			"reflect_pct":          config.ReflectPct,
+			"lifesteal_pct":        config.LifestealPct,
 		}
 		if !b.IsPermanent() {
 			remaining := time.Until(b.ExpireAt).Seconds()
@@ -325,4 +335,175 @@ func (m *Manager) GetBuffListInfo(targetID uint64) []map[string]interface{} {
 		result = append(result, info)
 	}
 	return result
+}
+
+// ========== 战斗效果快捷方法（供战斗系统调用）==========
+
+// GetTotalDamageReduction 获取目标总减伤百分比（含叠加）
+// 返回值：0=无减伤, 100=完全免疫(无敌), 负数=易伤(如破甲-20%)
+func (m *Manager) GetTotalDamageReduction(targetID uint64) int {
+	effect := m.CalculateEffect(targetID)
+	return effect.DamageReductionPct
+}
+
+// GetTotalReflectPct 获取目标总反弹百分比
+func (m *Manager) GetTotalReflectPct(targetID uint64) int {
+	effect := m.CalculateEffect(targetID)
+	return effect.ReflectPct
+}
+
+// GetTotalLifestealPct 获取攻击者总吸血百分比
+func (m *Manager) GetTotalLifestealPct(attackerID uint64) int {
+	effect := m.CalculateEffect(attackerID)
+	return effect.LifestealPct
+}
+
+// IsFullyInvincible 是否完全免疫伤害（减伤>=100%）
+func (m *Manager) IsFullyInvincible(targetID uint64) bool {
+	return m.GetTotalDamageReduction(targetID) >= 100
+}
+
+// ========== BUFF定时Tick系统 ==========
+
+// BuffTickApplier BUFF效果应用回调（由外部注入，解耦buff_manager对其他服务的依赖）
+type BuffTickApplier interface {
+	// ApplyPlayerHPChange 修改玩家HP（正=恢复, 负=伤害）
+	ApplyPlayerHPChange(playerID uint64, hpChange int)
+	// ApplyPlayerMPChange 修改玩家MP（正=恢复, 负=消耗）
+	ApplyPlayerMPChange(playerID uint64, mpChange int)
+	// ApplyMonsterHPChange 修改怪物HP（正=恢复, 负=伤害）, 返回(当前HP, 是否死亡)
+	ApplyMonsterHPChange(monsterID uint64, hpChange int) (currentHP int, isDead bool)
+	// BroadcastBuffTick 推送单个BUFF Tick结果到客户端
+	BroadcastBuffTick(targetID uint64, targetType uint8, hpChange int, mpChange int)
+	// BroadcastBuffTickBatch 批量推送BUFF Tick结果（性能优化：减少网络请求）
+	BroadcastBuffTickBatch(results []BuffTickResult)
+}
+
+var (
+	globalTicker     *time.Ticker
+	globalTickerStop chan struct{}
+)
+
+// StartTicker 启动BUFF定时Tick器（每秒执行一次，在main.go中调用）
+func (m *Manager) StartTicker(applier BuffTickApplier) {
+	if globalTicker != nil {
+		log.Println("[BUFF] 定时器已在运行，跳过重复启动")
+		return
+	}
+
+	globalTicker = time.NewTicker(1 * time.Second)
+	globalTickerStop = make(chan struct{})
+
+	go func() {
+		log.Println("[BUFF] 定时Tick器已启动 (间隔:1s)")
+		for {
+			select {
+			case <-globalTicker.C:
+				m.tickAllTargets(applier)
+			case <-globalTickerStop:
+				globalTicker.Stop()
+				globalTicker = nil
+				log.Println("[BUFF] 定时Tick器已停止")
+				return
+			}
+		}
+	}()
+}
+
+// StopTicker 停止BUFF定时Tick器
+func (m *Manager) StopTicker() {
+	if globalTickerStop != nil {
+		close(globalTickerStop)
+		globalTickerStop = nil
+	}
+}
+
+// BuffTickResult 单次BUFF tick结果
+type BuffTickResult struct {
+	TargetID   uint64
+	TargetType uint8
+	HpChange   int
+	MpChange   int
+}
+
+// tickAllTargets 遍历所有有BUFF的目标，执行Tick并应用效果（优化版：批量处理）
+func (m *Manager) tickAllTargets(applier BuffTickApplier) {
+	now := time.Now()
+
+	// 快照所有有BUFF的targetID（避免锁竞争）
+	m.mu.RLock()
+	targetIDs := make([]uint64, 0, len(m.buffs))
+	for id := range m.buffs {
+		targetIDs = append(targetIDs, id)
+	}
+	m.mu.RUnlock()
+
+	// 批量收集所有tick结果
+	var results []BuffTickResult
+
+	for _, targetID := range targetIDs {
+		hpChange, mpChange := m.Tick(targetID, now)
+
+		if hpChange == 0 && mpChange == 0 {
+			continue // 无变化则跳过
+		}
+
+		// 判断目标类型：玩家ID通常较小且为角色ID格式，怪物ID为实例ID
+		// 通过尝试获取怪物信息来区分；更可靠的方式是记录AddBuff时的targetType
+		targetType := m.getTargetType(targetID)
+
+		switch targetType {
+		case 1: // 玩家
+			if hpChange != 0 {
+				applier.ApplyPlayerHPChange(targetID, hpChange)
+			}
+			if mpChange != 0 {
+				applier.ApplyPlayerMPChange(targetID, mpChange)
+			}
+		case 2: // 怪物
+			if hpChange != 0 {
+				currentHP, isDead := applier.ApplyMonsterHPChange(targetID, hpChange)
+				if isDead {
+					// 怪物被持续BUFF杀死（如中毒致死）
+					log.Printf("[BUFF] 怪物[%d]被BUFF持续效果击杀", targetID)
+					m.ClearAllBuffs(targetID)
+				}
+				_ = currentHP
+			}
+		}
+
+		// 收集结果用于批量广播
+		results = append(results, BuffTickResult{
+			TargetID:   targetID,
+			TargetType: targetType,
+			HpChange:   hpChange,
+			MpChange:   mpChange,
+		})
+	}
+
+	// 批量广播所有tick结果（减少网络请求次数）
+	if len(results) > 0 {
+		applier.BroadcastBuffTickBatch(results)
+	}
+
+	// 每分钟清理一次过期BUFF（轻量操作）
+	if now.Unix()%60 == 0 {
+		m.CleanupExpired()
+	}
+}
+
+// getTargetType 根据targetID推断目标类型（简化判断）
+func (m *Manager) getTargetType(targetID uint64) uint8 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	list, ok := m.buffs[targetID]
+	if !ok {
+		return 0
+	}
+	// 取第一个BUFF的TargetType（AddBuff时记录的）
+	if len(list) > 0 {
+		return list[0].TargetType
+	}
+	return 0
 }

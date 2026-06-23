@@ -801,39 +801,119 @@ class Inventory {
   /**
    * 更新角色属性
    */
+  /**
+   * 更新角色属性显示（包含装备加成+武学加成）
+   * 同时将计算后的属性同步到game.player对象
+   */
   updateAttributes() {
-    let totalAttack = this.game.player.attack || 10;
-    let totalDefense = this.game.player.defense || 5;
-    let totalSpeed = this.game.player.speed || 10;
+    if (!this.game) return;
+
+    const player = this.game.player;
     
-    // 计算装备加成
+    // 基础属性（使用登录时保存的基础值，而非当前可能包含加成的值）
+    let baseHp = player.baseMaxHp || player.maxHp || 100;
+    let baseMp = player.baseMaxMp || player.maxMp || 100;
+    let baseAttack = player.baseAttack || player.attack || 10;
+    let baseDefense = player.baseDefense || player.defense || 5;
+    let baseSpeed = player.baseSpeed || player.speed || 10;
+    
+    // === 装备加成累计 ===
+    let equipHp = 0, equipMp = 0, equipAttack = 0, equipDefense = 0, equipSpeed = 0;
+    
     this.equipments.forEach(equip => {
-      if (equip.attrs) {
-        totalAttack += equip.attrs.attack || 0;
-        totalDefense += equip.attrs.defense || 0;
-        totalSpeed += equip.attrs.speed || 0;
+      equipHp += (equip.hp_bonus || 0);
+      equipMp += (equip.mp_bonus || 0);
+      equipAttack += (equip.attack_bonus || 0);
+      equipDefense += (equip.defense_bonus || 0);
+      equipSpeed += (equip.speed_bonus || 0);
+      
+      if (equip.attrs && typeof equip.attrs === 'object') {
+        equipAttack += (equip.attrs.attack || 0);
+        equipDefense += (equip.attrs.defense || 0);
+        equipSpeed += (equip.attrs.speed || 0);
       }
     });
     
+    // === 武学加成累计（从已装备武学计算） ===
+    let skillHp = 0, skillMp = 0, skillAttack = 0, skillDefense = 0, skillSpeed = 0;
+    if (this.game.skillBar && this.game.skillBar.skillConfigCache.size > 0) {
+      const skills = player.skills || [];
+      skills.forEach(skill => {
+        const skillId = skill.skill_id || skill.id;
+        const level = skill.level || 1;
+        const config = this.game.skillBar.skillConfigCache.get(skillId);
+        if (config) {
+          // 武学加成 = 每级加成 * 当前等级
+          skillHp += (config.hp_bonus || 0) * level;
+          skillMp += (config.mp_bonus || 0) * level;
+          skillAttack += (config.attack_bonus || 0) * level;
+          skillDefense += (config.defense_bonus || 0) * level;
+          skillSpeed += (config.speed_bonus || 0) * level;
+        }
+      });
+    }
+    
+    // 计算最终属性
+    const totalHp = baseHp + equipHp + skillHp;
+    const totalMp = baseMp + equipMp + skillMp;
+    const totalAttack = baseAttack + equipAttack + skillAttack;
+    const totalDefense = baseDefense + equipDefense + skillDefense;
+    const totalSpeed = baseSpeed + equipSpeed + skillSpeed;
+    
+    // 同步到player对象（供战斗系统和其他模块使用）
+    player.equipBonus = { hp: equipHp, mp: equipMp, attack: equipAttack, defense: equipDefense, speed: equipSpeed };
+    player.skillBonus = { hp: skillHp, mp: skillMp, attack: skillAttack, defense: skillDefense, speed: skillSpeed };
+    
+    // 更新显示的最大生命/内力（始终更新为计算后的值，包括卸下装备/技能后恢复基础值）
+    player.maxHp = totalHp;
+    player.maxMp = totalMp;
+    
+    // 更新UI显示
     const attrList = document.getElementById('inv-attr-list');
     if (attrList) {
       attrList.innerHTML = `
         <div style="display: flex; justify-content: space-between; margin: 5px 0;">
-          <span>生命</span><span style="color: #ef4444;">${this.game.player.hp}/${this.game.player.maxHp}</span>
+          <span>生命</span><span style="color: #ef4444;">${player.hp}/${totalHp}
+            ${equipHp > 0 ? `<small style="color:#60a5fa">[装+${equipHp}]</small>` : ''}
+            ${skillHp > 0 ? `<small style="color:#fbbf24">[武+${skillHp}]</small>` : ''}
+          </span>
         </div>
         <div style="display: flex; justify-content: space-between; margin: 5px 0;">
-          <span>内力</span><span style="color: #60a5fa;">${this.game.player.mp}/${this.game.player.maxMp}</span>
+          <span>内力</span><span style="color: #60a5fa;">${player.mp}/${totalMp}
+            ${equipMp > 0 ? `<small style="color:#60a5fa">[装+${equipMp}]</small>` : ''}
+            ${skillMp > 0 ? `<small style="color:#fbbf24">[武+${skillMp}]</small>` : ''}
+          </span>
         </div>
         <div style="display: flex; justify-content: space-between; margin: 5px 0;">
-          <span>攻击</span><span style="color: #4ade80;">${totalAttack}</span>
+          <span>攻击</span><span style="color: #4ade80;">${totalAttack}
+            ${equipAttack > 0 ? `<small style="color:#60a5fa">[装+${equipAttack}]</small>` : ''}
+            ${skillAttack > 0 ? `<small style="color:#fbbf24">[武+${skillAttack}]</small>` : ''}
+          </span>
         </div>
         <div style="display: flex; justify-content: space-between; margin: 5px 0;">
-          <span>防御</span><span style="color: #4ade80;">${totalDefense}</span>
+          <span>防御</span><span style="color: #4ade80;">${totalDefense}
+            ${equipDefense > 0 ? `<small style="color:#60a5fa">[装+${equipDefense}]</small>` : ''}
+            ${skillDefense > 0 ? `<small style="color:#fbbf24">[武+${skillDefense}]</small>` : ''}
+          </span>
         </div>
         <div style="display: flex; justify-content: space-between; margin: 5px 0;">
-          <span>速度</span><span style="color: #4ade80;">${totalSpeed}</span>
+          <span>速度</span><span style="color: #4ade80;">${totalSpeed}
+            ${equipSpeed > 0 ? `<small style="color:#60a5fa">[装+${equipSpeed}]</small>` : ''}
+            ${skillSpeed > 0 ? `<small style="color:#fbbf24">[武+${skillSpeed}]</small>` : ''}
+          </span>
         </div>
       `;
+    }
+    
+    // 触发属性更新事件（供其他系统监听）
+    if (this.game.onAttributesUpdate) {
+      this.game.onAttributesUpdate({
+        hp: totalHp,
+        mp: totalMp,
+        attack: totalAttack,
+        defense: totalDefense,
+        speed: totalSpeed
+      });
     }
   }
   
@@ -985,32 +1065,135 @@ class Inventory {
   
   /**
    * 从服务器加载背包数据（生产环境使用）
+   * 调用GameService的RESTful API获取背包和装备数据
    */
   async loadFromServer() {
     try {
-      const response = await fetch('/api/player/inventory');
-
-      // 服务端暂未实现该接口，降级到测试数据
-      if (!response.ok) {
-        console.warn('背包接口暂未实现，使用测试数据');
+      const roleId = this.game?.player?.id;
+      if (!roleId) {
+        console.warn('角色ID不存在，无法加载背包');
         this.loadTestData();
         return;
       }
 
-      const text = await response.text();
-      const data = JSON.parse(text);
+      // 并行请求背包数据和装备数据
+      const [bagRes, equipRes] = await Promise.all([
+        fetch(`http://localhost:8082/api/item/bag/${roleId}/list`),
+        fetch(`http://localhost:8082/api/item/equip/${roleId}/list`)
+      ]);
 
-      if (data.success) {
-        this.items = data.items;
-        this.equipments = data.equipments;
-        this.refreshItems();
-        this.refreshEquipments();
+      // 处理背包数据
+      if (bagRes.ok) {
+        const bagData = await bagRes.json();
+        if (bagData.code === 200 && bagData.data) {
+          // 转换服务端数据格式为前端格式
+          this.items = bagData.data.map(item => ({
+            id: item.item_id,
+            bagItemId: item.id,
+            name: item.name || `物品${item.item_id}`,
+            type: item.type,
+            type_name: this.getTypeName(item.type),
+            quality: item.quality || 1,
+            count: item.count || 1,
+            can_use: item.type === 1, // 药品类可使用
+            can_equip: item.type === 2, // 装备类可穿戴
+            equip_pos: this.getEquipPosName(item.equip_type),
+            equip_type: item.equip_type,
+            description: item.description || '',
+            attrs: this.formatItemAttrs(item),
+            level_req: item.level_req || 0,
+            price: item.price || 0,
+            is_bind: item.is_bind || 0,
+            grid_index: item.grid_index
+          }));
+          console.log(`背包加载完成: ${this.items.length}个物品`);
+        }
+      } else {
+        console.warn('背包API调用失败:', bagRes.status);
       }
+
+      // 处理装备数据
+      if (equipRes.ok) {
+        const equipData = await equipRes.json();
+        if (equipData.code === 200 && equipData.data) {
+          // 转换服务端装备数据格式
+          this.equipments = equipData.data.map(equip => ({
+            id: equip.item_id,
+            bagItemId: equip.bag_item_id,
+            name: equip.name || `装备${equip.item_id}`,
+            type: equip.type,
+            type_name: this.getTypeName(equip.type),
+            quality: equip.quality || 1,
+            can_equip: true,
+            equip_pos: this.getEquipPosName(equip.equip_type),
+            equip_type: equip.equip_type,
+            description: equip.description || '',
+            attrs: this.formatItemAttrs(equip),
+            level_req: equip.level_req || 0
+          }));
+          console.log(`装备加载完成: ${this.equipments.length}件装备`);
+          
+          // 同步到player对象
+          if (this.game) {
+            this.game.player.equippedItems = this.equipments;
+          }
+        }
+      } else {
+        console.warn('装备API调用失败:', equipRes.status);
+      }
+
+      // 刷新UI
+      this.refreshItems();
+      this.refreshEquipments();
+      this.updateAttributes();
+
+      // 如果都没有数据，使用测试数据
+      if (this.items.length === 0 && this.equipments.length === 0) {
+        console.log('背包为空，加载测试数据');
+        this.loadTestData();
+      }
+
     } catch (error) {
       console.error('从服务器加载背包数据失败:', error);
       // 降级到测试数据，避免背包为空
       this.loadTestData();
     }
+  }
+
+  /**
+   * 获取类型名称
+   */
+  getTypeName(type) {
+    const typeNames = {
+      1: '药品', 2: '装备', 3: '材料', 4: '任务', 5: '秘籍', 6: '时装', 7: '货币'
+    };
+    return typeNames[type] || '未知';
+  }
+
+  /**
+   * 获取装备位置名称
+   */
+  getEquipPosName(equipType) {
+    const posNames = {
+      1: 'weapon', 2: 'armor', 3: 'helmet', 4: 'necklace',
+      5: 'ring', 6: 'boots', 7: 'ring', 8: 'necklace'
+    };
+    return posNames[equipType] || 'weapon';
+  }
+
+  /**
+   * 格式化物品属性
+   */
+  formatItemAttrs(item) {
+    const attrs = [];
+    if (item.hp_bonus > 0) attrs.push(`生命+${item.hp_bonus}`);
+    if (item.mp_bonus > 0) attrs.push(`内力+${item.mp_bonus}`);
+    if (item.attack_bonus > 0) attrs.push(`攻击+${item.attack_bonus}`);
+    if (item.defense_bonus > 0) attrs.push(`防御+${item.defense_bonus}`);
+    if (item.speed_bonus > 0) attrs.push(`速度+${item.speed_bonus}`);
+    if (item.hp_restore > 0) attrs.push(`恢复生命${item.hp_restore}`);
+    if (item.mp_restore > 0) attrs.push(`恢复内力${item.mp_restore}`);
+    return attrs;
   }
 }
 

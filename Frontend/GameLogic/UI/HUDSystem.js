@@ -469,13 +469,16 @@ class HUDSystem {
       });
     }
 
-    // 技能按钮
+    // 技能按钮（显示"我的技能"- 已学/已装备）
     const skillBtn = document.getElementById('hudSkillBtn');
     if (skillBtn) {
       skillBtn.addEventListener('click', () => {
-        // 触发技能面板显示（如果存在）
-        if (this.game.skillBar) {
-          this.game.skillBar.toggleSkillPanel?.();
+        // 优先使用SkillBar的简单技能列表（显示已学/已装备）
+        if (this.game.skillBar && typeof this.game.skillBar.toggleSkillPanel === 'function') {
+          this.game.skillBar.toggleSkillPanel();
+        } else if (this.game.skillPanel) {
+          // 回退到完整武学图谱
+          this.game.skillPanel.toggle();
         }
       });
     }
@@ -521,7 +524,10 @@ class HUDSystem {
           }
           break;
         case 'k':
-          if (this.game.skillBar) {
+          // 优先使用完整的SkillPanel(武学图谱)，回退到SkillBar
+          if (this.game.skillPanel) {
+            this.game.skillPanel.toggle();
+          } else if (this.game.skillBar) {
             this.game.skillBar.toggleSkillPanel?.();
           }
           break;

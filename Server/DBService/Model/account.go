@@ -68,31 +68,31 @@ type Role struct {
 
 // RoleSkill 角色武学表
 type RoleSkill struct {
-	ID      uint64 `gorm:"primaryKey;comment:记录ID"`
-	RoleID  uint64 `gorm:"index;comment:角色ID"`
-	SkillID uint32 `gorm:"comment:武学ID"`
-	Level   int    `gorm:"default:1;comment:武学等级"`
-	Exp     int64  `gorm:"default:0;comment:武学经验"`
-	IsEquip uint8  `gorm:"default:0;comment:是否装备(0否 1是)"`
+	ID      uint64 `gorm:"primaryKey;comment:记录ID" json:"id"`
+	RoleID  uint64 `gorm:"index;comment:角色ID" json:"role_id"`
+	SkillID uint32 `gorm:"comment:武学ID" json:"skill_id"`
+	Level   int    `gorm:"default:1;comment:武学等级" json:"level"`
+	Exp     int64  `gorm:"default:0;comment:武学经验" json:"exp"`
+	IsEquip uint8  `gorm:"default:0;comment:是否装备(0否 1是)" json:"is_equip"`
 }
 
 // SkillBase 武学基础表
 type SkillBase struct {
-	ID          uint64 `gorm:"primaryKey;comment:武学ID"`
-	Name        string `gorm:"size:32;comment:武学名称"`
-	Type        uint8  `gorm:"comment:武学类型(1内功 2身法 3护体 4拳法 5剑法 6刀法 7枪法 8斧法)"`
-	Level       uint32 `gorm:"default:1;comment:武学等级"`
-	MaxLevel    uint32 `gorm:"default:10;comment:最大等级"`
-	ExpFactor   int    `gorm:"comment:升级经验系数"`
-	HpBonus     int    `gorm:"comment:生命加成"`
-	MpBonus     int    `gorm:"comment:内力加成"`
-	AttackBonus int    `gorm:"comment:攻击加成"`
-	DefBonus    int    `gorm:"comment:防御加成"`
-	SpeedBonus  int    `gorm:"comment:速度加成"`
-	HitBonus    int    `gorm:"comment:命中加成"`
-	DodgeBonus  int    `gorm:"comment:闪避加成"`
-	CritBonus   int    `gorm:"comment:暴击加成"`
-	IsActive    uint8  `gorm:"default:1;comment:是否主动(0被动 1主动)"`
+	ID          uint64 `gorm:"primaryKey;comment:武学ID" json:"id"`
+	Name        string `gorm:"size:32;comment:武学名称" json:"name"`
+	Type        uint8  `gorm:"comment:武学类型(1内功 2身法 3护体 4拳法 5剑法 6刀法 7枪法 8斧法)" json:"type"`
+	Level       uint32 `gorm:"default:1;comment:武学等级" json:"level"`
+	MaxLevel    uint32 `gorm:"default:10;comment:最大等级" json:"max_level"`
+	ExpFactor   int    `gorm:"comment:升级经验系数" json:"exp_factor"`
+	HpBonus     int    `gorm:"comment:生命加成" json:"hp_bonus"`
+	MpBonus     int    `gorm:"comment:内力加成" json:"mp_bonus"`
+	AttackBonus int    `gorm:"comment:攻击加成" json:"attack_bonus"`
+	DefBonus    int    `gorm:"comment:防御加成" json:"defense_bonus"`
+	SpeedBonus  int    `gorm:"comment:速度加成" json:"speed_bonus"`
+	HitBonus    int    `gorm:"comment:命中加成" json:"hit_bonus"`
+	DodgeBonus  int    `gorm:"comment:闪避加成" json:"dodge_bonus"`
+	CritBonus   int    `gorm:"comment:暴击加成" json:"crit_bonus"`
+	IsActive    uint8  `gorm:"default:1;comment:是否主动(0被动 1主动)" json:"is_active"`
 }
 
 // ItemBase 道具基础表

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	buff "game-server/GameService/Buff"
+	item "game-server/GameService/Item"
 	skillService "game-server/GameService/Skill"
 )
 
@@ -42,6 +43,16 @@ var SkillBuffTriggerRate = map[uint8]float64{
 	9: 0.15, // 斧法15%（眩晕较强，概率低）
 }
 
+// SkillSelfBuffId 技能类型→自身BUFF ID映射（使用技能时100%给自身附加增益BUFF）
+// 内功(type=1) → 力量祝福(4): 攻击+20,暴击+5
+// 护体(type=4) → 防御强化(5): 防御+30,减伤15%
+// 身法(type=3) → 疾风术(6): 速度+15,闪避+10
+var SkillSelfBuffId = map[uint8]uint32{
+	1: 4, // 内功→力量祝福
+	3: 6, // 身法→疾风术
+	4: 5, // 护体→防御强化
+}
+
 // ========== 接口定义（避免循环依赖）==========
 
 // MonsterServiceInterface 怪物服务接口 - 由外部注入
@@ -49,6 +60,7 @@ type MonsterServiceInterface interface {
 	GetMonsterInfo(monsterID uint64) (*common.MonsterInfo, bool)
 	MonsterTakeDamage(instanceID uint64, damage int) (newHP int, isDead bool)
 	MonsterDie(instanceID uint64) (exp int, gold int, drops []uint32, err error)
+	GetMonstersInArea(centerX, centerY int, radius int, excludeID uint64) []common.AOETargetInfo // 获取范围内怪物
 }
 
 // AIServiceInterface AI服务接口 - 由外部注入
@@ -552,6 +564,8 @@ func (s *Service) ProcessRespawn(req RespawnRequest) *RespawnResult {
 		if role, err := common.DBRoleGet(req.RoleID); err == nil && role != nil {
 			result.X = role.MapX
 			result.Y = role.MapY
+			result.HP = role.Hp
+			result.MP = role.Mp
 		}
 	}
 
@@ -736,31 +750,40 @@ type MapEventRequest struct {
 
 // PlayerAttackResult 玩家攻击结果
 type PlayerAttackResult struct {
-	Success    bool     `json:"success"`     // 攻击是否成功
-	ErrorCode  int      `json:"error_code"`  // 错误代码: 0=成功, 1=距离过远, 2=冷却中, 3=目标不存在, 4=目标已死, 5=玩家死亡, 6=技能未学习, 7=MP不足, 8=武器不符, 9=沉默状态
-	ErrorMsg   string   `json:"error_msg"`   // 错误信息
-	AttackerID uint64   `json:"attacker_id"` // 攻击者ID
-	TargetID   uint64   `json:"target_id"`   // 目标ID
-	Damage     int      `json:"damage"`      // 伤害值
-	IsCrit     bool     `json:"is_crit"`     // 是否暴击
-	IsMiss     bool     `json:"is_miss"`     // 是否闪避
-	IsBlocked  bool     `json:"is_blocked"`  // 是否格挡
-	CurrentHP  int      `json:"current_hp"`  // 目标当前血量
-	MaxHP      int      `json:"max_hp"`      // 目标最大血量
-	IsDead     bool     `json:"is_dead"`     // 目标是否死亡
-	ExpGain    int      `json:"exp_gain"`    // 获得经验
-	GoldGain   int      `json:"gold_gain"`   // 获得金币
-	Drops      []uint32 `json:"drops"`       // 掉落物品ID列表
-	LeveledUp  bool     `json:"leveled_up"`  // 是否升级
-	NewLevel   int      `json:"new_level"`   // 新等级（如果升级了）
+	Success    bool                     `json:"success"`     // 攻击是否成功
+	ErrorCode  int                      `json:"error_code"`  // 错误代码: 0=成功, 1=距离过远, 2=冷却中, 3=目标不存在, 4=目标已死, 5=玩家死亡, 6=技能未学习, 7=MP不足, 8=武器不符, 9=沉默状态
+	ErrorMsg   string                   `json:"error_msg"`   // 错误信息
+	AttackerID uint64                   `json:"attacker_id"` // 攻击者ID
+	TargetID   uint64                   `json:"target_id"`   // 目标ID
+	Damage     int                      `json:"damage"`      // 伤害值
+	IsCrit     bool                     `json:"is_crit"`     // 是否暴击
+	IsMiss     bool                     `json:"is_miss"`     // 是否闪避
+	IsBlocked  bool                     `json:"is_blocked"`  // 是否格挡
+	CurrentHP  int                      `json:"current_hp"`  // 目标当前血量
+	MaxHP      int                      `json:"max_hp"`      // 目标最大血量
+	IsDead     bool                     `json:"is_dead"`     // 目标是否死亡
+	ExpGain    int                      `json:"exp_gain"`    // 获得经验
+	GoldGain   int                      `json:"gold_gain"`   // 获得金币
+	Drops      []uint32                 `json:"drops"`       // 掉落物品ID列表
+	DropItems  []map[string]interface{} `json:"drop_items"`  // 实际放入背包的物品详情
+	LeveledUp  bool                     `json:"leveled_up"`  // 是否升级
+	NewLevel   int                      `json:"new_level"`   // 新等级（如果升级了）
 	// 技能相关字段
-	SkillID       uint32 `json:"skill_id"`        // 使用的技能ID（0=普通攻击）
-	SkillName     string `json:"skill_name"`      // 技能名称
-	IsSkillAttack bool   `json:"is_skill_attack"` // 是否技能攻击
-	MpCost        int    `json:"mp_cost"`         // MP消耗
-	CurrentMP     int    `json:"current_mp"`      // 玩家剩余MP
-	MaxMP         int    `json:"max_mp"`          // 玩家最大MP
-	BuffApplied   uint32 `json:"buff_applied"`    // 附加的BUFF ID（0=无）
+	SkillID           uint32 `json:"skill_id"`            // 使用的技能ID（0=普通攻击）
+	SkillName         string `json:"skill_name"`          // 技能名称
+	SkillType         uint8  `json:"skill_type"`          // 技能类型(1-9)
+	IsSkillAttack     bool   `json:"is_skill_attack"`     // 是否技能攻击
+	MpCost            int    `json:"mp_cost"`             // MP消耗
+	CurrentMP         int    `json:"current_mp"`          // 玩家剩余MP
+	MaxMP             int    `json:"max_mp"`              // 玩家最大MP
+	BuffApplied       uint32 `json:"buff_applied"`        // 附加的BUFF ID（0=无）
+	SelfBuffApplied   uint32 `json:"self_buff_applied"`   // 自身附加的BUFF ID（0=无）
+	Invulnerable      bool   `json:"invulnerable"`        // 目标是否无敌免疫
+	ReflectDamage     int    `json:"reflect_damage"`      // 反弹伤害值
+	ReflectTargetName string `json:"reflect_target_name"` // 反弹目标名
+	LifestealHeal     int    `json:"lifesteal_heal"`      // 吸血回复量
+	// AOE多目标
+	AOETargets []map[string]interface{} `json:"aoe_targets"` // AOE波及的目标 [{target_id, name, damage, is_dead}, ...]
 }
 
 // PlayerAttackMonster 玩家攻击怪物（完整流程）
@@ -777,6 +800,9 @@ func (s *Service) PlayerAttackMonster(roleID uint64, monsterInstanceID uint64, s
 		result.ErrorMsg = "玩家数据获取失败"
 		return result
 	}
+
+	// 1.0 获取玩家完整信息（用于返回MP等）
+	roleInfo, _ := common.DBRoleGet(roleID)
 
 	// 1.1 检查玩家是否死亡（死亡玩家不能发起攻击）
 	if playerFighter.CurrentHP <= 0 {
@@ -799,9 +825,16 @@ func (s *Service) PlayerAttackMonster(roleID uint64, monsterInstanceID uint64, s
 		return result
 	}
 
-	// 3. 检查攻击距离（与前端BattleSystem.js的1.5格保持一致）
+	// 3. 检查攻击距离（技能有独立范围配置，普通攻击默认1.5格）
+	attackRange := 1.5 // 普通攻击近战范围
+	if skillID > 0 {
+		// 预读技能配置获取范围（仅用于距离校验，不消耗MP等）
+		if tmpCfg := common.GetSkillConfig(skillID); tmpCfg != nil && tmpCfg.Range > 1 {
+			attackRange = float64(tmpCfg.Range)
+		}
+	}
 	playerPos := getPlayerPosition(roleID)
-	inRange, distance := CheckAttackRange(playerPos.X, playerPos.Y, monster.X, monster.Y, 1.5) // 近战1.5格范围
+	inRange, distance := CheckAttackRange(playerPos.X, playerPos.Y, monster.X, monster.Y, attackRange)
 	if !inRange {
 		result.ErrorCode = 1
 		result.ErrorMsg = "距离过远"
@@ -863,64 +896,106 @@ func (s *Service) PlayerAttackMonster(roleID uint64, monsterInstanceID uint64, s
 			return result
 		}
 
-		// 校验MP消耗（技能等级越高消耗越大，基础10 + 等级*2）
-		mpCost := 10 + int(skillLevel)*2
-		roleInfo, _ := common.DBRoleGet(roleID)
-		if roleInfo != nil {
-			// 校验武器类型限制（skills.json的weapon_type字段）
-			// weapon_type=0表示徒手即可，其他值要求装备对应类型武器
-			if skillConfig.WeaponType > 0 {
-				playerWeaponType := uint8(0) // 默认徒手
-				if roleInfo.WeaponID > 0 {
-					if itemCfg := common.GetItemConfig(uint32(roleInfo.WeaponID)); itemCfg != nil {
-						playerWeaponType = itemCfg.WeaponType
-					}
-				}
-				if playerWeaponType != skillConfig.WeaponType {
-					result.ErrorCode = 8
-					result.ErrorMsg = "武器类型不符，无法施展该武学"
-					return result
+		// 校验冷却时间（cooldown=0表示无冷却，走攻速机制由前端控制）
+		if skillConfig.Cooldown > 0 {
+			if GlobalCoolDownManager.IsCoolingDown(roleID, skillID) {
+				result.ErrorCode = 2
+				result.ErrorMsg = "技能冷却中"
+				return result
+			}
+		}
+
+		// 校验武器类型限制（skills.json的weapon_type字段）
+		if roleInfo != nil && skillConfig != nil && skillConfig.WeaponType > 0 {
+			playerWeaponType := uint8(0) // 默认徒手
+			if roleInfo.WeaponID > 0 {
+				if itemCfg := common.GetItemConfig(uint32(roleInfo.WeaponID)); itemCfg != nil {
+					playerWeaponType = itemCfg.WeaponType
 				}
 			}
+			if playerWeaponType != skillConfig.WeaponType {
+				result.ErrorCode = 8
+				result.ErrorMsg = "武器类型不符，无法施展该武学"
+				return result
+			}
+		}
 
+		// 使用技能配置的MP消耗（基础值 + 等级加成）
+		mpCost := skillConfig.MpCost + int(skillLevel)*2
+		if roleInfo != nil {
 			if roleInfo.Mp < mpCost {
 				result.ErrorCode = 7
 				result.ErrorMsg = "内力不足"
 				return result
 			}
-			// 扣除MP
 			newMP, _ := common.DBRoleChangeMP(roleID, -mpCost)
 			result.MpCost = mpCost
 			result.CurrentMP = newMP
 			result.MaxMP = roleInfo.MaxMp
 		}
 
+		// 设置冷却（cooldown>0时服务端记录固定冷却；cooldown=0时不设置，由前端攻速控制）
+		if skillConfig.Cooldown > 0 {
+			GlobalCoolDownManager.SetCoolDown(roleID, skillID, int64(skillConfig.Cooldown)*1000)
+		}
+
 		result.SkillID = skillID
 		result.SkillName = skillConfig.Name
+		result.SkillType = skillConfig.Type
 		result.IsSkillAttack = true
+
+		// 6.1.1 自身BUFF：内功/身法/护体技能使用时自动给自身附加增益BUFF
+		if selfBuffID, ok := SkillSelfBuffId[skillConfig.Type]; ok {
+			appliedBuff := buff.GetManager().AddBuff(roleID, 1, selfBuffID, roleID)
+			if appliedBuff != nil {
+				result.SelfBuffApplied = selfBuffID
+				buffConfig := common.GetBuffConfig(selfBuffID)
+				buffName := "未知"
+				if buffConfig != nil {
+					buffName = buffConfig.Name
+				}
+				log.Printf("✨ 技能[%s]释放，自身附加BUFF[%d:%s]", skillConfig.Name, selfBuffID, buffName)
+			}
+		}
 	}
 
 	// 6.2 计算伤害
 	var damage int
 	var isCrit, isMiss, isBlocked bool
 	if isSkillAttack {
-		// 技能伤害：使用CalculateSkillDamage（含技能系数和等级加成）
-		// 先走命中/格挡判定
+		// 技能伤害：以skills.json的damage为基数，结合等级/攻击力/暴击计算
 		if !CalculateHit(playerFighter, monsterFighter) {
 			damage = 0
 			isMiss = true
 		} else {
-			isBlocked, _ = CalculateBlock(playerFighter, monsterFighter)
-			baseDmg := CalculateSkillDamage(playerFighter, monsterFighter, skillConfig.Type, skillLevel)
-			// 技能也参与暴击判定（内联暴击计算，与CalculateDamage一致）
+			isBlocked, blockReduction := CalculateBlock(playerFighter, monsterFighter)
+
+			// 基础伤害 = 技能配置damage + 攻击力加成(比例) + 等级成长
+			// 公式：baseDamage = skill.Damage + (playerAttack * 0.3) + (level-1) * skill.Damage * 0.05
+			skillBaseDmg := skillConfig.Damage
+			attackRatio := int(float64(playerFighter.Attack) * 0.3)                  // 攻击力30%转化
+			levelGrowth := int(float64(skillBaseDmg) * float64(skillLevel-1) * 0.05) // 每级+5%基础伤害
+
+			baseDmg := skillBaseDmg + attackRatio + levelGrowth
+			if baseDmg < 1 {
+				baseDmg = 1
+			}
+
+			// 暴击判定
 			critRate := playerFighter.Crit
 			if rand.Float64()*100 < float64(critRate) {
 				isCrit = true
 				baseDmg = int(float64(baseDmg) * float64(playerFighter.CritDamage) / 100)
 			}
+
+			// 格挡减伤
 			if isBlocked {
-				baseDmg = baseDmg / 2
+				baseDmg = int(float64(baseDmg) * (1 - blockReduction))
 			}
+
+			// 伤害波动 ±10%
+			variance := float64(baseDmg) * 0.1
+			baseDmg = int(float64(baseDmg) + (rand.Float64()*2-1)*variance)
 			if baseDmg < 1 {
 				baseDmg = 1
 			}
@@ -944,19 +1019,103 @@ func (s *Service) PlayerAttackMonster(roleID uint64, monsterInstanceID uint64, s
 		result.CurrentHP = monster.CurrentHP
 		result.MaxHP = monster.MaxHP
 		result.Success = true
+		// 返回玩家当前MP（避免客户端误用零值）
+		if roleInfo != nil {
+			result.CurrentMP = roleInfo.Mp
+			result.MaxMP = roleInfo.MaxMp
+		}
 		// 通知怪物AI被攻击
 		s.notifyMonsterHurted(monsterInstanceID, roleID)
 		return result
 	}
 
-	// 8. 应用伤害到怪物
+	// 8. 应用伤害到怪物（集成BUFF效果：无敌/减伤/反弹/吸血）
+
+	// 8.0 无敌判定（减伤>=100%则完全免疫）
+	if buff.GetManager().IsFullyInvincible(monsterInstanceID) {
+		damage = 0
+		result.Damage = 0
+		result.IsMiss = false // 不是闪避，是免疫
+		result.CurrentHP = monster.CurrentHP
+		result.MaxHP = monster.MaxHP
+		result.Success = true
+		result.Invulnerable = true // 新增字段标记无敌状态
+		// 返回玩家当前MP（避免客户端误用零值）
+		if roleInfo != nil {
+			result.CurrentMP = roleInfo.Mp
+			result.MaxMP = roleInfo.MaxMp
+		}
+		log.Printf("🛡️ 怪物[%d]处于无敌状态，免疫伤害", monsterInstanceID)
+		return result
+	}
+
+	// 8.1 BUFF减伤百分比计算（负值=易伤，如破甲-20%则伤害×1.2）
+	reductionPct := buff.GetManager().GetTotalDamageReduction(monsterInstanceID)
+	if reductionPct != 0 {
+		reductionFactor := 1.0 - float64(reductionPct)/100.0
+		damage = int(float64(damage) * reductionFactor)
+		if damage < 0 {
+			damage = 0 // 减伤不会造成负伤害
+		}
+		if reductionPct > 0 {
+			log.Printf("🛡️ 怪物[%d]BUFF减伤%d%%，实际伤害=%d", monsterInstanceID, reductionPct, damage)
+		} else if reductionPct < 0 {
+			log.Printf("⚠️ 怪物[%d]易伤%d%%，实际伤害=%d", monsterInstanceID, -reductionPct, damage)
+		}
+	}
+
 	newHP, isDead := globalMonsterSvc.MonsterTakeDamage(monsterInstanceID, damage)
 	result.CurrentHP = newHP
 	result.MaxHP = monster.MaxHP
 	result.IsDead = isDead
 	result.Success = true
 
-	// 8.1 技能命中后附加BUFF（非闪避、非死亡时）
+	// 普通攻击也返回玩家当前MP（避免客户端误用零值）
+	if roleInfo != nil {
+		result.CurrentMP = roleInfo.Mp
+		result.MaxMP = roleInfo.MaxMp
+	}
+
+	// 8.2 反弹伤害（目标身上有反弹类BUFF时，将部分伤害反弹给攻击者）
+	reflectPct := buff.GetManager().GetTotalReflectPct(monsterInstanceID)
+	if reflectPct > 0 && damage > 0 {
+		reflectDmg := int(float64(damage) * float64(reflectPct) / 100.0)
+		if reflectDmg > 0 {
+			// 反弹伤害给玩家（通过扣血实现）
+			roleInfo, err := common.DBRoleGet(roleID)
+			if err == nil && roleInfo != nil {
+				newPlayerHP := roleInfo.Hp - reflectDmg
+				if newPlayerHP < 0 {
+					newPlayerHP = 0
+				}
+				common.DBRoleSetHP(roleID, newPlayerHP)
+				result.ReflectDamage = reflectDmg
+				result.ReflectTargetName = "自身"
+				log.Printf("💥 反弹! 怪物[%d]反弹%d%%伤害=%d给玩家", monsterInstanceID, reflectPct, reflectDmg)
+			}
+		}
+	}
+
+	// 8.3 吸血效果（攻击者身上有吸血类BUFF时，按伤害比例回血）
+	lifestealPct := buff.GetManager().GetTotalLifestealPct(roleID)
+	if lifestealPct > 0 && damage > 0 {
+		healAmount := int(float64(damage) * float64(lifestealPct) / 100.0)
+		if healAmount > 0 {
+			roleInfo, err := common.DBRoleGet(roleID)
+			if err == nil && roleInfo != nil {
+				newPlayerHP := roleInfo.Hp + healAmount
+				maxHP := int(roleInfo.MaxHp)
+				if newPlayerHP > maxHP {
+					newPlayerHP = maxHP
+				}
+				common.DBRoleSetHP(roleID, newPlayerHP)
+				result.LifestealHeal = healAmount
+				log.Printf("🩸 吸血! 玩家回复%dHP(伤害%d×%d%%)", healAmount, damage, lifestealPct)
+			}
+		}
+	}
+
+	// 8.4 技能命中后附加BUFF（非闪避、非死亡时）
 	if isSkillAttack && !isMiss && !isDead && skillConfig != nil {
 		// 优先使用技能配置的buff_id，为0则按技能type映射
 		buffID := skillConfig.BuffID
@@ -975,6 +1134,16 @@ func (s *Service) PlayerAttackMonster(roleID uint64, monsterInstanceID uint64, s
 				log.Printf("✨ 技能[%s]命中怪物[%d]，附加BUFF[%d]",
 					skillConfig.Name, monsterInstanceID, buffID)
 			}
+		}
+	}
+
+	// 8.2 AOE范围伤害（技能配置aoe_radius > 0时，对目标周围怪物造成溅射伤害）
+	if isSkillAttack && !isMiss && skillConfig != nil && skillConfig.AoeRadius > 0 {
+		aoeTargets := s.calculateAOEDamage(roleID, monsterInstanceID, monster.X, monster.Y,
+			skillConfig.AoeRadius, damage, skillConfig)
+		if len(aoeTargets) > 0 {
+			result.AOETargets = aoeTargets
+			log.Printf("💥 技能[%s]AOE波及 %d 个目标", skillConfig.Name, len(aoeTargets))
 		}
 	}
 
@@ -1001,10 +1170,130 @@ func (s *Service) PlayerAttackMonster(roleID uint64, monsterInstanceID uint64, s
 				result.LeveledUp = true
 				result.NewLevel = newLevel
 			}
+
+			// 将掉落物品添加到玩家背包
+			if len(drops) > 0 {
+				itemSvc := item.NewService()
+				for _, itemID := range drops {
+					slot, err := itemSvc.AddItem(roleID, itemID, 1, 0) // 0=不绑定
+					if err != nil {
+						log.Printf("添加掉落物品[%d]到背包失败: %v", itemID, err)
+					} else {
+						log.Printf("🎁 玩家 %d 获得掉落物品[%d], 放入格子 %d", roleID, itemID, slot)
+						result.DropItems = append(result.DropItems, map[string]interface{}{
+							"item_id": itemID,
+							"slot":    slot,
+						})
+					}
+				}
+			}
 		}
 	}
 
 	return result
+}
+
+// calculateAOEDamage 计算AOE范围伤害
+// 对目标点周围aoeRadius格内的其他怪物造成溅射伤害（主目标伤害的40%-60%）
+func (s *Service) calculateAOEDamage(roleID uint64, mainTargetID uint64, centerX, centerY int,
+	aoeRadius int, mainDamage int, skillConfig *common.SkillBaseConfig) []map[string]interface{} {
+
+	var aoeResults []map[string]interface{}
+
+	// 遍历所有怪物，找出范围内的其他目标
+	if globalMonsterSvc == nil {
+		return aoeResults
+	}
+
+	// AOE溅射比例：主伤害的 40%~60%
+	splashRatio := 0.4 + rand.Float64()*0.2
+
+	// 通过MonsterService获取范围内所有怪物实例
+	// 这里需要遍历地图上的所有怪物，使用接口方式获取
+	// 由于当前接口限制，我们通过全局怪物列表来查找
+	// （实际生产环境应通过MapService或SceneService获取区域内的实体）
+
+	// 获取玩家所在地图ID
+	playerPos := getPlayerPosition(roleID)
+	if playerPos == nil {
+		return aoeResults
+	}
+
+	// 暴击不传递到AOE目标（避免伤害过高）
+	aoeDamage := int(float64(mainDamage) * splashRatio)
+	if aoeDamage < 1 {
+		aoeDamage = 1
+	}
+
+	// 遍历场景中所有存活怪物，计算AOE范围
+	// 注意：这里需要访问怪物管理器的全部实例列表
+	// 当前架构下通过MonsterService接口逐个检查距离
+	// 为性能考虑，后续可优化为空间索引
+
+	// 使用common包获取地图上的怪物实例
+	aoeTargets := s.getMonstersInRange(centerX, centerY, aoeRadius, mainTargetID)
+
+	for _, target := range aoeTargets {
+		// 对每个AOE目标造成溅射伤害
+		targetNewHP, targetDead := globalMonsterSvc.MonsterTakeDamage(target.InstanceID, aoeDamage)
+
+		aoeInfo := map[string]interface{}{
+			"target_id":    target.InstanceID,
+			"name":         target.Name,
+			"damage":       aoeDamage,
+			"current_hp":   targetNewHP,
+			"is_dead":      targetDead,
+			"splash_ratio": splashRatio,
+		}
+		aoeResults = append(aoeResults, aoeInfo)
+
+		// 通知AI被攻击
+		s.notifyMonsterHurted(target.InstanceID, roleID)
+
+		// AOE目标死亡处理
+		if targetDead {
+			if globalAIService != nil {
+				globalAIService.OnMonsterDeath(target.InstanceID)
+			}
+			exp, gold, drops, _ := globalMonsterSvc.MonsterDie(target.InstanceID)
+			s.rewardPlayer(roleID, exp, gold)
+			if len(drops) > 0 {
+				// AOE击杀掉落也加入结果
+				if _, ok := aoeInfo["drops"]; !ok {
+					aoeInfo["drops"] = drops
+				}
+			}
+
+			log.Printf("💀 AOE击杀: 怪物[%s](%d), 溅射伤害%d", target.Name, target.InstanceID, aoeDamage)
+		} else {
+			log.Printf("💥 AOE命中: 怪物[%s](%d), 溅射伤害%d, 剩余HP=%d",
+				target.Name, target.InstanceID, aoeDamage, targetNewHP)
+		}
+
+		// AOE目标也附加BUFF（概率减半）
+		if skillConfig != nil && rand.Float64() < 0.15 {
+			buffID := skillConfig.BuffID
+			if buffID == 0 {
+				buffID = SkillTypeToBuffId[skillConfig.Type]
+			}
+			if buffID > 0 {
+				buff.GetManager().AddBuff(target.InstanceID, 2, buffID, roleID)
+			}
+		}
+	}
+
+	return aoeResults
+}
+
+// aoeTargetInfo AOE目标信息（别名，使用common包定义）
+// type aoeTargetInfo = common.AOETargetInfo
+
+// getMonstersInRange 获取指定范围内的怪物（排除主目标）
+func (s *Service) getMonstersInRange(centerX, centerY int, radius int, excludeID uint64) []common.AOETargetInfo {
+	if globalMonsterSvc == nil {
+		return nil
+	}
+	return globalMonsterSvc.GetMonstersInArea(centerX, centerY, radius, excludeID)
 }
 
 // notifyMonsterHurted 通知怪物被攻击（通过注入的AI接口）
@@ -1141,6 +1430,7 @@ type PVPAttackResult struct {
 	// 技能相关
 	SkillID       uint32 `json:"skill_id"`
 	SkillName     string `json:"skill_name"`
+	SkillType     uint8  `json:"skill_type"`
 	IsSkillAttack bool   `json:"is_skill_attack"`
 	MpCost        int    `json:"mp_cost"`
 	AttackerMP    int    `json:"attacker_mp"` // 攻击者剩余MP
@@ -1257,7 +1547,7 @@ func (s *Service) PlayerAttackPlayer(attackerID, targetID uint64, skillID uint32
 		}
 
 		// 校验武器类型限制（PVP同样适用）
-		if skillConfig.WeaponType > 0 {
+		if skillConfig != nil && skillConfig.WeaponType > 0 {
 			playerWeaponType := uint8(0)
 			if attackerInfo.WeaponID > 0 {
 				if itemCfg := common.GetItemConfig(uint32(attackerInfo.WeaponID)); itemCfg != nil {
@@ -1285,6 +1575,7 @@ func (s *Service) PlayerAttackPlayer(attackerID, targetID uint64, skillID uint32
 
 		result.SkillID = skillID
 		result.SkillName = skillConfig.Name
+		result.SkillType = skillConfig.Type
 		result.IsSkillAttack = true
 	}
 

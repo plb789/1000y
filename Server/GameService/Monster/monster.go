@@ -778,6 +778,41 @@ func (s *Service) GetMonsterInfo(monsterID uint64) (*common.MonsterInfo, bool) {
 	return info, true
 }
 
+// GetMonstersInArea 获取指定范围内的存活怪物（排除指定ID）
+// 用于AOE范围伤害计算
+func (s *Service) GetMonstersInArea(centerX, centerY int, radius int, excludeID uint64) []common.AOETargetInfo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var targets []common.AOETargetInfo
+	radiusSq := radius * radius // 距离平方，避免开方
+
+	for id, m := range s.monsters {
+		// 排除主目标
+		if id == excludeID {
+			continue
+		}
+		// 排除已死亡怪物
+		if m.Status == 4 || m.CurrentHP <= 0 {
+			continue
+		}
+		// 计算距离（欧几里得距离平方）
+		dx := m.X - centerX
+		dy := m.Y - centerY
+		distSq := dx*dx + dy*dy
+		if distSq <= radiusSq {
+			targets = append(targets, common.AOETargetInfo{
+				InstanceID: id,
+				Name:       m.Name,
+				X:          m.X,
+				Y:          m.Y,
+			})
+		}
+	}
+
+	return targets
+}
+
 // GetPlayerPositionFromMap 从地图服务获取玩家位置（需要外部注入）
 var GetPlayerPositionFromMap func(uint64) (int, int, bool)
 

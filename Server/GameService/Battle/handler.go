@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	common "game-server/Common"
+	buff "game-server/GameService/Buff"
 	monster "game-server/GameService/Monster"
 	"log"
 	"net/http"
@@ -532,4 +533,146 @@ func getPlayerMapID(roleID uint64) uint32 {
 		return 1 // 默认返回新手村
 	}
 	return pos.MapID
+}
+
+// ========== BuffTickApplier 接口实现 ==========
+// 让 Handler 实现 buff.BuffTickApplier 接口，用于处理BUFF持续效果
+
+// ApplyPlayerHPChange 修改玩家HP（正=恢复, 负=伤害）
+func (h *Handler) ApplyPlayerHPChange(playerID uint64, hpChange int) {
+	newHP, err := common.DBRoleChangeHP(playerID, hpChange)
+	if err != nil {
+		log.Printf("[BUFF-TICK] 修改玩家[%d]HP失败: %v", playerID, err)
+		return
+	}
+	log.Printf("[BUFF-TICK] 玩家[%d] HP变化: %d (当前HP: %d)", playerID, hpChange, newHP)
+}
+
+// ApplyPlayerMPChange 修改玩家MP（正=恢复, 负=消耗）
+func (h *Handler) ApplyPlayerMPChange(playerID uint64, mpChange int) {
+	newMP, err := common.DBRoleChangeMP(playerID, mpChange)
+	if err != nil {
+		log.Printf("[BUFF-TICK] 修改玩家[%d]MP失败: %v", playerID, err)
+		return
+	}
+	log.Printf("[BUFF-TICK] 玩家[%d] MP变化: %d (当前MP: %d)", playerID, mpChange, newMP)
+}
+
+// ApplyMonsterHPChange 修改怪物HP（正=恢复, 负=伤害）
+// 返回当前HP和是否死亡
+func (h *Handler) ApplyMonsterHPChange(monsterID uint64, hpChange int) (currentHP int, isDead bool) {
+	// 通过怪物服务修改HP
+	if globalMonsterSvc == nil {
+		log.Printf("[BUFF-TICK] 怪物服务未注入，无法修改怪物[%d]HP", monsterID)
+		return 0, false
+	}
+
+	currentHP, isDead = globalMonsterSvc.MonsterTakeDamage(monsterID, -hpChange) // MonsterTakeDamage接收正数伤害
+	if isDead {
+		log.Printf("[BUFF-TICK] 怪物[%d]被BUFF效果击杀 (HP变化: %d)", monsterID, hpChange)
+	} else {
+		log.Printf("[BUFF-TICK] 怪物[%d] HP变化: %d (当前HP: %d)", monsterID, hpChange, currentHP)
+	}
+	return
+}
+
+// BroadcastBuffTick 推送BUFF Tick结果到客户端（飘字显示）
+func (h *Handler) BroadcastBuffTick(targetID uint64, targetType uint8, hpChange int, mpChange int) {
+	if hpChange == 0 && mpChange == 0 {
+		return
+	}
+
+	// 构造BUFF tick消息
+	tickMsg := map[string]interface{}{
+		"target_id":   targetID,
+		"target_type": targetType,
+		"hp_change":   hpChange,
+		"mp_change":   mpChange,
+		"tick_type":   "buff", // 标识为BUFF tick
+	}
+
+	// 根据目标类型获取地图ID进行广播
+	var mapID uint32
+	if targetType == 1 { // 玩家
+		mapID = getPlayerMapID(targetID)
+	} else if targetType == 2 { // 怪物
+		// 尝试从怪物服务获取地图ID
+		if globalMonsterSvc != nil {
+			if info, ok := globalMonsterSvc.GetMonsterInfo(targetID); ok {
+				mapID = info.MapID
+			}
+		}
+	}
+
+	if mapID > 0 {
+		h.broadcastToMap(mapID, "buff_tick", tickMsg)
+		log.Printf("[BUFF-TICK] 广播: 地图%d, 目标[%d](type=%d), HP:%d, MP:%d", mapID, targetID, targetType, hpChange, mpChange)
+	}
+}
+
+// BroadcastBuffTickBatch 批量推送BUFF Tick结果（性能优化版本）
+// 按地图ID分组后批量广播，减少HTTP请求次数
+func (h *Handler) BroadcastBuffTickBatch(results []buff.BuffTickResult) {
+	if len(results) == 0 {
+		return
+	}
+
+	// 按地图ID分组
+	type MapBatch struct {
+		MapID uint32
+		Ticks []map[string]interface{}
+	}
+
+	mapBatches := make(map[uint32]*MapBatch)
+
+	for _, result := range results {
+		var mapID uint32
+
+		// 获取目标所在地图
+		if result.TargetType == 1 { // 玩家
+			mapID = getPlayerMapID(result.TargetID)
+		} else if result.TargetType == 2 { // 怪物
+			if globalMonsterSvc != nil {
+				if info, ok := globalMonsterSvc.GetMonsterInfo(result.TargetID); ok {
+					mapID = info.MapID
+				}
+			}
+		}
+
+		if mapID > 0 {
+			if _, exists := mapBatches[mapID]; !exists {
+				mapBatches[mapID] = &MapBatch{
+					MapID: mapID,
+					Ticks: []map[string]interface{}{},
+				}
+			}
+
+			tickMsg := map[string]interface{}{
+				"target_id":   result.TargetID,
+				"target_type": result.TargetType,
+				"hp_change":   result.HpChange,
+				"mp_change":   result.MpChange,
+				"tick_type":   "buff_batch",
+			}
+
+			mapBatches[mapID].Ticks = append(mapBatches[mapID].Ticks, tickMsg)
+		}
+	}
+
+	// 批量广播每个地图的tick结果
+	for mapID, batch := range mapBatches {
+		if len(batch.Ticks) == 0 {
+			continue
+		}
+
+		batchMsg := map[string]interface{}{
+			"map_id":     mapID,
+			"tick_count": len(batch.Ticks),
+			"ticks":      batch.Ticks,
+			"timestamp":  time.Now().Unix(),
+		}
+
+		h.broadcastToMap(mapID, "buff_tick_batch", batchMsg)
+		log.Printf("[BUFF-TICK-BATCH] 地图%d, 批量广播%d个目标", mapID, len(batch.Ticks))
+	}
 }

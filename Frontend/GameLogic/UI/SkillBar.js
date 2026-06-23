@@ -10,6 +10,9 @@ class SkillBar {
     this.maxSlots = 8;
     this.shortcutKeys = ['1', '2', '3', '4', '5', '6', '7', '8']; // 快捷键映射（8个槽位）
     
+    // 技能配置缓存（从服务端加载的技能基础数据）
+    this.skillConfigCache = new Map(); // skillId -> skillConfig
+    
     // 初始化
     this.init();
   }
@@ -17,6 +20,17 @@ class SkillBar {
   init() {
     this.createSkillBar();
     this.bindEvents();
+    // 不再使用硬编码延迟，改为由游戏登录完成事件触发
+  }
+
+  /**
+   * 登录完成后触发技能加载
+   * 由 Game.js 的 enterGame 方法调用
+   */
+  onGameEnter() {
+    if (this.game && this.game.player && this.game.player.id > 0) {
+      this.loadFromServer();
+    }
   }
   
   /**
@@ -62,6 +76,27 @@ class SkillBar {
         }
       };
       this.container.appendChild(btn);
+    }
+
+    // 武学图谱按钮
+    if (!this.container.querySelector('#skillPanelBtn')) {
+      const skillBtn = document.createElement('button');
+      skillBtn.id = 'skillPanelBtn';
+      skillBtn.className = 'skill-btn';
+      skillBtn.textContent = '☯';
+      skillBtn.title = '武学图谱 (K)';
+      skillBtn.style.cssText = `width:36px; height:36px; border-radius:8px; cursor:pointer;
+        background:linear-gradient(135deg,#1a1a2e,#16213e); border:1px solid #e94560; color:#e94560;
+        font-size:18px; display:flex; align-items:center; justify-content:center;
+        transition:all 0.2s; margin-left:4px;`;
+      skillBtn.onmouseover = () => { skillBtn.style.background = '#e94560'; skillBtn.style.color = '#fff'; };
+      skillBtn.onmouseout = () => { skillBtn.style.background = 'linear-gradient(135deg,#1a1a2e,#16213e)'; skillBtn.style.color = '#e94560'; };
+      skillBtn.onclick = () => {
+        if (this.game && this.game.skillPanel) {
+          this.game.skillPanel.toggle();
+        }
+      };
+      this.container.appendChild(skillBtn);
     }
     
     // 创建技能栏容器
@@ -309,10 +344,17 @@ class SkillBar {
     const slot = this.skillSlots[index];
     if (!slot) return;
     
-    slot.skillId = skillData.id;
+    const skillId = skillData.id || skillData.skill_id || 0;
+    slot.skillId = skillId;
     slot.icon.textContent = this.getSkillIcon(skillData.type);
-    slot.name.textContent = skillData.name;
-    slot.mpCost.textContent = skillData.mp_cost ? `${skillData.mp_cost}MP` : '';
+    slot.name.textContent = skillData.name || '';
+    
+    // 暂时隐藏MP消耗显示
+    slot.mpCost.textContent = '';
+    slot.mpCost.style.display = 'none';
+    
+    // 缓存技能配置数据到slot（供后续冷却计算使用）
+    slot.skillConfig = { ...skillData };
     
     // 清除冷却状态
     this.clearSlotCooldown(index);
@@ -346,7 +388,7 @@ class SkillBar {
   }
   
   /**
-   * 更新冷却状态
+   * 更新冷却状态（含攻速CD显示）
    */
   updateCooldowns() {
     const now = Date.now();
@@ -355,21 +397,37 @@ class SkillBar {
       if (!slot.skillId) return;
       
       const cooldownEnd = this.game.skillCooldowns.get(slot.skillId) || 0;
+      const fixedCooldown = this.getSkillCooldown(slot.skillId);
       
-      if (now < cooldownEnd) {
-        // 显示冷却
-        const remaining = Math.ceil((cooldownEnd - now) / 1000);
-        slot.cooldownText.textContent = remaining + 's';
+      // 判断当前是否处于CD中
+      let isCooling = false;
+      let cdEndTime = 0;
+      let totalCdTime = 0;
+
+      if (fixedCooldown > 0) {
+        // 有固定冷却 → 走冷却机制
+        isCooling = now < cooldownEnd;
+        cdEndTime = cooldownEnd;
+        totalCdTime = fixedCooldown;
+      } else {
+        // 无固定冷却 → 走攻速机制
+        const lastUse = this.game.lastSkillUseTime?.get(slot.skillId) || 0;
+        const interval = this.getAttackInterval(slot.skillId);
+        isCooling = (now - lastUse) < interval;
+        cdEndTime = lastUse + interval;
+        totalCdTime = interval;
+      }
+
+      if (isCooling) {
+        const remaining = Math.ceil((cdEndTime - now) / 1000);
+        slot.cooldownText.textContent = (remaining > 0 ? remaining : '') + (fixedCooldown > 0 ? 's' : '');
         slot.cooldownOverlay.style.display = 'flex';
         slot.element.classList.add('cooling');
-        slot.element.style.borderColor = '#e94560';
+        slot.element.style.borderColor = fixedCooldown > 0 ? '#e94560' : '#f59e0b'; // 冷却=红，攻速=橙
         
-        // 更新冷却进度
-        const totalCooldown = this.getSkillCooldown(slot.skillId);
-        const progress = (cooldownEnd - now) / totalCooldown;
+        const progress = Math.max(0, Math.min(1, (cdEndTime - now) / totalCdTime));
         slot.cooldownOverlay.style.clipPath = `polygon(0 0, 100% 0, 100% ${progress * 100}%, 0 ${progress * 100}%)`;
       } else {
-        // 清除冷却
         this.clearSlotCooldown(index);
         slot.element.style.borderColor = '#4a5568';
       }
@@ -377,11 +435,85 @@ class SkillBar {
   }
   
   /**
-   * 获取技能冷却时间
+   * 获取技能冷却时间（从配置读取，毫秒）
+   * 规则：cooldown=0 表示无冷却，走攻速；cooldown>0 走固定冷却
    */
   getSkillCooldown(skillId) {
-    if (skillId === 0) return 1000; // 普通攻击
-    return 3000; // 默认技能冷却
+    if (skillId === 0) return 0; // 普通攻击无固定冷却，走攻速
+    const config = this.skillConfigCache.get(skillId);
+    if (config) {
+      // cooldown=0 → 无冷却（走攻速）；cooldown>0 → 固定冷却(毫秒)
+      if (config.cooldown === 0 || config.cooldown === undefined) return 0;
+      return config.cooldown * 1000; // 秒转毫秒
+    }
+    return 0; // 默认无冷却
+  }
+
+  /**
+   * 基于攻速计算攻击间隔（毫秒）
+   * 攻速范围1-100，数值越低攻击越快
+   * 优先使用技能配置中的attack_speed(武器类)，其次用角色基础攻速
+   * 公式：攻速值 * 100ms，如attack_speed=6 → 600ms间隔(很快)
+   */
+  getAttackInterval(skillId) {
+    // 优先从技能配置读取该武功的独立攻速（仅武器类有）
+    if (skillId && this.skillConfigCache.has(skillId)) {
+      const config = this.skillConfigCache.get(skillId);
+      if (config.attack_speed && config.attack_speed > 0) return config.attack_speed * 100;
+    }
+    // 回退到角色基础攻速
+    const attackSpeed = this.game?.player?.attackSpeed || 10;
+    return Math.max(300, attackSpeed * 100); // 最低300ms保护
+  }
+
+  /**
+   * 检查技能是否处于攻速CD中（仅cooldown=0的技能使用此方法）
+   */
+  isInAttackSpeedCooldown(skillId) {
+    if (!this.game) return false;
+    const lastUse = this.game.lastSkillUseTime?.get(skillId) || 0;
+    const interval = this.getAttackInterval(skillId);
+    return (Date.now() - lastUse) < interval;
+  }
+
+  /**
+   * 获取技能MP消耗（从配置读取）
+   */
+  getSkillMpCost(skillId) {
+    if (skillId === 0) return 0;
+    const config = this.skillConfigCache.get(skillId);
+    if (config && config.mp_cost !== undefined) return config.mp_cost;
+    return 0; // 默认不消耗MP
+  }
+
+  /**
+   * 获取技能基础伤害（从配置读取）
+   */
+  getSkillDamage(skillId) {
+    if (skillId === 0) return 0;
+    const config = this.skillConfigCache.get(skillId);
+    if (config && config.damage !== undefined) return config.damage;
+    return 0;
+  }
+
+  /**
+   * 获取技能施法时间(毫秒)（从配置读取）
+   */
+  getSkillCastTime(skillId) {
+    if (skillId === 0) return 0;
+    const config = this.skillConfigCache.get(skillId);
+    if (config && config.cast_time !== undefined) return config.cast_time;
+    return 0; // 默认无施法前摇
+  }
+
+  /**
+   * 获取技能类型（从配置读取）
+   */
+  getSkillType(skillId) {
+    if (skillId === 0) return 0;
+    const config = this.skillConfigCache.get(skillId);
+    if (config && config.type !== undefined) return config.type;
+    return 0;
   }
   
   /**
@@ -412,16 +544,129 @@ class SkillBar {
       this.clearSlot(i);
     }
     
-    // 设置技能到槽位
+    // 设置技能到槽位（合并角色技能数据与配置数据）
     skills.forEach((skill, index) => {
       if (index < this.maxSlots) {
-        this.setSkill(index, skill);
+        const config = this.skillConfigCache.get(skill.skill_id || skill.id);
+        const mergedData = { ...config, ...skill };
+        this.setSkill(index, mergedData);
       }
     });
     
     // 默认设置普通攻击到第一个槽位
     if (this.maxSlots > 0 && !this.skillSlots[0].skillId) {
       this.setSkill(0, { id: 0, name: '攻击', type: 0, mp_cost: 0 });
+    }
+  }
+
+  /**
+   * 从服务端加载技能配置（skills.json基础数据）
+   */
+  async loadSkillConfigs() {
+    try {
+      const res = await fetch('http://localhost:8082/api/skill/base/list');
+      const data = await res.json();
+      if (data.code === 200 && data.data) {
+        data.data.forEach(skill => {
+          this.skillConfigCache.set(skill.id, skill);
+        });
+        console.log(`[SkillBar] 加载 ${this.skillConfigCache.size} 个技能配置`);
+      }
+    } catch (error) {
+      console.warn('[SkillBar] 加载技能配置失败:', error);
+    }
+  }
+
+  /**
+   * 从服务端加载角色已学武学
+   */
+  async loadFromServer(retryCount = 3) {
+    try {
+      const roleId = this.game?.player?.id;
+      console.log('[SkillBar] loadFromServer - retryCount:', retryCount, 'roleId:', roleId, 'player:', this.game?.player);
+      if (!roleId) {
+        if (retryCount > 0) {
+          // 等待登录完成后重试
+          setTimeout(() => this.loadFromServer(retryCount - 1), 1500);
+        }
+        console.warn('[SkillBar] 角色ID不存在，等待登录...');
+        return;
+      }
+
+      // 先确保配置已加载
+      if (this.skillConfigCache.size === 0) {
+        console.log('[SkillBar] 加载技能配置...');
+        await this.loadSkillConfigs();
+        console.log('[SkillBar] 技能配置加载完成，数量:', this.skillConfigCache.size);
+      }
+
+      // 并行请求：已装备武学 + 所有已学武学
+      console.log('[SkillBar] 请求技能列表, roleId:', roleId);
+      const [equippedRes, allRes] = await Promise.all([
+        fetch(`http://localhost:8082/api/skill/role/${roleId}/equipped`),
+        fetch(`http://localhost:8082/api/skill/role/${roleId}/list`)
+      ]);
+
+      const equippedData = await equippedRes.json();
+      const allData = await allRes.json();
+      console.log('[SkillBar] 已装备:', equippedData, '全部:', allData);
+
+      // 用配置补全所有已学武学的详细信息（用于技能面板展示）
+      let learnedSkills = [];
+      if (allData.code === 200 && Array.isArray(allData.data)) {
+        learnedSkills = allData.data.map(s => {
+          const skillId = s.skill_id || s.id;
+          const config = this.skillConfigCache.get(skillId) || {};
+          return {
+            id: skillId,
+            skill_id: skillId,
+            name: config.name || '未知武学',
+            type: config.type || 0,
+            level: s.level || 1,
+            exp: s.exp || 0,
+            is_equip: s.is_equip || 0,
+            mp_cost: config.mp_cost || 0,
+            cooldown: config.cooldown || 0,
+            damage: config.damage || 0,
+            range: config.range || 1,
+            cast_time: config.cast_time || 0,
+            attack_speed: config.attack_speed || 0,
+          };
+        });
+        // 存储到player对象供技能面板使用
+        this.game.player.skills = learnedSkills;
+        console.log('[SkillBar] 已加载', learnedSkills.length, '个已学技能');
+      }
+
+      // 合并数据：优先显示已装备的技能到快捷栏
+      let skillsToShow = [];
+
+      if (equippedData.code === 200 && equippedData.data) {
+        // 已装备的技能 - 补全信息
+        skillsToShow = equippedData.data.map(s => {
+          const skillId = s.skill_id || s.id;
+          const config = this.skillConfigCache.get(skillId) || {};
+          return {
+            ...s,
+            id: skillId,
+            skill_id: skillId,
+            name: config.name || '未知',
+            type: config.type || 0,
+            mp_cost: config.mp_cost || 0,
+            is_equipped: true
+          };
+        });
+      } else if (learnedSkills.length > 0) {
+        // 无已装备时，取前8个可主动释放的技能
+        skillsToShow = learnedSkills
+          .filter(s => (s.damage > 0 || s.type >= 5)) // 有伤害或武器类技能
+          .slice(0, this.maxSlots);
+      }
+
+      // 更新技能栏（无论是否有技能都需要更新）
+      this.setSkills(skillsToShow);
+    } catch (error) {
+      console.warn('[SkillBar] 从服务端加载技能失败:', error);
     }
   }
   

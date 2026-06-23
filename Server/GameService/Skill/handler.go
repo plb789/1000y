@@ -27,6 +27,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 		skillGroup.GET("/base/list", h.GetAllSkillBase)          // 获取所有武学列表
 		skillGroup.GET("/base/type/:type", h.GetSkillBaseByType) // 获取指定类型武学
 		skillGroup.GET("/base/:id", h.GetSkillBase)              // 获取武学详情
+		skillGroup.GET("/type/list", h.SkillTypeList)            // 获取武学类型列表
 
 		// 角色武学
 		skillGroup.GET("/role/:roleId/list", h.GetRoleSkills)                        // 获取角色所有武学

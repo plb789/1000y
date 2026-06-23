@@ -12,8 +12,12 @@ import (
 
 	common "game-server/Common"
 	battle "game-server/GameService/Battle"
+	buff "game-server/GameService/Buff"
+	item "game-server/GameService/Item"
 	gamemap "game-server/GameService/Map"
 	monster "game-server/GameService/Monster"
+	quest "game-server/GameService/Quest"
+	skill "game-server/GameService/Skill"
 
 	"github.com/gin-gonic/gin"
 )
@@ -388,6 +392,12 @@ func startHTTPServer() {
 	battleHandler := battle.NewHandler(gatewayURL)
 	battleHandler.RegisterRoutes(r)
 
+	// ✅ 启动BUFF定时Tick器（每秒执行一次持续效果）
+	// 使用battleHandler作为BuffTickApplier实现（已集成玩家/怪物服务+WebSocket广播）
+	buffManager := buff.GetManager()
+	buffManager.StartTicker(battleHandler)
+	log.Println("✅ BUFF定时Tick器已启动 (间隔:1s, 处理持续伤害/恢复效果)")
+
 	// 设置怪物位置广播函数（通过Gateway同步给所有客户端）
 	// 使用二进制协议广播，大幅减少带宽（约6倍压缩）
 	monster.SetPositionBroadcastFunc(func(positionMap map[uint32][]monster.MonsterPositionInfo) {
@@ -414,6 +424,18 @@ func startHTTPServer() {
 	// 注册怪物路由（包含GM命令）
 	monsterHandler := &monster.MonsterHandler{}
 	monsterHandler.RegisterRoutes(r)
+
+	// 注册道具/装备路由
+	itemHandler := item.NewHandler()
+	itemHandler.RegisterRoutes(r)
+
+	// 注册武学技能路由
+	skillHandler := skill.NewHandler()
+	skillHandler.RegisterRoutes(r)
+
+	// 注册任务系统路由
+	questHandler := quest.NewHandler()
+	questHandler.RegisterRoutes(r)
 
 	// 健康检查
 	r.GET("/health", func(c *gin.Context) {

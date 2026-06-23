@@ -957,13 +957,6 @@ func handleSkillLearn(c *gin.Context) {
 		return
 	}
 
-	// 检查武学是否存在
-	var skillBase Model.SkillBase
-	if err := Mysql.DB.Where("id = ? AND is_active = 1", req.SkillID).First(&skillBase).Error; err != nil {
-		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "武学不存在或已下架"})
-		return
-	}
-
 	// 检查是否已学习
 	var existCount int64
 	Mysql.DB.Model(&Model.RoleSkill{}).Where("role_id = ? AND skill_id = ?", req.RoleID, req.SkillID).Count(&existCount)
@@ -972,7 +965,7 @@ func handleSkillLearn(c *gin.Context) {
 		return
 	}
 
-	// 创建武学记录
+	// 创建武学记录（GameService已校验过武学存在性和等级要求，DB只负责存储）
 	roleSkill := Model.RoleSkill{
 		RoleID:  req.RoleID,
 		SkillID: req.SkillID,
@@ -1034,26 +1027,17 @@ func handleSkillEquip(c *gin.Context) {
 		return
 	}
 
-	// 获取武学信息
-	var skillBase Model.SkillBase
-	if err := Mysql.DB.Where("id = ?", req.SkillID).First(&skillBase).Error; err != nil {
+	// 检查角色是否已学习该武学
+	var roleSkill Model.RoleSkill
+	if err := Mysql.DB.Where("role_id = ? AND skill_id = ?", req.RoleID, req.SkillID).First(&roleSkill).Error; err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "武学不存在"})
 		return
 	}
 
-	// 外功类武学需要先卸下同类型
-	if skillBase.Type >= 5 && skillBase.Type <= 9 {
-		Mysql.DB.Model(&Model.RoleSkill{}).
-			Joins("LEFT JOIN skill_base ON role_skill.skill_id = skill_base.id").
-			Where("role_skill.role_id = ? AND skill_base.type = ? AND role_skill.is_equip = 1", req.RoleID, skillBase.Type).
-			Update("is_equip", 0)
-	}
-
 	// 装备该武学
-	err := Mysql.DB.Model(&Model.RoleSkill{}).
+	if err := Mysql.DB.Model(&Model.RoleSkill{}).
 		Where("role_id = ? AND skill_id = ?", req.RoleID, req.SkillID).
-		Update("is_equip", 1).Error
-	if err != nil {
+		Update("is_equip", 1).Error; err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "装备失败"})
 		return
 	}
@@ -1081,44 +1065,40 @@ func handleSkillUnequip(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "卸下成功"})
 }
 
-// handleSkillAddExp 增加武学熟练度
+// handleSkillAddExp 增加武学熟练度（升级逻辑由GameService处理）
 func handleSkillAddExp(c *gin.Context) {
 	var req struct {
-		RoleID  uint64 `json:"role_id"`
-		SkillID uint32 `json:"skill_id"`
-		Exp     int64  `json:"exp"`
+		RoleID    uint64 `json:"role_id"`
+		SkillID   uint32 `json:"skill_id"`
+		Exp       int64  `json:"exp"`
+		Level     *int   `json:"level"`      // 由GameService计算的新等级
+		LeveledUp bool   `json:"leveled_up"` // 是否升级
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
 		return
 	}
 
+	// 检查角色是否已学习该武学
 	var roleSkill Model.RoleSkill
 	if err := Mysql.DB.Where("role_id = ? AND skill_id = ?", req.RoleID, req.SkillID).First(&roleSkill).Error; err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "未学习该武学"})
 		return
 	}
 
-	var skillBase Model.SkillBase
-	if err := Mysql.DB.Where("id = ?", req.SkillID).First(&skillBase).Error; err != nil {
-		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "武学不存在"})
-		return
+	// 更新经验值和等级（等级由GameService计算）
+	updates := map[string]interface{}{
+		"exp": roleSkill.Exp + req.Exp,
+	}
+	if req.Level != nil {
+		updates["level"] = *req.Level
 	}
 
-	leveledUp := false
-	roleSkill.Exp += req.Exp
-
-	for roleSkill.Exp >= int64(skillBase.ExpFactor)*int64(roleSkill.Level)*int64(roleSkill.Level) && uint32(roleSkill.Level) < skillBase.MaxLevel {
-		roleSkill.Exp -= int64(skillBase.ExpFactor) * int64(roleSkill.Level) * int64(roleSkill.Level)
-		roleSkill.Level++
-		leveledUp = true
-	}
-
-	if err := Mysql.DB.Save(&roleSkill).Error; err != nil {
+	if err := Mysql.DB.Model(&roleSkill).Updates(updates).Error; err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "更新失败"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "更新成功", "data": gin.H{"leveled_up": leveledUp, "level": roleSkill.Level, "exp": roleSkill.Exp}})
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "更新成功", "data": gin.H{"leveled_up": req.LeveledUp, "level": roleSkill.Level, "exp": roleSkill.Exp}})
 }
 
 // handleSkillForget 遗忘武学

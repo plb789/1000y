@@ -114,6 +114,14 @@ type SkillBaseConfig struct {
 	SkillEffect string `json:"skill_effect"`
 	IsActive    uint8  `json:"is_active"`
 	WeaponType  uint8  `json:"weapon_type"` // 武器类型: 0=徒手, 1=剑, 2=刀, 3=枪, 4=斧, 5=拳
+	// 战斗属性（从skills.json加载）
+	Damage      int `json:"damage"`       // 基础伤害
+	MpCost      int `json:"mp_cost"`      // 内力消耗
+	Cooldown    int `json:"cooldown"`     // 冷却时间(秒)，0=无冷却走攻速
+	Range       int `json:"range"`        // 攻击范围(1=近战, 2-5=远程)
+	CastTime    int `json:"cast_time"`    // 施法时间(毫秒)
+	AoeRadius   int `json:"aoe_radius"`   // AOE范围半径(0=单体)
+	AttackSpeed int `json:"attack_speed"` // 攻速值(1-100，越低越快，0=不适用)
 }
 
 // ItemBaseConfig 道具配置
@@ -127,13 +135,13 @@ type ItemBaseConfig struct {
 	StackMax      uint32 `json:"stack_max"`
 	Price         int    `json:"price"`
 	Description   string `json:"description"`
-	EquipType     uint8  `json:"equip_type"`  // 装备位置: 1=武器, 2=衣服, 3=头盔, 4=护腕, 5=腰带, 6=鞋子, 7=戒指, 8=项链
-	WeaponType    uint8  `json:"weapon_type"` // 武器类型: 0=徒手, 1=剑, 2=刀, 3=枪, 4=斧, 5=拳 (仅武器有效)
-	HpBonus       int    `json:"hp_bonus"`       // 生命加成(装备)
-	MpBonus       int    `json:"mp_bonus"`       // 内力加成(装备)
-	AttackBonus   int    `json:"attack_bonus"`   // 攻击加成(装备)
-	DefenseBonus  int    `json:"defense_bonus"`  // 防御加成(装备)
-	SpeedBonus    int    `json:"speed_bonus"`    // 速度加成(装备)
+	EquipType     uint8  `json:"equip_type"`    // 装备位置: 1=武器, 2=衣服, 3=头盔, 4=护腕, 5=腰带, 6=鞋子, 7=戒指, 8=项链
+	WeaponType    uint8  `json:"weapon_type"`   // 武器类型: 0=徒手, 1=剑, 2=刀, 3=枪, 4=斧, 5=拳 (仅武器有效)
+	HpBonus       int    `json:"hp_bonus"`      // 生命加成(装备)
+	MpBonus       int    `json:"mp_bonus"`      // 内力加成(装备)
+	AttackBonus   int    `json:"attack_bonus"`  // 攻击加成(装备)
+	DefenseBonus  int    `json:"defense_bonus"` // 防御加成(装备)
+	SpeedBonus    int    `json:"speed_bonus"`   // 速度加成(装备)
 	HpRestore     int    `json:"hp_restore"`
 	MpRestore     int    `json:"mp_restore"`
 	BuffID        uint32 `json:"buff_id"`
@@ -149,19 +157,23 @@ type ItemBaseConfig struct {
 type BuffBaseConfig struct {
 	ID           uint32 `json:"id"`
 	Name         string `json:"name"`
-	Type         uint8  `json:"type"`
-	Duration     int    `json:"duration"`
-	HpChange     int    `json:"hp_change"`
-	MpChange     int    `json:"mp_change"`
-	AttackChange int    `json:"attack_change"`
-	DefChange    int    `json:"defense_change"`
-	SpeedChange  int    `json:"speed_change"`
-	HitChange    int    `json:"hit_change"`
-	DodgeChange  int    `json:"dodge_change"`
-	CritChange   int    `json:"crit_change"`
-	CanCancel    uint8  `json:"can_cancel"`
-	StackMax     int    `json:"stack_max"`
-	Description  string `json:"description"`
+	Type         uint8  `json:"type"`           // 1=增益, 2=减益, 3=控制
+	Duration     int    `json:"duration"`       // 持续时间(秒), 0=永久
+	HpChange     int    `json:"hp_change"`      // 每秒HP变化(正=恢复, 负=持续伤害)
+	MpChange     int    `json:"mp_change"`      // 每秒MP变化
+	AttackChange int    `json:"attack_change"`  // 攻击力加成
+	DefChange    int    `json:"defense_change"` // 防御力加成
+	SpeedChange  int    `json:"speed_change"`   // 速度加成
+	HitChange    int    `json:"hit_change"`     // 命中率加成
+	DodgeChange  int    `json:"dodge_change"`   // 闪避率加成
+	CritChange   int    `json:"crit_change"`    // 暴击率加成
+	CanCancel    uint8  `json:"can_cancel"`     // 是否可手动取消(1=可)
+	StackMax     int    `json:"stack_max"`      // 最大叠加层数
+	Description  string `json:"description"`    // 描述
+	// 高级战斗效果（新增）
+	DamageReductionPct int `json:"damage_reduction_pct"` // 减伤百分比(0-100), 如无敌=100
+	ReflectPct         int `json:"reflect_pct"`          // 反弹伤害百分比(0-100)
+	LifestealPct       int `json:"lifesteal_pct"`        // 吸血百分比(0-100), 攻击时回血
 }
 
 // QuestBaseConfig 任务配置
@@ -584,4 +596,12 @@ type MonsterAttackResult struct {
 	PlayerHP    int    `json:"player_hp"`
 	PlayerMaxHP int    `json:"player_max_hp"`
 	IsDead      bool   `json:"is_dead"`
+}
+
+// AOETargetInfo AOE范围内的目标信息（用于范围伤害计算）
+type AOETargetInfo struct {
+	InstanceID uint64 `json:"instance_id"` // 怪物实例ID
+	Name       string `json:"name"`        // 怪物名称
+	X          int    `json:"x"`           // X坐标
+	Y          int    `json:"y"`           // Y坐标
 }
