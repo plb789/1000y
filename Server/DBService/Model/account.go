@@ -64,6 +64,8 @@ type Role struct {
 	LastLoginIP  string         `gorm:"size:32;comment:最后登录IP"`
 	LogoutTime   time.Time      `gorm:"comment:最后登出时间"`
 	LastSaveTime time.Time      `gorm:"comment:最后保存时间"`
+	Honor        int64          `gorm:"default:0;comment:声望值"`
+	Achievements string         `gorm:"type:text;comment:成就数据(JSON格式)"`
 }
 
 // RoleSkill 角色武学表
@@ -115,28 +117,28 @@ type ItemBase struct {
 
 // RoleBag 角色背包表
 type RoleBag struct {
-	ID         uint64         `gorm:"primaryKey;comment:背包记录ID"`
-	CreatedAt  time.Time      `gorm:"comment:创建时间"`
-	UpdatedAt  time.Time      `gorm:"comment:更新时间"`
-	DeletedAt  gorm.DeletedAt `gorm:"index;comment:删除时间"`
-	RoleID     uint64         `gorm:"index;comment:角色ID"`
-	GridIndex  int            `gorm:"comment:背包格子索引"`
-	ItemID     uint32         `gorm:"comment:道具ID"`
-	Count      uint32         `gorm:"default:1;comment:道具数量"`
-	IsBind     uint8          `gorm:"default:0;comment:是否绑定(0否 1是)"`
-	DurCurrent *int           `gorm:"comment:当前耐久度"`
-	DurMax     *int           `gorm:"comment:最大耐久度"`
-	GetTime    time.Time      `gorm:"comment:获得时间"`
+	ID         uint64         `gorm:"primaryKey;comment:背包记录ID" json:"id"`
+	CreatedAt  time.Time      `gorm:"comment:创建时间" json:"-"`
+	UpdatedAt  time.Time      `gorm:"comment:更新时间" json:"-"`
+	DeletedAt  gorm.DeletedAt `gorm:"index;comment:删除时间" json:"-"`
+	RoleID     uint64         `gorm:"index;comment:角色ID" json:"role_id"`
+	GridIndex  int            `gorm:"comment:背包格子索引" json:"grid_index"`
+	ItemID     uint32         `gorm:"comment:道具ID" json:"item_id"`
+	Count      uint32         `gorm:"default:1;comment:道具数量" json:"count"`
+	IsBind     uint8          `gorm:"default:0;comment:是否绑定(0否 1是)" json:"is_bind"`
+	DurCurrent *int           `gorm:"comment:当前耐久度" json:"dur_current"`
+	DurMax     *int           `gorm:"comment:最大耐久度" json:"dur_max"`
+	GetTime    time.Time      `gorm:"comment:获得时间" json:"get_time"`
 }
 
 // RoleEquipment 角色装备表
 type RoleEquipment struct {
-	ID        uint64         `gorm:"primaryKey;comment:装备记录ID"`
-	CreatedAt time.Time      `gorm:"comment:创建时间"`
-	UpdatedAt time.Time      `gorm:"comment:更新时间"`
-	DeletedAt gorm.DeletedAt `gorm:"index;comment:删除时间"`
-	RoleID    uint64         `gorm:"index;comment:角色ID"`
-	EquipType uint8          `gorm:"comment:装备位置(1武器 2衣服 3帽子 4鞋子 5戒指 6项链)"`
-	BagItemID *uint64        `gorm:"comment:背包物品ID"`
-	EquipTime time.Time      `gorm:"comment:装备时间"`
+	ID        uint64         `gorm:"primaryKey;comment:装备记录ID" json:"id"`
+	CreatedAt time.Time      `gorm:"comment:创建时间" json:"-"`
+	UpdatedAt time.Time      `gorm:"comment:更新时间" json:"-"`
+	DeletedAt gorm.DeletedAt `gorm:"index;comment:删除时间" json:"-"`
+	RoleID    uint64         `gorm:"index;comment:角色ID" json:"role_id"`
+	EquipType uint8          `gorm:"comment:装备位置(1武器 2衣服 3帽子 4鞋子 5戒指 6项链)" json:"equip_type"`
+	BagItemID *uint64        `gorm:"comment:背包物品ID" json:"bag_item_id"`
+	EquipTime time.Time      `gorm:"comment:装备时间" json:"equip_time"`
 }

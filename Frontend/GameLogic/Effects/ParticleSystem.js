@@ -184,6 +184,106 @@ class ParticleSystem {
       fadeOut: true
     });
     
+    // 普通受击特效
+    this.templates.set('hit_normal', {
+      type: 'burst',
+      count: 12,
+      lifetime: 250,
+      shape: 'circle',
+      color: { start: '#ffffff', end: '#ef4444' },
+      size: { start: 4, end: 1 },
+      speed: { min: 80, max: 150 },
+      direction: { spread: 360, base: 0 },
+      gravity: 0,
+      fadeOut: true
+    });
+    
+    // 暴击受击特效
+    this.templates.set('hit_critical', {
+      type: 'explosion',
+      count: 30,
+      lifetime: 400,
+      shape: 'star',
+      color: { start: '#fbbf24', end: '#ef4444' },
+      size: { start: 8, end: 2 },
+      speed: { min: 150, max: 300 },
+      direction: { spread: 360, base: 0 },
+      gravity: 0,
+      fadeOut: true,
+      glow: true,
+      glowColor: '#fbbf24',
+      shake: true,
+      shakeIntensity: 6
+    });
+    
+    // 格挡特效
+    this.templates.set('block', {
+      type: 'ring',
+      count: 20,
+      lifetime: 350,
+      shape: 'circle',
+      color: { start: '#60a5fa', end: '#ffffff' },
+      size: { start: 4, end: 1 },
+      speed: { min: 100, max: 100 },
+      direction: { spread: 0, base: 0, rotate: true },
+      gravity: 0,
+      fadeOut: true,
+      glow: true,
+      glowColor: '#60a5fa',
+      ringRadius: 40
+    });
+    
+    // 闪避特效
+    this.templates.set('dodge', {
+      type: 'burst',
+      count: 15,
+      lifetime: 300,
+      shape: 'diamond',
+      color: { start: '#a855f7', end: '#ffffff' },
+      size: { start: 3, end: 0 },
+      speed: { min: 120, max: 200 },
+      direction: { spread: 360, base: 0 },
+      gravity: 0,
+      fadeOut: true,
+      glow: true,
+      glowColor: '#a855f7'
+    });
+    
+    // 护盾特效
+    this.templates.set('shield', {
+      type: 'ring',
+      count: 30,
+      lifetime: 600,
+      shape: 'circle',
+      color: { start: '#60a5fa', end: '#a855f7' },
+      size: { start: 5, end: 1 },
+      speed: { min: 80, max: 80 },
+      direction: { spread: 0, base: 0, rotate: true },
+      gravity: 0,
+      fadeOut: true,
+      glow: true,
+      glowColor: '#60a5fa',
+      ringRadius: 50
+    });
+    
+    // 雷电特效
+    this.templates.set('thunder_impact', {
+      type: 'explosion',
+      count: 40,
+      lifetime: 500,
+      shape: 'star',
+      color: { start: '#fbbf24', end: '#3b82f6' },
+      size: { start: 6, end: 1 },
+      speed: { min: 200, max: 400 },
+      direction: { spread: 360, base: 0 },
+      gravity: 0,
+      fadeOut: true,
+      glow: true,
+      glowColor: '#fbbf24',
+      shake: true,
+      shakeIntensity: 8
+    });
+    
     // 死亡特效
     this.templates.set('death', {
       type: 'explosion',

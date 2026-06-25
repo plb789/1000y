@@ -2,18 +2,63 @@ package main
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	common "game-server/Common"
 	"game-server/DBService/Model"
 	"game-server/DBService/Mysql"
 	"game-server/DBService/Redis"
+	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// ★ initBaseData 初始化基础数据（物品配置等）
+func initBaseData() {
+	// 检查item_base表是否已有数据
+	var count int64
+	Mysql.DB.Model(&Model.ItemBase{}).Count(&count)
+	if count > 0 {
+		log.Printf("✅ item_base表已有 %d 条记录，跳过初始化", count)
+		return
+	}
+
+	log.Println("📦 item_base表为空，开始从items.json导入物品配置...")
+
+	// 读取items.json文件
+	configPath := "./Config/items.json"
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		// 尝试从GameService的Config目录读取
+		configPath = "../GameService/Config/items.json"
+	}
+
+	data, err := ioutil.ReadFile(configPath)
+	if err != nil {
+		log.Printf("⚠️ 读取items.json失败: %v (跳过物品初始化)", err)
+		return
+	}
+
+	// 解析JSON
+	var items []Model.ItemBase
+	if err := json.Unmarshal(data, &items); err != nil {
+		log.Printf("⚠️ 解析items.json失败: %v (跳过物品初始化)", err)
+		return
+	}
+
+	// 批量插入数据库
+	if len(items) > 0 {
+		if err := Mysql.DB.Create(&items).Error; err != nil {
+			log.Printf("❌ 导入物品配置失败: %v", err)
+		} else {
+			log.Printf("✅ 成功导入 %d 条物品配置到item_base表", len(items))
+		}
+	}
+}
 
 func main() {
 	// 加载全局配置
@@ -54,6 +99,9 @@ func main() {
 	if err != nil {
 		log.Fatal("建表失败:", err)
 	}
+
+	// ★ 初始化基础数据（物品配置等）
+	initBaseData()
 
 	// 初始化Redis
 	Redis.Init()
@@ -117,6 +165,7 @@ func startHTTPServer() {
 		roleGroup.POST("/set_status", handleRoleSetStatus)
 		roleGroup.POST("/add_gold", handleRoleAddGold)
 		roleGroup.POST("/consume_gold", handleRoleConsumeGold)
+		roleGroup.POST("/add_honor", handleRoleAddHonor)
 		roleGroup.POST("/record_kill", handleRoleRecordKill)
 		roleGroup.POST("/record_death", handleRoleRecordDeath)
 		roleGroup.POST("/full_recovery", handleRoleFullRecovery)
@@ -144,6 +193,7 @@ func startHTTPServer() {
 		itemGroup.POST("/add", handleItemAdd)
 		itemGroup.POST("/get_bag", handleItemGetBag)
 		itemGroup.POST("/move", handleItemMove)
+		itemGroup.POST("/merge", handleItemMerge)
 		itemGroup.POST("/split", handleItemSplit)
 		itemGroup.POST("/use", handleItemUse)
 		itemGroup.POST("/discard", handleItemDiscard)
@@ -154,6 +204,26 @@ func startHTTPServer() {
 		itemGroup.POST("/get_base", handleItemGetBase)
 		itemGroup.POST("/get_all_base", handleItemGetAllBase)
 		itemGroup.POST("/get_empty_count", handleItemGetEmptyCount)
+	}
+
+	// 任务相关接口
+	taskGroup := r.Group("/api/task")
+	{
+		taskGroup.POST("/get_list", handleTaskGetList)               // 获取角色任务列表
+		taskGroup.POST("/accept", handleTaskAccept)                  // 接取任务
+		taskGroup.POST("/complete", handleTaskComplete)              // 完成任务（领取奖励）
+		taskGroup.POST("/abandon", handleTaskAbandon)                // 放弃任务
+		taskGroup.POST("/update_progress", handleTaskUpdateProgress) // 更新进度
+		taskGroup.POST("/get_detail", handleTaskGetDetail)           // 获取任务详情
+		taskGroup.POST("/save", handleTaskSave)                      // 保存任务进度
+		taskGroup.POST("/batch_save", handleTaskBatchSave)           // 批量保存任务进度
+	}
+
+	// 成就相关接口
+	achievementGroup := r.Group("/api/achievement")
+	{
+		achievementGroup.POST("/get", handleAchievementGet)   // 获取成就数据
+		achievementGroup.POST("/save", handleAchievementSave) // 保存成就数据
 	}
 
 	// 注意：服务注册中心已独立为RegistryService，DBService不再处理注册逻辑
@@ -836,6 +906,26 @@ func handleRoleConsumeGold(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "更新成功"})
 }
 
+// handleRoleAddHonor 增加声望
+func handleRoleAddHonor(c *gin.Context) {
+	var req struct {
+		ID    uint64 `json:"id"`
+		Honor int64  `json:"honor"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
+		return
+	}
+
+	err := Mysql.DB.Model(&Model.Role{}).Where("id = ?", req.ID).
+		Update("honor", Mysql.DB.Raw("honor + ?", req.Honor)).Error
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "更新失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "更新成功"})
+}
+
 // handleRoleRecordKill 记录击杀
 func handleRoleRecordKill(c *gin.Context) {
 	var req struct {
@@ -1244,27 +1334,131 @@ func handleItemMove(c *gin.Context) {
 		return
 	}
 
-	// 检查目标格子是否为空
-	var targetItem Model.RoleBag
-	err := Mysql.DB.Where("role_id = ? AND grid_index = ?", req.RoleID, req.ToGrid).First(&targetItem).Error
-	if err == nil {
-		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "目标格子不为空"})
-		return
-	}
-
-	// 获取源物品
+	// ★ 获取源物品
 	var sourceItem Model.RoleBag
 	if err := Mysql.DB.Where("role_id = ? AND grid_index = ?", req.RoleID, req.FromGrid).First(&sourceItem).Error; err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "源格子没有物品"})
 		return
 	}
 
-	sourceItem.GridIndex = req.ToGrid
-	if err := Mysql.DB.Save(&sourceItem).Error; err != nil {
-		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "移动失败"})
+	// ★ 检查目标格子是否有物品
+	var targetItem Model.RoleBag
+	targetHasItem := Mysql.DB.Where("role_id = ? AND grid_index = ?", req.RoleID, req.ToGrid).First(&targetItem).Error == nil
+
+	if targetHasItem {
+		// ★ 目标格子有物品 → 执行交换
+		// 交换两个物品的 grid_index
+		sourceItem.GridIndex = req.ToGrid
+		targetItem.GridIndex = req.FromGrid
+
+		// 批量更新（事务保证一致性）
+		tx := Mysql.DB.Begin()
+		if err := tx.Save(&sourceItem).Error; err != nil {
+			tx.Rollback()
+			c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "交换失败"})
+			return
+		}
+		if err := tx.Save(&targetItem).Error; err != nil {
+			tx.Rollback()
+			c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "交换失败"})
+			return
+		}
+		tx.Commit()
+
+		log.Printf("✅ 玩家 %d 交换物品: 格子 %d ↔ %d", req.RoleID, req.FromGrid, req.ToGrid)
+	} else {
+		// ★ 目标格子为空 → 执行移动
+		sourceItem.GridIndex = req.ToGrid
+		if err := Mysql.DB.Save(&sourceItem).Error; err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "移动失败"})
+			return
+		}
+
+		log.Printf("✅ 玩家 %d 移动物品: 格子 %d → %d", req.RoleID, req.FromGrid, req.ToGrid)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "操作成功"})
+}
+
+// handleItemMerge 合并/堆叠物品
+func handleItemMerge(c *gin.Context) {
+	var req struct {
+		RoleID       uint64 `json:"role_id"`
+		SourceItemId uint64 `json:"source_item_id"`
+		TargetItemId uint64 `json:"target_item_id"`
+		Count        uint32 `json:"count"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "移动成功"})
+
+	// 获取源物品
+	var sourceItem Model.RoleBag
+	if err := Mysql.DB.Where("role_id = ? AND id = ?", req.RoleID, req.SourceItemId).First(&sourceItem).Error; err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "源物品不存在"})
+		return
+	}
+
+	// 获取目标物品
+	var targetItem Model.RoleBag
+	if err := Mysql.DB.Where("role_id = ? AND id = ?", req.RoleID, req.TargetItemId).First(&targetItem).Error; err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "目标物品不存在"})
+		return
+	}
+
+	// 验证物品类型相同
+	if sourceItem.ItemID != targetItem.ItemID {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "物品类型不同，无法堆叠"})
+		return
+	}
+
+	// 验证数量
+	if sourceItem.Count < req.Count {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "源物品数量不足"})
+		return
+	}
+
+	// 验证是否超过最大堆叠数
+	maxStack := uint32(99) // 默认最大堆叠数
+	if targetItem.Count+req.Count > maxStack {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "超过最大堆叠数"})
+		return
+	}
+
+	// 执行合并（事务保证一致性）
+	tx := Mysql.DB.Begin()
+
+	// 更新目标物品数量
+	targetItem.Count += req.Count
+	if err := tx.Save(&targetItem).Error; err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "合并失败"})
+		return
+	}
+
+	// 更新源物品数量
+	sourceItem.Count -= req.Count
+	if sourceItem.Count <= 0 {
+		// 如果源物品数量为0，删除它
+		if err := tx.Delete(&sourceItem).Error; err != nil {
+			tx.Rollback()
+			c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "删除源物品失败"})
+			return
+		}
+	} else {
+		// 否则更新数量
+		if err := tx.Save(&sourceItem).Error; err != nil {
+			tx.Rollback()
+			c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "更新源物品数量失败"})
+			return
+		}
+	}
+
+	tx.Commit()
+
+	log.Printf("✅ 玩家 %d 合并物品: %d → %d, 数量: %d", req.RoleID, req.SourceItemId, req.TargetItemId, req.Count)
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "合并成功"})
 }
 
 // handleItemSplit 拆分物品
@@ -1628,4 +1822,312 @@ func handlePoolStats(c *gin.Context) {
 			"time":  time.Now().Format("2006-01-02 15:04:05"),
 		},
 	})
+}
+
+// ==================== 任务相关接口 ====================
+
+// handleTaskGetList 获取角色任务列表
+func handleTaskGetList(c *gin.Context) {
+	var req struct {
+		RoleID uint64 `json:"role_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
+		return
+	}
+
+	var tasks []Model.RoleTask
+	if err := Mysql.DB.Where("role_id = ?", req.RoleID).Find(&tasks).Error; err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "查询失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "data": tasks})
+}
+
+// handleTaskAccept 接取任务
+func handleTaskAccept(c *gin.Context) {
+	var req struct {
+		RoleID uint64 `json:"role_id"`
+		TaskID uint32 `json:"task_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
+		return
+	}
+
+	// 检查是否已存在
+	var existing Model.RoleTask
+	err := Mysql.DB.Where("role_id = ? AND task_id = ?", req.RoleID, req.TaskID).First(&existing).Error
+	if err == nil {
+		// 已存在，检查是否可以重新接取
+		if existing.Status == 3 { // 已领奖状态
+			// 重置任务
+			now := time.Now()
+			existing.Status = 1
+			existing.Progress = 0
+			existing.Objectives = ""
+			existing.AcceptTime = now
+			existing.CompleteTime = nil
+			existing.FinishTime = nil
+			Mysql.DB.Save(&existing)
+			c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "重新接取成功", "data": existing})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "任务已存在"})
+		return
+	}
+
+	// 创建新任务记录
+	now := time.Now()
+	task := Model.RoleTask{
+		RoleID:     req.RoleID,
+		TaskID:     req.TaskID,
+		Status:     1, // 进行中
+		Progress:   0,
+		Objectives: "",
+		AcceptTime: now,
+	}
+
+	if err := Mysql.DB.Create(&task).Error; err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "接取失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "接取成功", "data": task})
+}
+
+// handleTaskComplete 完成任务（领取奖励）
+func handleTaskComplete(c *gin.Context) {
+	var req struct {
+		RoleID uint64 `json:"role_id"`
+		TaskID uint32 `json:"task_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
+		return
+	}
+
+	var task Model.RoleTask
+	if err := Mysql.DB.Where("role_id = ? AND task_id = ?", req.RoleID, req.TaskID).First(&task).Error; err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "任务不存在"})
+		return
+	}
+
+	if task.Status != 2 {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "任务尚未完成"})
+		return
+	}
+
+	now := time.Now()
+	task.Status = 3 // 已领奖
+	task.FinishTime = &now
+	task.DailyCount++
+	task.TotalCount++
+
+	if err := Mysql.DB.Save(&task).Error; err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "领取失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "奖励已领取", "data": task})
+}
+
+// handleTaskAbandon 放弃任务
+func handleTaskAbandon(c *gin.Context) {
+	var req struct {
+		RoleID uint64 `json:"role_id"`
+		TaskID uint32 `json:"task_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
+		return
+	}
+
+	if err := Mysql.DB.Where("role_id = ? AND task_id = ? AND status = 1", req.RoleID, req.TaskID).Delete(&Model.RoleTask{}).Error; err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "放弃失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "放弃成功"})
+}
+
+// handleTaskUpdateProgress 更新任务进度
+func handleTaskUpdateProgress(c *gin.Context) {
+	var req struct {
+		RoleID     uint64 `json:"role_id"`
+		TaskID     uint32 `json:"task_id"`
+		Progress   uint32 `json:"progress"`
+		Objectives string `json:"objectives"` // 多目标进度JSON
+		Status     uint8  `json:"status"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
+		return
+	}
+
+	var task Model.RoleTask
+	if err := Mysql.DB.Where("role_id = ? AND task_id = ?", req.RoleID, req.TaskID).First(&task).Error; err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "任务不存在"})
+		return
+	}
+
+	task.Progress = req.Progress
+	task.Objectives = req.Objectives
+	if req.Status > 0 {
+		task.Status = req.Status
+		if req.Status == 2 {
+			now := time.Now()
+			task.CompleteTime = &now
+		}
+	}
+
+	if err := Mysql.DB.Save(&task).Error; err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "更新失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "更新成功", "data": task})
+}
+
+// handleTaskGetDetail 获取任务详情
+func handleTaskGetDetail(c *gin.Context) {
+	var req struct {
+		RoleID uint64 `json:"role_id"`
+		TaskID uint32 `json:"task_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
+		return
+	}
+
+	var task Model.RoleTask
+	if err := Mysql.DB.Where("role_id = ? AND task_id = ?", req.RoleID, req.TaskID).First(&task).Error; err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "任务不存在"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "data": task})
+}
+
+// handleTaskSave 保存任务进度（单个）
+func handleTaskSave(c *gin.Context) {
+	var req Model.RoleTask
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
+		return
+	}
+
+	// 查找是否存在
+	var existing Model.RoleTask
+	err := Mysql.DB.Where("role_id = ? AND task_id = ?", req.RoleID, req.TaskID).First(&existing).Error
+
+	if err != nil {
+		// 不存在，创建新记录
+		if err := Mysql.DB.Create(&req).Error; err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "保存失败"})
+			return
+		}
+	} else {
+		// 存在，更新记录
+		existing.Status = req.Status
+		existing.Progress = req.Progress
+		existing.Objectives = req.Objectives
+		existing.CompleteTime = req.CompleteTime
+		existing.FinishTime = req.FinishTime
+		existing.DailyCount = req.DailyCount
+		existing.TotalCount = req.TotalCount
+		if err := Mysql.DB.Save(&existing).Error; err != nil {
+			c.JSON(http.StatusOK, gin.H{"code": -1, "msg": "保存失败"})
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "保存成功"})
+}
+
+// handleTaskBatchSave 批量保存任务进度
+func handleTaskBatchSave(c *gin.Context) {
+	var req struct {
+		RoleID uint64           `json:"role_id"`
+		Tasks  []Model.RoleTask `json:"tasks"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
+		return
+	}
+
+	for _, task := range req.Tasks {
+		task.RoleID = req.RoleID
+
+		var existing Model.RoleTask
+		err := Mysql.DB.Where("role_id = ? AND task_id = ?", task.RoleID, task.TaskID).First(&existing).Error
+
+		if err != nil {
+			// 不存在，创建新记录
+			Mysql.DB.Create(&task)
+		} else {
+			// 存在，更新记录
+			existing.Status = task.Status
+			existing.Progress = task.Progress
+			existing.Objectives = task.Objectives
+			existing.CompleteTime = task.CompleteTime
+			existing.FinishTime = task.FinishTime
+			existing.DailyCount = task.DailyCount
+			existing.TotalCount = task.TotalCount
+			Mysql.DB.Save(&existing)
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "批量保存成功"})
+}
+
+// handleAchievementGet 获取玩家成就数据
+func handleAchievementGet(c *gin.Context) {
+	var req struct {
+		RoleID uint64 `json:"role_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
+		return
+	}
+
+	var role Model.Role
+	if err := Mysql.DB.Where("id = ?", req.RoleID).First(&role).Error; err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 0, "data": gin.H{"achievements": ""}})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code": 0,
+		"data": gin.H{
+			"achievements": role.Achievements,
+		},
+	})
+}
+
+// handleAchievementSave 保存玩家成就数据
+func handleAchievementSave(c *gin.Context) {
+	var req struct {
+		RoleID       uint64 `json:"role_id" binding:"required"`
+		Achievements string `json:"achievements"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "参数错误"})
+		return
+	}
+
+	var role Model.Role
+	if err := Mysql.DB.Where("id = ?", req.RoleID).First(&role).Error; err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": -1, "msg": "玩家不存在"})
+		return
+	}
+
+	role.Achievements = req.Achievements
+	if err := Mysql.DB.Save(&role).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": -1, "msg": "保存失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "保存成功"})
 }

@@ -148,9 +148,15 @@ class SkillPanel {
 
   /**
    * 显示面板并加载数据
+   * ★ BUG修复：防止事件冒泡导致立即关闭
    */
-  async show() {
+  async show(event) {
     if (this.visible || this.isLoading) return;
+
+    // ★ 阻止事件冒泡，避免触发handleClickOutside关闭面板
+    if (event && event.stopPropagation) {
+      event.stopPropagation();
+    }
 
     this.visible = true;
     this.isLoading = true;
@@ -172,7 +178,7 @@ class SkillPanel {
     });
 
     try {
-      await this.loadData();
+      await this.loadData(); // 首次加载（使用缓存或网络请求）
       this.renderSkillList();
     } finally {
       this.isLoading = false; // 🔓 解锁
@@ -198,37 +204,114 @@ class SkillPanel {
     document.removeEventListener('click', this.handleClickOutside);
   }
 
-  toggle() {
-    this.visible ? this.hide() : this.show();
+  toggle(event) {
+    this.visible ? this.hide() : this.show(event); // ★ 传递event用于阻止冒泡
   }
 
   /**
    * 从服务端加载数据
+   * ★ 性能优化：智能缓存 + 复用SkillBar数据 + 变更检测
    */
-  async loadData() {
+  async loadData(forceRefresh = false) {
     try {
       const roleId = this.game?.player?.id;
 
-      // 并行请求：所有武学 + 已学武学 + 已装备武学
-      const [allRes, myRes, equippedRes] = await Promise.all([
-        fetch('http://localhost:8082/api/skill/base/list'),
-        roleId ? fetch(`http://localhost:8082/api/skill/role/${roleId}/list`) : Promise.resolve({ json: () => ({ code: 0, data: [] }) }),
-        roleId ? fetch(`http://localhost:8082/api/skill/role/${roleId}/equipped`) : Promise.resolve({ json: () => ({ code: 0, data: [] }) })
-      ]);
+      // ★ 快速路径：如果数据已存在且不需要强制刷新，直接返回（零延迟）
+      if (!forceRefresh && this.allSkills.length > 0 && this.mySkills.length > 0) {
+        console.log('[SkillPanel] 使用缓存数据 - allSkills:', this.allSkills.length, 'mySkills:', this.mySkills.length);
+        return; // 使用缓存，不重新请求
+      }
 
-      const allData = await allRes.json();
-      const myData = await myRes.json();
-      const equippedData = await equippedRes.json();
+      // ★ 方案1：优先使用SkillBar已缓存的技能配置（避免重复HTTP请求）
+      if (this.game.skillBar && this.game.skillBar.skillConfigCache && this.game.skillBar.skillConfigCache.size > 0) {
+        console.log('[SkillPanel] 使用SkillBar缓存:', this.game.skillBar.skillConfigCache.size, '个技能配置');
+        this.allSkills = Array.from(this.game.skillBar.skillConfigCache.values());
+      } else {
+        // ★ 方案2：降级为HTTP通过网关代理请求（支持分布式架构）
+        console.warn('[SkillPanel] 通过网关代理加载技能配置...');
+        try {
+          const gatewayBaseURL = this._getGatewayBaseURL();
 
-      if (allData.code === 200) this.allSkills = allData.data || [];
-      if (myData.code === 200) this.mySkills = myData.data || [];
-      if (equippedData.code === 200) this.equippedSkills = equippedData.data || [];
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 3000); // ★ 缩短超时时间到3秒
+          const response = await fetch(`${gatewayBaseURL}/api/skill/base/list`, {
+            method: 'GET',
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+
+          if (response.ok) {
+            const result = await response.json();
+            if (result.code === 200 && Array.isArray(result.data)) {
+              this.allSkills = result.data;
+              console.log('[SkillPanel] 网关代理加载', this.allSkills.length, '个技能配置');
+            }
+          }
+        } catch (httpError) {
+          console.warn('[SkillPanel] 网关代理加载技能配置失败:', httpError.message);
+        }
+      }
+
+      // ★ 方案3：优先使用SkillBar已加载的角色技能数据（避免重复WebSocket请求！）
+      // ★ 优化：如果SkillBar存在但数据为空，等待其加载完成（最多3秒）
+      if (this.game.skillBar) {
+        if (this.game.skillBar.learnedSkills && this.game.skillBar.learnedSkills.length > 0) {
+          // ✅ SkillBar已有数据，直接复用
+          console.log('[SkillPanel] 复用SkillBar角色数据:', this.game.skillBar.learnedSkills.length, '个已学技能');
+          this.mySkills = [...this.game.skillBar.learnedSkills]; // ★ 创建副本避免引用问题
+          this.equippedSkills = [...(this.game.skillBar.equippedSkills || [])]; // ★ 创建副本
+        } else if (this.game.skillBar.isLoading) {
+          // ⏳ SkillBar正在加载，等待完成
+          console.log('[SkillPanel] 等待SkillBar加载完成...');
+          await new Promise(resolve => {
+            const checkInterval = setInterval(() => {
+              if (!this.game.skillBar.isLoading || (this.game.skillBar.learnedSkills && this.game.skillBar.learnedSkills.length > 0)) {
+                clearInterval(checkInterval);
+                resolve();
+              }
+            }, 200); // 每200ms检查一次
+            // 3秒超时
+            setTimeout(() => {
+              clearInterval(checkInterval);
+              resolve();
+            }, 3000);
+          });
+
+          // 再次检查是否有数据
+          if (this.game.skillBar.learnedSkills && this.game.skillBar.learnedSkills.length > 0) {
+            console.log('[SkillPanel] SkillBar加载完成，复用数据:', this.game.skillBar.learnedSkills.length, '个已学技能');
+            this.mySkills = [...this.game.skillBar.learnedSkills];
+            this.equippedSkills = [...(this.game.skillBar.equippedSkills || [])];
+          } else {
+            // 超时或仍无数据，走降级路径
+            console.warn('[SkillPanel] 等待超时，降级为WebSocket请求...');
+            await this._fetchSkillsFromServer(roleId);
+          }
+        } else {
+          // SkillBar已加载但无数据，走降级路径
+          console.warn('[SkillBar] SkillBar无数据，降级为WebSocket请求...');
+          await this._fetchSkillsFromServer(roleId);
+        }
+      } else if (roleId) {
+        // 无SkillBar实例，走降级路径
+        console.warn('[SkillPanel] 无SkillBar实例，降级为WebSocket请求...');
+        await this._fetchSkillsFromServer(roleId);
+      } else {
+        // 无角色ID时使用空数组
+        this.mySkills = [];
+        this.equippedSkills = [];
+      }
+
+      console.log('[SkillPanel] 数据加载完成 - allSkills:', this.allSkills?.length, 'mySkills:', this.mySkills?.length, 'equipped:', this.equippedSkills?.length);
 
       // 同步到game.player（使用技能配置补全名称）
       if (this.game.player) {
         this.game.player.skills = this.mySkills.map(s => {
           const skillId = s.skill_id || s.id;
           const config = this.allSkills.find(skill => skill.id === skillId) || {};
+          const level = s.level || s.skill_level || 1;
+          const exp = s.exp || s.experience || 0;
+          const maxExp = s.max_exp || level * 100;
           return {
             ...s,
             id: skillId,
@@ -241,11 +324,40 @@ class SkillPanel {
             range: config.range || 1,
             cast_time: config.cast_time || 0,
             attack_speed: config.attack_speed || 0,
+            level: level,
+            exp: exp,
+            max_exp: maxExp,
+            exp_percent: Math.min(100, (exp / maxExp) * 100)
           };
         });
       }
     } catch (error) {
       console.error('[SkillPanel] 加载数据失败:', error);
+    }
+  }
+
+  /**
+   * ★ 从服务端获取技能数据（降级方案）
+   */
+  async _fetchSkillsFromServer(roleId) {
+    if (!roleId) return;
+
+    try {
+      const promises = [
+        window.GameWS.request(window.Protocol.CMD_SKILL_LIST, { role_id: roleId, type: 'learned' }, 5000).catch(() => ({ code: 0, data: [] })),
+        window.GameWS.request(window.Protocol.CMD_SKILL_LIST, { role_id: roleId, type: 'equipped' }, 5000).catch(() => ({ code: 0, data: [] }))
+      ];
+
+      const [myData, equippedData] = await Promise.all(promises);
+
+      if (myData && myData.code === 200) this.mySkills = myData.data || [];
+      if (equippedData && equippedData.code === 200) this.equippedSkills = equippedData.data || [];
+
+      console.log('[SkillPanel] 从服务端获取 - mySkills:', this.mySkills?.length, 'equipped:', this.equippedSkills?.length);
+    } catch (error) {
+      console.error('[SkillPanel] 从服务端获取技能失败:', error);
+      this.mySkills = [];
+      this.equippedSkills = [];
     }
   }
 
@@ -311,6 +423,18 @@ class SkillPanel {
               ${skill.attack_speed > 0 ? ' 攻速:' + skill.attack_speed : ''}
               范围:${skill.range > 1 ? skill.range + '格(远程)' : '近战'}
             </div>` : ''}
+            ${mySkill ? `
+              <div style="margin-top:4px;">
+                <div style="display:flex; align-items:center; gap:6px; font-size:10px;">
+                  <span style="color:#4ade80;">熟练度</span>
+                  <div style="flex:1; height:4px; background:#333; border-radius:2px; overflow:hidden;">
+                    <div style="height:100%; background:linear-gradient(90deg, #4ade80, #22c55e); 
+                      width:${mySkill.exp_percent || 0}%; transition:width 0.3s ease;"></div>
+                  </div>
+                  <span style="color:#fff;">${mySkill.exp || 0}/${mySkill.max_exp || 100}</span>
+                </div>
+              </div>
+            ` : ''}
           </div>
 
           <!-- 操作 -->
@@ -368,6 +492,12 @@ class SkillPanel {
     const mySkill = this.mySkills.find(s => (s.skill_id || s.id) === skillId);
     const isEquipped = this.equippedSkills.some(s => (s.skill_id || s.id) === skillId);
     const typeColor = this.getTypeColor(skill.type);
+    
+    // 熟练度数据
+    const level = mySkill ? (mySkill.level || mySkill.skill_level || 1) : 0;
+    const exp = mySkill ? (mySkill.exp || mySkill.experience || 0) : 0;
+    const maxExp = mySkill ? (mySkill.max_exp || level * 100) : 100;
+    const expPercent = mySkill ? Math.min(100, (exp / maxExp) * 100) : 0;
 
     detail.style.display = 'block';
     detail.innerHTML = `
@@ -380,9 +510,25 @@ class SkillPanel {
           <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;">
             <span style="font-size:18px; font-weight:bold; color:#fff;">${skill.name}</span>
             <span style="font-size:12px; color:${typeColor};">${this.typeNames[skill.type]}</span>
-            ${mySkill ? `<span style="color:#4ade80; font-size:13px;">Lv.${mySkill.level || 1}</span>` : `<span style="color:#888; font-size:12px;">未学习</span>`}
+            ${mySkill ? `<span style="color:#4ade80; font-size:13px;">Lv.${level}</span>` : `<span style="color:#888; font-size:12px;">未学习</span>`}
           </div>
           <p style="color:#aaa; font-size:12px; margin:0 0 8px 0;">${skill.description}</p>
+          
+          ${mySkill ? `
+            <div style="margin-bottom:8px; padding:8px; background:rgba(74,222,128,0.08); border-radius:6px;">
+              <div style="display:flex; align-items:center; justify-content:space-between; font-size:11px; margin-bottom:4px;">
+                <span style="color:#4ade80;">当前熟练度</span>
+                <span style="color:#fff;">${exp} / ${maxExp}</span>
+              </div>
+              <div style="height:6px; background:#2d3748; border-radius:3px; overflow:hidden;">
+                <div style="height:100%; background:linear-gradient(90deg, #4ade80, #22c55e);
+                  width:${expPercent}%; transition:width 0.3s ease;"></div>
+              </div>
+              <div style="font-size:10px; color:#888; margin-top:3px;">
+                ${expPercent >= 100 ? '<span style="color:#fbbf24;">已满级，可突破至下一境界！</span>' : `还需 ${maxExp - exp} 熟练度升级`}
+              </div>
+            </div>
+          ` : ''}
           
           <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:8px; font-size:11px;">
             <div><span style="color:#888;">等级要求:</span> <span style="color:#fff;">${skill.level}</span></div>
@@ -436,26 +582,26 @@ class SkillPanel {
     try {
       const roleId = this.game?.player?.id;
       const roleLevel = this.game?.player?.level || 1;
-      console.log('[SkillPanel] 学习武学 - roleId:', roleId, 'skillId:', skillId, 'roleLevel:', roleLevel, '完整player:', this.game?.player);
+      console.log('[SkillPanel] 学习武学 - roleId:', roleId, 'skillId:', skillId, 'roleLevel:', roleLevel);
       if (!roleId) return;
 
-      const res = await fetch(`http://localhost:8082/api/skill/role/${roleId}/learn`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          skill_id: skillId,
-          role_level: roleLevel
-        })
-      });
-      const data = await res.json();
+      const data = await window.GameWS.request(window.Protocol.CMD_SKILL_LEARN, {
+        role_id: roleId,
+        skill_id: skillId,
+        role_level: roleLevel
+      }, 5000);
 
       if (data.code === 200) {
         if (this.game.uiManager) this.game.uiManager.toast('学习成功！', 'success', 1500);
-        await this.loadData();
-        this.renderSkillList();
-        // 刷新技能栏
-        if (this.game.skillBar) this.game.skillBar.loadFromServer();
-        // 刷新属性
+
+        // ★ 关键修复：强制刷新数据（forceRefresh=true）
+        if (this.game.skillBar) {
+          await this.game.skillBar.loadFromServer();  // ① 先更新SkillBar数据源
+        }
+        await this.loadData(true);     // ② 强制刷新SkillPanel数据
+        this.renderSkillList();       // ③ 最后渲染
+
+        // 刷新属性面板
         if (this.game.inventory) this.game.inventory.updateAttributes();
       } else {
         if (this.game.uiManager) this.game.uiManager.toast(data.msg || '学习失败', 'error', 2000);
@@ -474,19 +620,57 @@ class SkillPanel {
       const roleId = this.game?.player?.id;
       if (!roleId) return;
 
-      const res = await fetch(`http://localhost:8082/api/skill/role/${roleId}/equip`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ skill_id: skillId })
-      });
-      const data = await res.json();
+      const data = await window.GameWS.request(window.Protocol.CMD_SKILL_EQUIP, {
+        role_id: roleId,
+        skill_id: skillId,
+        slot_index: 0
+      }, 5000);
 
       if (data.code === 200) {
         if (this.game.uiManager) this.game.uiManager.toast('装备成功！', 'success', 1000);
-        await this.loadData();
-        this.renderSkillList();
-        this.showDetail(skillId); // 刷新详情
-        if (this.game.skillBar) this.game.skillBar.loadFromServer();
+
+        // ★ 完美适配：优先使用服务端返回的final_attrs（已整合所有加成）
+        let pendingFinalAttrs = null;
+        let pendingBonusDetail = null;
+
+        if (this.game.player) {
+          // ★ 新格式：优先使用final_attrs（GameService缓存系统返回的完整属性）
+          if (data.data && data.data.final_attrs) {
+            pendingFinalAttrs = data.data.final_attrs;
+            pendingBonusDetail = data.data.bonus_detail || null;
+            console.log('[SkillPanel] 装备成功，收到完整属性:', pendingFinalAttrs);
+            console.log('[SkillPanel] 加成明细:', pendingBonusDetail);
+          }
+          // ★ 兼容旧格式：如果服务端未启用缓存，降级使用bonus字段
+          else if (data.data && data.data.bonus) {
+            const bonus = data.data.bonus;
+            // 手动构建final_attrs（兼容模式）
+            pendingFinalAttrs = {
+              maxHp: (this.game.player.baseMaxHp || 100) + (bonus.hp || 0),
+              maxMp: (this.game.player.baseMaxMp || 100) + (bonus.mp || 0),
+              attack: (this.game.player.baseAttack || 10) + (bonus.attack || 0),
+              defense: (this.game.player.baseDefense || 5) + (bonus.defense || 0),
+              speed: (this.game.player.baseSpeed || 10) + (bonus.speed || 0),
+              hit: (this.game.player.hit || 50) + (bonus.hit || 0),
+              dodge: (this.game.player.dodge || 10) + (bonus.dodge || 0),
+              crit: (this.game.player.crit || 5) + (bonus.crit || 0)
+            };
+            console.log('[SkillPanel] 装备成功，降级使用bonus构建属性:', pendingFinalAttrs);
+          }
+        }
+
+        // ★ 关键：先完成所有数据加载（避免中途被游戏循环覆盖）
+        if (this.game.skillBar) {
+          await this.game.skillBar.loadFromServer();  // ① 先更新SkillBar数据源
+        }
+        await this.loadData(true);     // ② 强制刷新SkillPanel数据
+        this.renderSkillList();       // ③ 渲染技能列表
+        this.showDetail(skillId);     // ④ 刷新详情
+
+        // ★ 最后统一应用final_attrs并刷新UI（确保不被覆盖）
+        if (pendingFinalAttrs && this.game.player) {
+          this._applyFinalAttributes(pendingFinalAttrs, pendingBonusDetail);
+        }
       } else {
         if (this.game.uiManager) this.game.uiManager.toast(data.msg || '装备失败', 'error', 1500);
       }
@@ -504,19 +688,56 @@ class SkillPanel {
       const roleId = this.game?.player?.id;
       if (!roleId) return;
 
-      const res = await fetch(`http://localhost:8082/api/skill/role/${roleId}/unequip`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ skill_id: skillId })
-      });
-      const data = await res.json();
+      const data = await window.GameWS.request(window.Protocol.CMD_SKILL_UNEQUIP, {
+        role_id: roleId,
+        skill_id: skillId
+      }, 5000);
 
       if (data.code === 200) {
         if (this.game.uiManager) this.game.uiManager.toast('已卸下', 'success', 1000);
-        await this.loadData();
-        this.renderSkillList();
-        this.showDetail(skillId);
-        if (this.game.skillBar) this.game.skillBar.loadFromServer();
+
+        // ★ 完美适配：优先使用服务端返回的final_attrs（已整合所有加成）
+        let pendingFinalAttrs = null;
+        let pendingBonusDetail = null;
+
+        if (this.game.player) {
+          // ★ 新格式：优先使用final_attrs（GameService缓存系统返回的完整属性）
+          if (data.data && data.data.final_attrs) {
+            pendingFinalAttrs = data.data.final_attrs;
+            pendingBonusDetail = data.data.bonus_detail || null;
+            console.log('[SkillPanel] 卸下成功，收到完整属性:', pendingFinalAttrs);
+            console.log('[SkillPanel] 加成明细:', pendingBonusDetail);
+          }
+          // ★ 兼容旧格式：如果服务端未启用缓存，降级使用bonus字段
+          else if (data.data && data.data.bonus) {
+            const bonus = data.data.bonus;
+            // 手动构建final_attrs（兼容模式）
+            pendingFinalAttrs = {
+              maxHp: (this.game.player.baseMaxHp || 100) + (bonus.hp || 0),
+              maxMp: (this.game.player.baseMaxMp || 100) + (bonus.mp || 0),
+              attack: (this.game.player.baseAttack || 10) + (bonus.attack || 0),
+              defense: (this.game.player.baseDefense || 5) + (bonus.defense || 0),
+              speed: (this.game.player.baseSpeed || 10) + (bonus.speed || 0),
+              hit: (this.game.player.hit || 50) + (bonus.hit || 0),
+              dodge: (this.game.player.dodge || 10) + (bonus.dodge || 0),
+              crit: (this.game.player.crit || 5) + (bonus.crit || 0)
+            };
+            console.log('[SkillPanel] 卸下成功，降级使用bonus构建属性:', pendingFinalAttrs);
+          }
+        }
+
+        // ★ 关键：先完成所有数据加载（避免中途被游戏循环覆盖）
+        if (this.game.skillBar) {
+          await this.game.skillBar.loadFromServer();  // ① 先更新SkillBar数据源
+        }
+        await this.loadData(true);     // ② 强制刷新SkillPanel数据
+        this.renderSkillList();       // ③ 渲染技能列表
+        this.showDetail(skillId);     // ④ 刷新详情
+
+        // ★ 最后统一应用final_attrs并刷新UI（确保不被覆盖）
+        if (pendingFinalAttrs && this.game.player) {
+          this._applyFinalAttributes(pendingFinalAttrs, pendingBonusDetail);
+        }
       } else {
         if (this.game.uiManager) this.game.uiManager.toast(data.msg || '操作失败', 'error', 1500);
       }
@@ -535,6 +756,161 @@ class SkillPanel {
     const colors = { 1: '#60a5fa', 2: '#ef4444', 3: '#c084fc', 4: '#f59e0b',
                      5: '#f97316', 6: '#06b6d4', 7: '#dc2626', 8: '#84cc16', 9: '#a78bfa' };
     return colors[type] || '#888';
+  }
+
+  /**
+   * 获取网关基础URL（HTTP格式）
+   * ★ 从WebSocket连接URL自动提取，支持分布式架构
+   */
+  _getGatewayBaseURL() {
+    try {
+      // 方案1：从GameWS连接URL提取（推荐）
+      if (window.GameWS && window.GameWS.url) {
+        const wsURL = window.GameWS.url;
+        // ws://127.0.0.1:8080/ws → http://127.0.0.1:8080
+        return wsURL.replace(/^ws(s?):\/\//, 'http$1://').replace(/\/ws$/, '');
+      }
+    } catch (e) {
+      console.warn('[SkillPanel] 无法从GameWS获取URL:', e.message);
+    }
+
+    // 方案2：降级为默认网关地址
+    return 'http://127.0.0.1:8080';
+  }
+
+  /**
+   * ★ 新增：处理学习技能的响应（由Game.js调用）
+   */
+  _onLearnResponse(data) {
+    console.log('[SkillPanel] 学习技能响应:', data);
+    // 可以在这里触发UI更新或事件
+  }
+
+  /**
+   * ★ 新增：处理装备技能的响应（由Game.js调用）
+   */
+  _onEquipResponse(data) {
+    console.log('[SkillPanel] 装备技能响应:', data);
+    // 可以在这里刷新技能列表
+  }
+
+  /**
+   * ★ 新增：处理卸下技能的响应（由Game.js调用）
+   */
+  _onUnequipResponse(data) {
+    console.log('[SkillPanel] 卸下技能响应:', data);
+    // 可以在这里刷新技能列表
+  }
+
+  /**
+   * ★ 新增：统一应用final_attrs到player对象（核心方法）
+   * 直接使用服务端计算好的最终属性，确保100%准确
+   */
+  _applyFinalAttributes(finalAttrs, bonusDetail) {
+    if (!this.game || !this.game.player || !finalAttrs) return;
+
+    const player = this.game.player;
+
+    // ★ 直接赋值服务端返回的最终属性（已包含所有加成）
+    if (finalAttrs.maxHp !== undefined) {
+      player.maxHp = finalAttrs.maxHp;
+    }
+    if (finalAttrs.maxMp !== undefined) {
+      player.maxMp = finalAttrs.maxMp;
+    }
+    if (finalAttrs.attack !== undefined) {
+      player.attack = finalAttrs.attack;
+    }
+    if (finalAttrs.defense !== undefined) {
+      player.defense = finalAttrs.defense;
+    }
+    if (finalAttrs.speed !== undefined) {
+      player.speed = finalAttrs.speed;
+    }
+    if (finalAttrs.hit !== undefined) {
+      player.hit = finalAttrs.hit;
+    }
+    if (finalAttrs.dodge !== undefined) {
+      player.dodge = finalAttrs.dodge;
+    }
+    if (finalAttrs.crit !== undefined) {
+      player.crit = finalAttrs.crit;
+    }
+
+    // 确保当前HP/MP不超过新的最大值
+    if (player.hp > player.maxHp) {
+      player.hp = player.maxHp;
+    }
+    if (player.mp > player.maxMp) {
+      player.mp = player.maxMp;
+    }
+
+    // ★ 保存bonus_detail供UI显示使用（[武+5][装+15]等标记）
+    if (bonusDetail) {
+      player.bonusDetail = bonusDetail;
+    }
+
+    console.log(`[SkillPanel] 属性已更新 - HP: ${player.hp}/${player.maxHp}, MP: ${player.mp}/${player.maxMp}`);
+    console.log(`[SkillPanel] 攻击: ${player.attack}, 防御: ${player.defense}, 速度: ${player.speed}`);
+    if (bonusDetail) {
+      console.log(`[SkillPanel] 加成明细:`, bonusDetail);
+    }
+
+    // 统一刷新所有UI面板
+    this._refreshAllAttributeUIs();
+  }
+
+  /**
+   * ★ 统一刷新所有属性相关的UI面板
+   * 解决HUD、属性面板、背包面板数据不同步的问题
+   */
+  _refreshAllAttributeUIs() {
+    if (!this.game || !this.game.player) return;
+
+    console.log('[SkillPanel] 统一刷新所有UI面板...');
+
+    const bonusDetail = this.game.player.bonusDetail || null;
+
+    // 1. 刷新左上角HUD系统（HP/MP条、角色名等）
+    if (this.game.updatePlayerUI) {
+      this.game.updatePlayerUI();
+      console.log('[SkillPanel] ✓ HUD系统已刷新');
+    }
+
+    // 2. 刷新背包/属性详情面板（传递bonusDetail用于显示[武+5][装+15]标记）
+    if (this.game.inventory && typeof this.game.inventory.updateAttributes === 'function') {
+      // ★ 优先调用支持bonusDetail的新接口
+      if (typeof this.game.inventory.updateAttributesWithBonus === 'function') {
+        this.game.inventory.updateAttributesWithBonus(bonusDetail);
+        console.log('[SkillPanel] ✓ 属性面板已刷新（含加成明细）');
+      } else {
+        // 兼容旧接口
+        this.game.inventory.updateAttributes();
+        console.log('[SkillPanel] ✓ 属性面板已刷新（兼容模式）');
+      }
+    }
+
+    // 3. 刷新角色信息面板（如果存在独立的面板组件）
+    if (this.game.uiManager && typeof this.game.uiManager.refreshCharacterInfo === 'function') {
+      // ★ 尝试传递bonusDetail
+      if (typeof this.game.uiManager.refreshCharacterInfoWithBonus === 'function') {
+        this.game.uiManager.refreshCharacterInfoWithBonus(bonusDetail);
+      } else {
+        this.game.uiManager.refreshCharacterInfo();
+      }
+      console.log('[SkillPanel] ✓ 角色信息面板已刷新');
+    }
+
+    // 4. 刷新快捷栏（确保技能图标状态正确）
+    if (this.game.skillBar && typeof this.game.skillBar.render === 'function') {
+      this.game.skillBar.render();
+      console.log('[SkillPanel] ✓ 快捷栏已刷新');
+    }
+
+    console.log(`[SkillPanel] 所有UI刷新完成 - HP: ${this.game.player.hp}/${this.game.player.maxHp}, MP: ${this.game.player.mp}/${this.game.player.maxMp}`);
+    if (bonusDetail) {
+      console.log(`[SkillPanel] 加成标记: [武+${bonusDetail.skill_bonus?.hp || 0}][装+${bonusDetail.item_bonus?.attack || 0}]`);
+    }
   }
 }
 

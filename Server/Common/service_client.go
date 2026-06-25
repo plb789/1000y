@@ -479,6 +479,23 @@ func DBRoleAddExp(roleID uint64, exp int64) (bool, int, int64, error) {
 	return result.LeveledUp, result.Level, result.Exp, nil
 }
 
+// DBRoleAddHonor 增加声望值
+func DBRoleAddHonor(roleID uint64, honor int64) error {
+	resp, err := DBPost("/api/role/add_honor", map[string]interface{}{
+		"id":    roleID,
+		"honor": honor,
+	})
+	if err != nil {
+		return err
+	}
+
+	if resp["code"].(float64) != 0 {
+		return fmt.Errorf("增加声望失败: %v", resp["msg"])
+	}
+
+	return nil
+}
+
 // DBRoleRecordKill 记录击杀
 func DBRoleRecordKill(roleID uint64) error {
 	resp, err := DBPost("/api/role/record_kill", map[string]uint64{"id": roleID})
@@ -782,6 +799,25 @@ func DBItemMove(roleID uint64, fromGrid, toGrid int) error {
 
 	if resp["code"].(float64) != 0 {
 		return fmt.Errorf("移动物品失败: %v", resp["msg"])
+	}
+
+	return nil
+}
+
+// DBItemMerge 合并/堆叠物品
+func DBItemMerge(roleID uint64, sourceItemId, targetItemId uint64, count uint32) error {
+	resp, err := DBPost("/api/item/merge", map[string]interface{}{
+		"role_id":         roleID,
+		"source_item_id":  sourceItemId,
+		"target_item_id":  targetItemId,
+		"count":           count,
+	})
+	if err != nil {
+		return err
+	}
+
+	if resp["code"].(float64) != 0 {
+		return fmt.Errorf("合并物品失败: %v", resp["msg"])
 	}
 
 	return nil
@@ -1264,6 +1300,217 @@ func DBItemSplit(roleID uint64, gridIndex int, count uint32) error {
 
 	if resp["code"].(float64) != 0 {
 		return fmt.Errorf("拆分物品失败: %v", resp["msg"])
+	}
+
+	return nil
+}
+
+// ==================== 任务相关接口 ====================
+
+// RoleTaskInfo 角色任务信息
+type RoleTaskInfo struct {
+	ID           uint64  `json:"id"`
+	RoleID       uint64  `json:"role_id"`
+	TaskID       uint32  `json:"task_id"`
+	Status       uint8   `json:"status"`
+	Progress     uint32  `json:"progress"`
+	Objectives   string  `json:"objectives"`
+	AcceptTime   string  `json:"accept_time"`
+	CompleteTime *string `json:"complete_time"`
+	FinishTime   *string `json:"finish_time"`
+	DailyCount   int     `json:"daily_count"`
+	TotalCount   int     `json:"total_count"`
+}
+
+// DBTaskGetList 获取角色任务列表
+func DBTaskGetList(roleID uint64) ([]RoleTaskInfo, error) {
+	resp, err := DBPost("/api/task/get_list", map[string]interface{}{
+		"role_id": roleID,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if resp["code"].(float64) != 0 {
+		return nil, fmt.Errorf("获取任务列表失败: %v", resp["msg"])
+	}
+
+	data, _ := json.Marshal(resp["data"])
+	var tasks []RoleTaskInfo
+	json.Unmarshal(data, &tasks)
+
+	return tasks, nil
+}
+
+// DBTaskAccept 接取任务
+func DBTaskAccept(roleID uint64, taskID uint32) (*RoleTaskInfo, error) {
+	resp, err := DBPost("/api/task/accept", map[string]interface{}{
+		"role_id": roleID,
+		"task_id": taskID,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if resp["code"].(float64) != 0 {
+		return nil, fmt.Errorf("接取任务失败: %v", resp["msg"])
+	}
+
+	data, _ := json.Marshal(resp["data"])
+	var task RoleTaskInfo
+	json.Unmarshal(data, &task)
+
+	return &task, nil
+}
+
+// DBTaskComplete 完成任务（领取奖励）
+func DBTaskComplete(roleID uint64, taskID uint32) (*RoleTaskInfo, error) {
+	resp, err := DBPost("/api/task/complete", map[string]interface{}{
+		"role_id": roleID,
+		"task_id": taskID,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if resp["code"].(float64) != 0 {
+		return nil, fmt.Errorf("完成任务失败: %v", resp["msg"])
+	}
+
+	data, _ := json.Marshal(resp["data"])
+	var task RoleTaskInfo
+	json.Unmarshal(data, &task)
+
+	return &task, nil
+}
+
+// DBTaskAbandon 放弃任务
+func DBTaskAbandon(roleID uint64, taskID uint32) error {
+	resp, err := DBPost("/api/task/abandon", map[string]interface{}{
+		"role_id": roleID,
+		"task_id": taskID,
+	})
+	if err != nil {
+		return err
+	}
+
+	if resp["code"].(float64) != 0 {
+		return fmt.Errorf("放弃任务失败: %v", resp["msg"])
+	}
+
+	return nil
+}
+
+// DBTaskUpdateProgress 更新任务进度
+func DBTaskUpdateProgress(roleID uint64, taskID uint32, progress uint32, objectives string, status uint8) (*RoleTaskInfo, error) {
+	resp, err := DBPost("/api/task/update_progress", map[string]interface{}{
+		"role_id":    roleID,
+		"task_id":    taskID,
+		"progress":   progress,
+		"objectives": objectives,
+		"status":     status,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if resp["code"].(float64) != 0 {
+		return nil, fmt.Errorf("更新进度失败: %v", resp["msg"])
+	}
+
+	data, _ := json.Marshal(resp["data"])
+	var task RoleTaskInfo
+	json.Unmarshal(data, &task)
+
+	return &task, nil
+}
+
+// DBTaskGetDetail 获取任务详情
+func DBTaskGetDetail(roleID uint64, taskID uint32) (*RoleTaskInfo, error) {
+	resp, err := DBPost("/api/task/get_detail", map[string]interface{}{
+		"role_id": roleID,
+		"task_id": taskID,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if resp["code"].(float64) != 0 {
+		return nil, fmt.Errorf("获取任务详情失败: %v", resp["msg"])
+	}
+
+	data, _ := json.Marshal(resp["data"])
+	var task RoleTaskInfo
+	json.Unmarshal(data, &task)
+
+	return &task, nil
+}
+
+// DBTaskSave 保存任务进度（单个）
+func DBTaskSave(task RoleTaskInfo) error {
+	resp, err := DBPost("/api/task/save", task)
+	if err != nil {
+		return err
+	}
+
+	if resp["code"].(float64) != 0 {
+		return fmt.Errorf("保存任务失败: %v", resp["msg"])
+	}
+
+	return nil
+}
+
+// DBTaskBatchSave 批量保存任务进度
+func DBTaskBatchSave(roleID uint64, tasks []RoleTaskInfo) error {
+	resp, err := DBPost("/api/task/batch_save", map[string]interface{}{
+		"role_id": roleID,
+		"tasks":   tasks,
+	})
+	if err != nil {
+		return err
+	}
+
+	if resp["code"].(float64) != 0 {
+		return fmt.Errorf("批量保存任务失败: %v", resp["msg"])
+	}
+
+	return nil
+}
+
+// DBGetRoleAchievements 获取玩家成就数据
+func DBGetRoleAchievements(roleID uint64) (string, error) {
+	resp, err := DBPost("/api/achievement/get", map[string]interface{}{
+		"role_id": roleID,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	if resp["code"].(float64) != 0 {
+		return "", fmt.Errorf("获取成就数据失败: %v", resp["msg"])
+	}
+
+	if data, ok := resp["data"].(map[string]interface{}); ok {
+		if achievements, ok := data["achievements"].(string); ok {
+			return achievements, nil
+		}
+	}
+
+	return "", nil
+}
+
+// DBSaveRoleAchievements 保存玩家成就数据
+func DBSaveRoleAchievements(roleID uint64, achievements string) error {
+	resp, err := DBPost("/api/achievement/save", map[string]interface{}{
+		"role_id":      roleID,
+		"achievements": achievements,
+	})
+	if err != nil {
+		return err
+	}
+
+	if resp["code"].(float64) != 0 {
+		return fmt.Errorf("保存成就数据失败: %v", resp["msg"])
 	}
 
 	return nil

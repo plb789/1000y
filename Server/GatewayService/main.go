@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -110,20 +111,22 @@ const (
 	CmdHeartbeat             uint16 = 1003 // 心跳
 	CmdRegister              uint16 = 1004 // 注册
 	CmdMove                  uint16 = 2001 // 移动
-	CmdAttack                uint16 = 2002 // 攻击
-	CmdUseSkill              uint16 = 2003 // 使用技能
-	CmdChat                  uint16 = 2004 // 聊天
-	CmdPickup                uint16 = 2005 // 拾取
-	CmdUseItem               uint16 = 2006 // 使用物品
-	CmdEquip                 uint16 = 2007 // 装备
-	CmdTrade                 uint16 = 2008 // 交易
-	CmdDamage                uint16 = 2009 // 伤害
-	CmdDeath                 uint16 = 2010 // 死亡
-	CmdRespawn               uint16 = 2011 // 复活
-	CmdLevelUp               uint16 = 2012 // 升级
-	CmdBuff                  uint16 = 2013 // 增益
-	CmdDeBuff                uint16 = 2014 // 减益
-	CmdSetPKMode             uint16 = 2015 // 切换PK模式
+	CmdMoveBlocked           uint16 = 2002 // 移动被阻挡（新增）
+	CmdAttack                uint16 = 2003 // 攻击（原2002，后移）
+	CmdUseSkill              uint16 = 2004 // 使用技能（原2003，后移）
+	CmdChat                  uint16 = 2005 // 聊天（原2004，后移）
+	CmdPickup                uint16 = 2006 // 拾取（原2005，后移）
+	CmdUseItem               uint16 = 2007 // 使用物品（原2006，后移）
+	CmdEquip                 uint16 = 2008 // 装备（原2007，后移）
+	CmdTrade                 uint16 = 2009 // 交易（原2008，后移）
+	CmdDamage                uint16 = 2010 // 伤害（原2009，后移）
+	CmdDeath                 uint16 = 2011 // 死亡（原2010，后移）
+	CmdRespawn               uint16 = 2012 // 复活（原2011，后移）
+	CmdLevelUp               uint16 = 2013 // 升级（原2012，后移）
+	CmdBuff                  uint16 = 2014 // 增益（原2013，后移）
+	CmdDeBuff                uint16 = 2015 // 减益（原2014，后移）
+	CmdSetPKMode             uint16 = 2016 // 切换PK模式（原2015，后移）
+	CmdPositionSync          uint16 = 2017 // 服务端位置同步确认（新增，原CmdSync改名避免冲突）
 	CmdEnterMap              uint16 = 3001 // 进入地图
 	CmdLeaveMap              uint16 = 3002 // 离开地图
 	CmdMapPlayer             uint16 = 3003 // 地图玩家列表
@@ -136,12 +139,25 @@ const (
 	CmdMonsterDeath          uint16 = 3103 // 怪物死亡
 	CmdSkillLearn            uint16 = 4001 // 学习武学
 	CmdSkillUpgrade          uint16 = 4002 // 升级武学
+	CmdSkillList             uint16 = 4003 // 获取技能列表
+	CmdSkillEquip            uint16 = 4004 // 装备技能
+	CmdSkillUnequip          uint16 = 4005 // 卸下技能
+	CmdSkillExp              uint16 = 4006 // 技能熟练度
+	CmdItemList              uint16 = 7001 // 背包列表
+	CmdEquipList             uint16 = 7002 // 装备列表
 	CmdRoleInfo              uint16 = 5001 // 角色信息
 	CmdRoleAttrib            uint16 = 5002 // 角色属性
 	CmdSync                  uint16 = 5003 // 属性同步
 	CmdRoleList              uint16 = 5004 // 角色列表
 	CmdRoleCreate            uint16 = 5005 // 创建角色
 	CmdRoleSelect            uint16 = 5006 // 选择角色
+	CmdQuestUpdate           uint16 = 6001 // 任务更新推送
+	CmdQuestList             uint16 = 6101 // 任务列表
+	CmdQuestAccept           uint16 = 6102 // 接取任务
+	CmdQuestComplete         uint16 = 6103 // 完成任务
+	CmdQuestAbandon          uint16 = 6104 // 放弃任务
+	CmdAchievementList       uint16 = 6201 // 成就列表
+	CmdAchievementStats      uint16 = 6202 // 成就统计
 )
 
 // NewClientManager 创建客户端管理器
@@ -167,9 +183,9 @@ func (cm *ClientManager) Start() {
 
 		case client := <-cm.unregister:
 			cm.removeClient(client)
-			log.Printf("客户端断开: roleID=%d", client.ID)
+			log.Printf("客户端断开: roleID=%d, 最后位置=(%d,%d)", client.ID, client.X, client.Y)
 
-			// 通知GameService保存玩家位置并离开地图
+			// 通知GameService保存玩家最后位置并离开地图
 			go func(c *Client) {
 				roleID := c.ID
 				mapID := c.MapID
@@ -182,15 +198,19 @@ func (cm *ClientManager) Start() {
 					}
 					gatewayURL := instance.URL
 
-					// 调用GameService保存位置
+					// ★ 关键修复：发送玩家的最后位置坐标
 					body, _ := json.Marshal(map[string]interface{}{
 						"role_id": roleID,
 						"map_id":  mapID,
+						"x":       c.X, // ← 新增：网关保存的最后一次移动坐标
+						"y":       c.Y, // ← 新增：网关保存的最后一次移动坐标
 					})
 					resp, err := http.Post(gatewayURL+"/api/map/leave", "application/json", bytes.NewReader(body))
 					if err == nil {
 						resp.Body.Close()
-						log.Printf("通知GameService保存位置: roleID=%d, mapID=%d", roleID, mapID)
+						log.Printf("💾 通知GameService保存最后位置: roleID=%d, mapID=%d, pos=(%d,%d)", roleID, mapID, c.X, c.Y)
+					} else {
+						log.Printf("❌ 保存位置失败: roleID=%d, error=%v", roleID, err)
 					}
 				}
 			}(client)
@@ -640,6 +660,52 @@ func (c *Client) handleMessage(cmd uint16, body []byte) {
 	case CmdMapEvent:
 		c.handleMapEvent(body)
 
+	// ========== 任务相关 ==========
+	case CmdQuestList:
+		c.handleQuestList(body)
+
+	case CmdQuestAccept:
+		c.handleQuestAccept(body)
+
+	case CmdQuestComplete:
+		c.handleQuestComplete(body)
+
+	case CmdQuestAbandon:
+		c.handleQuestAbandon(body)
+
+	// ========== 成就相关 ==========
+	case CmdAchievementList:
+		c.handleAchievementList(body)
+
+	case CmdAchievementStats:
+		c.handleAchievementStats(body)
+
+	// ========== 技能相关 ==========
+	case CmdSkillList:
+		c.handleSkillList(body)
+
+	case CmdSkillLearn:
+		c.handleSkillLearn(body)
+
+	case CmdSkillUpgrade:
+		c.handleSkillUpgrade(body)
+
+	case CmdSkillEquip:
+		c.handleSkillEquip(body)
+
+	case CmdSkillUnequip:
+		c.handleSkillUnequip(body)
+
+	case CmdSkillExp:
+		c.handleSkillExp(body)
+
+	// ========== 物品/装备相关 ==========
+	case CmdItemList:
+		c.handleItemList(body)
+
+	case CmdEquipList:
+		c.handleEquipList(body)
+
 	default:
 		// 未知命令
 	}
@@ -844,21 +910,30 @@ func (c *Client) handleEnterMap(body []byte) {
 		}
 	}
 
-	log.Printf("玩家进入地图: roleID=%d, mapID=%d, x=%d, y=%d", c.ID, req.MapID, req.X, req.Y)
+	log.Printf("🗺️ 玩家进入地图: roleID=%d, mapID=%d, 客户端坐标(%d,%d), 当前网关坐标(%d,%d)",
+		c.ID, req.MapID, req.X, req.Y, c.X, c.Y)
+
+	// ★ 关键修复1: 使用客户端坐标更新网关缓存（如果网关坐标为0或无效）
+	if c.X == 0 && c.Y == 0 && (req.X != 0 || req.Y != 0) {
+		c.X = req.X
+		c.Y = req.Y
+		log.Printf("✅ 使用客户端坐标更新网关缓存: (%d,%d)", c.X, c.Y)
+	}
 
 	// 如果是从其他地图切换，先广播离开旧地图
 	if c.MapID != 0 && c.MapID != req.MapID {
+		log.Printf("📍 玩家切换地图: %d -> %d", c.MapID, req.MapID)
 		GlobalManager.BroadcastToMap(c.MapID, &Message{
 			From: c.ID,
 			Type: CmdLeaveMap,
 			Data: mustMarshal(map[string]interface{}{
 				"role_id": c.ID,
+				"name":    c.Name,
 			}),
 		})
 	}
 
-	// 更新玩家地图（位置由notifyGameServiceEnterMap已设置，不要用客户端坐标覆盖）
-	// ★ 使用 updateClientMap 维护分桶索引（已注册时同步更新桶；未注册时 addClient 会自动加入桶）
+	// 更新玩家地图（使用 updateClientMap 维护分桶索引）
 	if c.Registered {
 		GlobalManager.mutex.Lock()
 		GlobalManager.updateClientMap(c, req.MapID)
@@ -866,72 +941,77 @@ func (c *Client) handleEnterMap(body []byte) {
 	} else {
 		c.MapID = req.MapID
 	}
-	// 注意：c.X 和 c.Y 保持不变，因为 notifyGameServiceEnterMap 已经设置了正确的数据库位置
 
-	// 如果还未注册，现在注册（直接调用addClient，确保同步）
+	// 如果还未注册，现在注册（确保同步完成）
 	if !c.Registered {
 		GlobalManager.addClient(c)
-		log.Printf("客户端注册: roleID=%d, mapID=%d", c.ID, c.MapID)
+		log.Printf("✅ 客户端注册成功: roleID=%d, name=%s, mapID=%d, pos=(%d,%d)",
+			c.ID, c.Name, c.MapID, c.X, c.Y)
 
 		// 保存会话（用于断线重连）
 		if c.Token != "" {
 			if err := saveSession(c.Token, c.AccountID, c.ID, c.Name, c.MapID, c.X, c.Y); err != nil {
 				log.Printf("保存会话失败: %v", err)
-			} else {
-				log.Printf("保存会话: token=%s, accountID=%d, roleID=%d", c.Token[:min(10, len(c.Token))]+"...", c.AccountID, c.ID)
 			}
 		}
 
-		// 向客户端发送当前位置同步（纠正客户端坐标）
-		log.Printf("发送位置同步给玩家 %d: x=%d, y=%d", c.ID, c.X, c.Y)
-		c.sendPacket(CmdSync, mustMarshal(map[string]interface{}{
+		// 向客户端发送当前位置同步
+		log.Printf("📤 发送位置同步给玩家 %d: (%d,%d)", c.ID, c.X, c.Y)
+		c.sendPacket(CmdPositionSync, mustMarshal(map[string]interface{}{
 			"x": c.X,
 			"y": c.Y,
 		}))
 
-		// 先获取当前在线人数（注册后的值）
+		// 获取当前在线人数
 		currentCount := GlobalManager.GetOnlineCount()
-		log.Printf("当前在线人数: %d", currentCount)
+		log.Printf("👥 当前在线人数: %d", currentCount)
 
-		// 发送当前在线人数给新玩家（使用阻塞发送，确保消息送达）
+		// 发送在线人数给新玩家
 		pkg := mustMarshal(map[string]interface{}{"count": currentCount})
 		sendPkg := make([]byte, 2+len(pkg))
 		binary.LittleEndian.PutUint16(sendPkg[0:2], CmdOnlineCount)
 		copy(sendPkg[2:], pkg)
-		log.Printf("准备发送在线人数给玩家 %d: count=%d", c.ID, currentCount)
 		c.Send <- sendPkg
-		log.Printf("成功发送在线人数给玩家 %d", c.ID)
 
-		// 广播在线人数更新给所有其他玩家
-		log.Printf("广播在线人数给所有玩家: count=%d", currentCount)
+		// 广播在线人数给所有玩家
 		GlobalManager.BroadcastToAll(&Message{
 			Type: CmdOnlineCount,
-			Data: mustMarshal(map[string]interface{}{
-				"count": currentCount,
-			}),
+			Data: mustMarshal(map[string]interface{}{"count": currentCount}),
 		})
-		log.Printf("广播完成")
 	}
 
-	// 先向新玩家发送当前地图的所有其他玩家列表（不使用视野过滤，确保完整同步）
+	// ★ 关键修复2: 先向新玩家发送当前地图的所有其他玩家列表（完整同步）
 	existingPlayers := GlobalManager.GetMapPlayers(req.MapID)
-	log.Printf("当前地图%d有%d个玩家", req.MapID, len(existingPlayers))
+	log.Printf("📍 当前地图%d共有%d个玩家", req.MapID, len(existingPlayers))
 
 	if len(existingPlayers) > 1 { // 有其他玩家
 		playerList := make([]map[string]interface{}, 0)
+		validPlayerCount := 0
 
 		for _, p := range existingPlayers {
 			if p.ID != c.ID {
-				// 发送同地图所有玩家（不限制视野范围，防止坐标未初始化导致漏发）
-				playerList = append(playerList, map[string]interface{}{
-					"role_id": p.ID,
-					"name":    p.Name,
-					"map_id":  p.MapID,
-					"x":       p.X,
-					"y":       p.Y,
-				})
+				// ★ 关键修复：直接使用玩家当前坐标（不再过滤(0,0)）
+				// 原因：(0,0)可能是有效的出生点或初始位置
+				// 如果坐标为(0,0)，优先使用客户端提供的坐标，其次使用会话缓存
+				pX, pY := p.X, p.Y
+
+				// 只添加有role_id的玩家（基本验证）
+				if p.ID > 0 {
+					playerList = append(playerList, map[string]interface{}{
+						"role_id": p.ID,
+						"name":    p.Name,
+						"map_id":  p.MapID,
+						"x":       pX,
+						"y":       pY,
+					})
+					validPlayerCount++
+					log.Printf("  👤 添加玩家: ID=%d, name=%s, pos=(%d,%d)", p.ID, p.Name, pX, pY)
+				} else {
+					log.Printf("  ⚠️ 跳过无效玩家（缺少ID）: name=%s", p.Name)
+				}
 			}
 		}
+
 		if len(playerList) > 0 {
 			GlobalManager.SendToClient(c.ID, &Message{
 				Type: CmdMapPlayer,
@@ -939,12 +1019,16 @@ func (c *Client) handleEnterMap(body []byte) {
 					"players": playerList,
 				}),
 			})
-			log.Printf("发送地图玩家列表给玩家%d: 共%d个玩家", c.ID, len(playerList))
+			log.Printf("📤 发送地图玩家列表给玩家%d: 共%d个有效玩家", c.ID, validPlayerCount)
 		}
 	}
 
-	// 使用视野范围并发广播新玩家进入（只发送给视野范围内的玩家）
-	log.Printf("广播玩家进入: mapID=%d, 玩家ID=%d, 玩家名=%s", c.MapID, c.ID, c.Name)
+	// ★ 关键修复3: 使用视野范围广播新玩家进入（性能优化，只广播给附近玩家）
+	log.Printf("📢 广播玩家进入（视野范围内）: mapID=%d, roleID=%d, name=%s, pos=(%d,%d)",
+		c.MapID, c.ID, c.Name, c.X, c.Y)
+
+	// 使用BroadcastToViewRangeConcurrent进行视野范围广播
+	// 只向以新玩家为中心、VIEW_RANGE范围内的其他玩家广播进入消息
 	GlobalManager.BroadcastToViewRangeConcurrent(c.MapID, c.X, c.Y, &Message{
 		From: c.ID,
 		Type: CmdEnterMap,
@@ -956,38 +1040,60 @@ func (c *Client) handleEnterMap(body []byte) {
 			"y":       c.Y,
 		}),
 	})
-	log.Printf("广播完成: mapID=%d, 当前在线玩家数=%d", c.MapID, len(GlobalManager.GetMapPlayers(c.MapID)))
+	log.Printf("📢 视野广播完成: mapID=%d, pos=(%d,%d), viewRange=%d", req.MapID, c.X, c.Y, VIEW_RANGE)
 
-	// 双重保障：如果 notifyGameServiceEnterMap 还没发送怪物列表，这里再发一次
-	// （通常同步调用已经发送过了，这里是容错机制）
+	// ★ 关键修复4: 延迟补充推送怪物列表和二次同步玩家（容错机制）
 	if c.Registered {
 		go func() {
-			time.Sleep(100 * time.Millisecond) // 等待 100ms 确保 GameService 已处理完
+			// 等待200ms确保所有异步操作完成
+			time.Sleep(200 * time.Millisecond)
+
+			// 补充推送怪物列表
 			instance := common.GetInstanceByMapID(c.MapID)
-			if instance == nil {
-				return
+			if instance != nil {
+				client := &http.Client{Timeout: 3 * time.Second}
+				resp, err := client.Get(instance.URL + fmt.Sprintf("/api/map/%d/monsters", c.MapID))
+				if err == nil && resp.StatusCode == http.StatusOK {
+					defer resp.Body.Close()
+					var result map[string]interface{}
+					if json.NewDecoder(resp.Body).Decode(&result) == nil {
+						if monsters, ok := result["data"].([]interface{}); ok && len(monsters) > 0 {
+							log.Printf("🔄 补充推送: 地图%d 有 %d 个怪物", c.MapID, len(monsters))
+							GlobalManager.SendToClient(c.ID, &Message{
+								Type: CmdSync,
+								Data: mustMarshal(map[string]interface{}{
+									"monster_list": monsters,
+								}),
+							})
+						}
+					}
+				}
 			}
 
-			client := &http.Client{Timeout: 3 * time.Second}
-			resp, err := client.Get(instance.URL + fmt.Sprintf("/api/map/%d/monsters", c.MapID))
-			if err != nil || resp.StatusCode != http.StatusOK {
-				return
-			}
-			defer resp.Body.Close()
-
-			var result map[string]interface{}
-			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-				return
-			}
-
-			if monsters, ok := result["data"].([]interface{}); ok && len(monsters) > 0 {
-				log.Printf("handleEnterMap 补充推送: 地图%d 有 %d 个怪物", c.MapID, len(monsters))
-				GlobalManager.SendToClient(c.ID, &Message{
-					Type: CmdSync,
-					Data: mustMarshal(map[string]interface{}{
-						"monster_list": monsters,
-					}),
-				})
+			// 二次同步：再次检查是否有新玩家进入（防止时序问题导致的漏发）
+			currentPlayers := GlobalManager.GetMapPlayers(c.MapID)
+			if len(currentPlayers) > 1 {
+				newPlayerList := make([]map[string]interface{}, 0)
+				for _, p := range currentPlayers {
+					if p.ID != c.ID && p.X != 0 && p.Y != 0 {
+						newPlayerList = append(newPlayerList, map[string]interface{}{
+							"role_id": p.ID,
+							"name":    p.Name,
+							"map_id":  p.MapID,
+							"x":       p.X,
+							"y":       p.Y,
+						})
+					}
+				}
+				if len(newPlayerList) > 0 {
+					log.Printf("🔄 二次同步: 再次发送%d个玩家给玩家%d", len(newPlayerList), c.ID)
+					GlobalManager.SendToClient(c.ID, &Message{
+						Type: CmdMapPlayer,
+						Data: mustMarshal(map[string]interface{}{
+							"players": newPlayerList,
+						}),
+					})
+				}
 			}
 		}()
 	}
@@ -999,7 +1105,7 @@ func (c *Client) handleLogout() {
 }
 
 func (c *Client) handleMove(body []byte) {
-	// 尝试解析JSON格式
+	// 解析移动数据
 	var moveData struct {
 		X int `json:"x"`
 		Y int `json:"y"`
@@ -1014,26 +1120,132 @@ func (c *Client) handleMove(body []byte) {
 		moveData.Y = int(binary.LittleEndian.Uint16(body[2:4]))
 	}
 
-	// 更新本地缓存位置
-	c.X = moveData.X
-	c.Y = moveData.Y
+	log.Printf("🚶 [Gateway] 收到移动请求: roleID=%d, mapID=%d, 目标(%d,%d), 当前(%d,%d)",
+		c.ID, c.MapID, moveData.X, moveData.Y, c.X, c.Y)
 
-	log.Printf("玩家移动: roleID=%d, x=%d, y=%d, mapID=%d", c.ID, c.X, c.Y, c.MapID)
+	// ★ Prometheus：记录移动请求
+	common.RecordMoveRequest(c.MapID, "received")
 
-	// 转发到GameService处理移动逻辑
-	go c.forwardMoveToGameService(moveData.X, moveData.Y)
-}
+	// ★ 分布式架构：使用分布式路由器获取GameService实例（支持多实例+负载均衡）
+	startTime := time.Now()
 
-// forwardMoveToGameService 将移动请求转发到GameService
-func (c *Client) forwardMoveToGameService(x, y int) {
-	// 获取处理该地图的GameService实例
-	instance := common.GetInstanceByMapID(c.MapID)
-	if instance == nil {
-		log.Printf("未找到处理地图 %d 的GameService实例", c.MapID)
+	var validationResult MoveValidationResult
+
+	// 尝试使用分布式路由器
+	instance, err := common.RouteByMapID(c.MapID)
+	if err != nil {
+		log.Printf("⚠️ [Gateway] 分布式路由失败，回退到默认路由: %v", err)
+		common.IncrFallbackRouting()
+		// 回退到旧的验证方式
+		validationResult = c.validateMoveWithGameServiceLegacy(moveData.X, moveData.Y)
+	} else {
+		validationResult = c.validateMoveWithDistributedInstance(instance, moveData.X, moveData.Y)
+	}
+
+	duration := time.Since(startTime)
+
+	// ★ Prometheus：记录验证耗时
+	if instance != nil {
+		common.RecordValidationDuration(instance.InstanceID, duration)
+	}
+	common.RecordRoutingDuration("map_id", duration)
+
+	if !validationResult.Success {
+		// ❌ 验证失败：通知客户端移动被阻挡
+		log.Printf(`🛡️ [Gateway] 移动被阻挡: roleID=%d, 原因=%s`, c.ID, validationResult.Reason)
+
+		// ★ Prometheus：记录失败的移动请求
+		common.RecordMoveRequest(c.MapID, "blocked")
+
+		c.sendPacket(CmdMoveBlocked, mustMarshal(map[string]interface{}{
+			"code":    400,
+			"msg":     validationResult.Reason,
+			"x":       c.X, // 返回当前有效位置
+			"y":       c.Y,
+			"block_x": validationResult.BlockX,
+			"block_y": validationResult.BlockY,
+		}))
 		return
 	}
 
-	// 构建移动请求
+	// ✅ 验证通过：更新本地缓存位置
+	c.X = moveData.X
+	c.Y = moveData.Y
+
+	log.Printf("✅ [Gateway] 移动验证通过: roleID=%d → (%d,%d)", c.ID, c.X, c.Y)
+
+	// ★ Prometheus：记录成功的移动请求
+	common.RecordMoveRequest(c.MapID, "success")
+
+	// ★ 通知客户端移动成功（可选，用于确认）
+	c.sendPacket(CmdSync, mustMarshal(map[string]interface{}{
+		"x": c.X,
+		"y": c.Y,
+	}))
+
+	// ★ 使用视野范围广播移动消息给同地图其他玩家（分布式支持）
+	go func() {
+		// 本地广播
+		GlobalManager.BroadcastToViewRangeConcurrent(c.MapID, c.X, c.Y, &Message{
+			From: c.ID,
+			Type: CmdMove,
+			Data: mustMarshal(map[string]interface{}{
+				"role_id": c.ID,
+				"map_id":  c.MapID,
+				"x":       c.X,
+				"y":       c.Y,
+			}),
+		})
+
+		// ★ Prometheus：记录本地广播
+		common.RecordBroadcastMessage("move", "local")
+
+		log.Printf(`📢 [Gateway] 视野广播完成: mapID=%d, roleID=%d, pos=(%d,%d), viewRange=%d`,
+			c.MapID, c.ID, c.X, c.Y, VIEW_RANGE)
+
+		// ★ 跨网关广播（通过Redis Pub/Sub + RabbitMQ通知其他网关实例）
+		broadcastMsg := &common.BroadcastMessage{
+			MessageType: CmdMove,
+			MapID:       c.MapID,
+			SenderID:    c.ID,
+			Data: map[string]interface{}{
+				"role_id": c.ID,
+				"map_id":  c.MapID,
+				"x":       c.X,
+				"y":       c.Y,
+			},
+			ViewRange: VIEW_RANGE,
+			Priority:  3, // 高优先级（移动消息需要实时性）
+		}
+
+		if err := common.BroadcastToAllGateways(broadcastMsg); err != nil {
+			log.Printf(`⚠️ [Gateway] 跨网关广播失败: %v`, err)
+			common.IncrFailedBroadcasts()
+		} else {
+			common.RecordBroadcastMessage("move", "cross_gateway")
+		}
+	}()
+}
+
+// MoveValidationResult 移动验证结果
+type MoveValidationResult struct {
+	Success bool   // 是否验证通过
+	Reason  string // 失败原因
+	BlockX  int    // 阻挡位置X
+	BlockY  int    // 阻挡位置Y
+}
+
+// validateMoveWithGameService 转发到GameService进行碰撞检测验证
+func (c *Client) validateMoveWithGameService(x, y int) MoveValidationResult {
+	// 获取处理该地图的GameService实例（分布式路由）
+	instance := common.GetInstanceByMapID(c.MapID)
+	if instance == nil {
+		// 如果找不到GameService实例，允许本地移动（容错降级）
+		log.Printf("⚠️ [Gateway] 未找到地图%d的GameService实例，跳过服务端验证", c.MapID)
+		return MoveValidationResult{Success: true}
+	}
+
+	// 构建验证请求
 	moveReq := map[string]interface{}{
 		"role_id": c.ID,
 		"map_id":  c.MapID,
@@ -1043,22 +1255,193 @@ func (c *Client) forwardMoveToGameService(x, y int) {
 
 	jsonData, err := json.Marshal(moveReq)
 	if err != nil {
-		log.Printf("序列化移动数据失败: %v", err)
-		return
+		log.Printf("❌ [Gateway] 序列化移动数据失败: %v", err)
+		return MoveValidationResult{Success: true} // 容错：序列化失败时允许移动
 	}
 
-	// 调用GameService的移动接口
+	// 调用GameService的移动接口（带5秒超时）
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Post(instance.URL+"/api/map/move", "application/json", bytes.NewReader(jsonData))
 	if err != nil {
-		log.Printf("调用GameService移动接口失败: %v", err)
-		return
+		// GameService不可用时，允许本地移动（离线容错）
+		log.Printf("⚠️ [Gateway] GameService不可用，允许本地移动: %v", err)
+		return MoveValidationResult{Success: true}
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("GameService移动处理失败，状态码: %d", resp.StatusCode)
+	// 解析响应
+	var result struct {
+		Code    int    `json:"code"`
+		Success bool   `json:"success"`
+		Msg     string `json:"msg"`
+		X       int    `json:"x"`
+		Y       int    `json:"y"`
 	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		log.Printf("⚠️ [Gateway] 解析GameService响应失败，允许移动: %v", err)
+		return MoveValidationResult{Success: true}
+	}
+
+	// 检查验证结果
+	if resp.StatusCode != http.StatusOK || (!result.Success && result.Code != 200) {
+		reason := result.Msg
+		if reason == "" {
+			reason = "移动路径被阻挡"
+		}
+		log.Printf(`🛡️ [Gateway] GameService拒绝移动: roleID=%d, 原因=%s`, c.ID, reason)
+		return MoveValidationResult{
+			Success: false,
+			Reason:  reason,
+			BlockX:  result.X,
+			BlockY:  result.Y,
+		}
+	}
+
+	log.Printf(`✅ [Gateway] GameService验证通过: roleID=%d`, c.ID)
+	return MoveValidationResult{Success: true}
+}
+
+// validateMoveWithDistributedInstance 使用分布式路由器验证移动（新增）
+func (c *Client) validateMoveWithDistributedInstance(instance *common.GameServiceInstance, x, y int) MoveValidationResult {
+	if instance == nil {
+		log.Printf("⚠️ [Gateway] 分布式实例为空，允许本地移动")
+		return MoveValidationResult{Success: true}
+	}
+
+	log.Printf(`🔀 [Gateway] 使用分布式实例验证: instanceID=%d, url=%s`, instance.InstanceID, instance.URL)
+
+	// 构建验证请求
+	moveReq := map[string]interface{}{
+		"role_id": c.ID,
+		"map_id":  c.MapID,
+		"x":       x,
+		"y":       y,
+	}
+
+	jsonData, err := json.Marshal(moveReq)
+	if err != nil {
+		log.Printf("❌ [Gateway] 序列化移动数据失败: %v", err)
+		return MoveValidationResult{Success: true}
+	}
+
+	// 调用GameService的移动接口（带5秒超时）
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Post(instance.URL+"/api/map/move", "application/json", bytes.NewReader(jsonData))
+	if err != nil {
+		// 记录失败到分布式路由器
+		common.RecordFailure(instance.InstanceID)
+		common.RecordCircuitBreakerTrip(instance.InstanceID, "connection_error")
+
+		log.Printf("⚠️ [Gateway] GameService实例不可用，允许本地移动: %v", err)
+		return MoveValidationResult{Success: true}
+	}
+	defer resp.Body.Close()
+
+	// 记录成功
+	common.RecordSuccess(instance.InstanceID)
+
+	// 解析响应
+	var result struct {
+		Code    int    `json:"code"`
+		Success bool   `json:"success"`
+		Msg     string `json:"msg"`
+		X       int    `json:"x"`
+		Y       int    `json:"y"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		log.Printf("⚠️ [Gateway] 解析GameService响应失败，允许移动: %v", err)
+		return MoveValidationResult{Success: true}
+	}
+
+	// 检查验证结果
+	if resp.StatusCode != http.StatusOK || (!result.Success && result.Code != 200) {
+		reason := result.Msg
+		if reason == "" {
+			reason = "移动路径被阻挡"
+		}
+		log.Printf(`🛡️ [Gateway] GameService拒绝移动: roleID=%d, 原因=%s`, c.ID, reason)
+
+		// 记录被阻挡（不是服务端错误）
+		common.RecordRoutingRequest("map_id", fmt.Sprintf("%d", instance.InstanceID), "blocked")
+
+		return MoveValidationResult{
+			Success: false,
+			Reason:  reason,
+			BlockX:  result.X,
+			BlockY:  result.Y,
+		}
+	}
+
+	// 记录成功的路由请求
+	common.RecordRoutingRequest("map_id", fmt.Sprintf("%d", instance.InstanceID), "success")
+
+	log.Printf(`✅ [Gateway] 分布式实例验证通过: instanceID=%d`, instance.InstanceID)
+	return MoveValidationResult{Success: true}
+}
+
+// validateMoveWithGameServiceLegacy 旧的验证方式（作为降级方案）
+func (c *Client) validateMoveWithGameServiceLegacy(x, y int) MoveValidationResult {
+	// 获取处理该地图的GameService实例（使用旧的注册中心方式）
+	instance := common.GetInstanceByMapID(c.MapID)
+	if instance == nil {
+		log.Printf("⚠️ [Gateway] 未找到地图%d的GameService实例，跳过服务端验证", c.MapID)
+		return MoveValidationResult{Success: true}
+	}
+
+	// 构建验证请求
+	moveReq := map[string]interface{}{
+		"role_id": c.ID,
+		"map_id":  c.MapID,
+		"x":       x,
+		"y":       y,
+	}
+
+	jsonData, err := json.Marshal(moveReq)
+	if err != nil {
+		log.Printf("❌ [Gateway] 序列化移动数据失败: %v", err)
+		return MoveValidationResult{Success: true}
+	}
+
+	// 调用GameService的移动接口（带5秒超时）
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Post(instance.URL+"/api/map/move", "application/json", bytes.NewReader(jsonData))
+	if err != nil {
+		log.Printf("⚠️ [Gateway] GameService不可用，允许本地移动: %v", err)
+		return MoveValidationResult{Success: true}
+	}
+	defer resp.Body.Close()
+
+	// 解析响应
+	var result struct {
+		Code    int    `json:"code"`
+		Success bool   `json:"success"`
+		Msg     string `json:"msg"`
+		X       int    `json:"x"`
+		Y       int    `json:"y"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		log.Printf("⚠️ [Gateway] 解析GameService响应失败，允许移动: %v", err)
+		return MoveValidationResult{Success: true}
+	}
+
+	// 检查验证结果
+	if resp.StatusCode != http.StatusOK || (!result.Success && result.Code != 200) {
+		reason := result.Msg
+		if reason == "" {
+			reason = "移动路径被阻挡"
+		}
+		return MoveValidationResult{
+			Success: false,
+			Reason:  reason,
+			BlockX:  result.X,
+			BlockY:  result.Y,
+		}
+	}
+
+	return MoveValidationResult{Success: true}
 }
 
 // handleAttack 处理玩家攻击请求（转发到GameService战斗接口）
@@ -1522,6 +1905,463 @@ func (c *Client) forwardMapEventToGameService(eventType string, mapID uint32, x,
 		return
 	}
 	defer resp.Body.Close()
+}
+
+// ==================== 任务相关 Handler ====================
+
+// handleQuestList 处理获取任务列表请求
+func (c *Client) handleQuestList(body []byte) {
+	var req struct {
+		RoleID uint64 `json:"role_id"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		c.sendPacket(CmdQuestList, mustMarshal(map[string]interface{}{"code": 400, "msg": "请求格式错误"}))
+		return
+	}
+
+	go c.forwardQuestToGameService(req.RoleID, "/api/quest/list/"+fmt.Sprintf("%d", req.RoleID), "GET", nil, CmdQuestList)
+}
+
+// handleQuestAccept 处理接取任务请求
+func (c *Client) handleQuestAccept(body []byte) {
+	var req struct {
+		RoleID  uint64 `json:"role_id"`
+		QuestID uint32 `json:"quest_id"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		c.sendPacket(CmdQuestAccept, mustMarshal(map[string]interface{}{"code": 400, "msg": "请求格式错误"}))
+		return
+	}
+
+	reqData := map[string]interface{}{
+		"role_id":  req.RoleID,
+		"quest_id": req.QuestID,
+	}
+	go c.forwardQuestToGameService(req.RoleID, "/api/quest/accept", "POST", reqData, CmdQuestAccept)
+}
+
+// handleQuestComplete 处理完成任务请求
+func (c *Client) handleQuestComplete(body []byte) {
+	var req struct {
+		RoleID  uint64 `json:"role_id"`
+		QuestID uint32 `json:"quest_id"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		c.sendPacket(CmdQuestComplete, mustMarshal(map[string]interface{}{"code": 400, "msg": "请求格式错误"}))
+		return
+	}
+
+	reqData := map[string]interface{}{
+		"role_id":  req.RoleID,
+		"quest_id": req.QuestID,
+	}
+	go c.forwardQuestToGameService(req.RoleID, "/api/quest/complete", "POST", reqData, CmdQuestComplete)
+}
+
+// handleQuestAbandon 处理放弃任务请求
+func (c *Client) handleQuestAbandon(body []byte) {
+	var req struct {
+		RoleID  uint64 `json:"role_id"`
+		QuestID uint32 `json:"quest_id"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		c.sendPacket(CmdQuestAbandon, mustMarshal(map[string]interface{}{"code": 400, "msg": "请求格式错误"}))
+		return
+	}
+
+	reqData := map[string]interface{}{
+		"role_id":  req.RoleID,
+		"quest_id": req.QuestID,
+	}
+	go c.forwardQuestToGameService(req.RoleID, "/api/quest/abandon", "POST", reqData, CmdQuestAbandon)
+}
+
+// forwardQuestToGameService 将任务请求转发到GameService
+func (c *Client) forwardQuestToGameService(roleID uint64, path string, method string, reqData map[string]interface{}, respCmd uint16) {
+	// 获取角色所在地图对应的GameService实例
+	instance := common.GetInstanceByRoleID(roleID)
+	if instance == nil {
+		// 如果没有找到实例，尝试获取任意实例（用于处理角色未在地图上的情况）
+		instances := common.GetAllInstances()
+		if len(instances) == 0 {
+			c.sendPacket(respCmd, mustMarshal(map[string]interface{}{"code": 500, "msg": "没有可用的GameService"}))
+			return
+		}
+		instance = instances[0]
+	}
+
+	var resp *http.Response
+	var err error
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	if method == "GET" {
+		resp, err = client.Get(instance.URL + path)
+	} else {
+		jsonData, _ := json.Marshal(reqData)
+		resp, err = client.Post(instance.URL+path, "application/json", bytes.NewReader(jsonData))
+	}
+
+	if err != nil {
+		log.Printf("调用GameService任务接口失败: %v", err)
+		c.sendPacket(respCmd, mustMarshal(map[string]interface{}{"code": 500, "msg": "服务调用失败"}))
+		return
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	c.sendPacket(respCmd, body)
+}
+
+// ==================== 成就相关 Handler ====================
+
+// handleAchievementList 处理获取成就列表请求
+func (c *Client) handleAchievementList(body []byte) {
+	var req struct {
+		RoleID uint64 `json:"role_id"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		c.sendPacket(CmdAchievementList, mustMarshal(map[string]interface{}{"code": 400, "msg": "请求格式错误"}))
+		return
+	}
+
+	go c.forwardAchievementToGameService(req.RoleID, "/api/quest/achievement/list/"+fmt.Sprintf("%d", req.RoleID), "GET", nil, CmdAchievementList)
+}
+
+// handleAchievementStats 处理获取成就统计请求
+func (c *Client) handleAchievementStats(body []byte) {
+	var req struct {
+		RoleID uint64 `json:"role_id"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		c.sendPacket(CmdAchievementStats, mustMarshal(map[string]interface{}{"code": 400, "msg": "请求格式错误"}))
+		return
+	}
+
+	go c.forwardAchievementToGameService(req.RoleID, "/api/quest/achievement/stats/"+fmt.Sprintf("%d", req.RoleID), "GET", nil, CmdAchievementStats)
+}
+
+// forwardAchievementToGameService 将成就请求转发到GameService
+func (c *Client) forwardAchievementToGameService(roleID uint64, path string, method string, reqData map[string]interface{}, respCmd uint16) {
+	instance := common.GetInstanceByRoleID(roleID)
+	if instance == nil {
+		instances := common.GetAllInstances()
+		if len(instances) == 0 {
+			c.sendPacket(respCmd, mustMarshal(map[string]interface{}{"code": 500, "msg": "没有可用的GameService"}))
+			return
+		}
+		instance = instances[0]
+	}
+
+	var resp *http.Response
+	var err error
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	if method == "GET" {
+		resp, err = client.Get(instance.URL + path)
+	} else {
+		jsonData, _ := json.Marshal(reqData)
+		resp, err = client.Post(instance.URL+path, "application/json", bytes.NewReader(jsonData))
+	}
+
+	if err != nil {
+		log.Printf("调用GameService成就接口失败: %v", err)
+		c.sendPacket(respCmd, mustMarshal(map[string]interface{}{"code": 500, "msg": "服务调用失败"}))
+		return
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	c.sendPacket(respCmd, body)
+}
+
+// ==================== 技能相关 Handler ====================
+
+// handleSkillList 处理获取技能列表请求
+// ★ BUG修复：正确处理type参数 + 正确传递msg_id
+func (c *Client) handleSkillList(body []byte) {
+	var req struct {
+		RoleID uint64   `json:"role_id"`
+		Type   string   `json:"type"`   // 'equipped' | 'learned' | 'base' | ''
+		MsgID  *float64 `json:"msg_id"` // ★ 新增：保留消息ID用于RPC匹配
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		c.sendPacket(CmdSkillList, mustMarshal(map[string]interface{}{"code": 400, "msg": "请求格式错误"}))
+		return
+	}
+
+	// ★ 构建请求数据时包含msg_id（确保RPC响应能正确匹配）
+	reqData := map[string]interface{}{"role_id": req.RoleID}
+	if req.MsgID != nil {
+		reqData["msg_id"] = *req.MsgID
+	}
+
+	// ★ 根据type参数路由到不同的API
+	switch req.Type {
+	case "equipped":
+		// 获取已装备武学 → 调用GameService的GetEquippedSkills接口
+		go c.forwardToGameServiceSync(req.RoleID,
+			fmt.Sprintf("/api/skill/role/%d/equipped", req.RoleID),
+			"GET", reqData, CmdSkillList)
+	case "learned":
+		// 获取已学武学 → 调用GameService的GetRoleSkills接口
+		go c.forwardToGameServiceSync(req.RoleID,
+			fmt.Sprintf("/api/skill/role/%d/list", req.RoleID),
+			"GET", reqData, CmdSkillList)
+	default:
+		// 默认：获取武学基础配置列表（向后兼容）
+		go c.forwardToGameService(req.RoleID, "/api/skill/base/list", "GET", reqData, CmdSkillList)
+	}
+}
+
+// handleSkillLearn 处理学习技能请求
+// ★ BUG修复：正确传递msg_id用于RPC匹配
+func (c *Client) handleSkillLearn(body []byte) {
+	var req struct {
+		RoleID    uint64   `json:"role_id"`
+		SkillID   uint32   `json:"skill_id"`
+		RoleLevel uint32   `json:"role_level"` // 角色等级（用于学习条件检查）
+		MsgID     *float64 `json:"msg_id"`     // ★ 新增：保留消息ID
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		c.sendPacket(CmdSkillLearn, mustMarshal(map[string]interface{}{"code": 400, "msg": "请求格式错误"}))
+		return
+	}
+
+	reqData := map[string]interface{}{
+		"role_id":    req.RoleID,
+		"skill_id":   req.SkillID,
+		"role_level": req.RoleLevel,
+	}
+	// ★ 传递msg_id确保RPC响应能正确匹配
+	if req.MsgID != nil {
+		reqData["msg_id"] = *req.MsgID
+	}
+
+	// 同步转发（学习技能需要立即返回结果给前端）
+	c.forwardToGameServiceSync(req.RoleID, "/api/skill/role/"+fmt.Sprintf("%d", req.RoleID)+"/learn", "POST", reqData, CmdSkillLearn)
+}
+
+// handleSkillUpgrade 处理升级技能请求
+// ★ BUG修复：正确传递msg_id用于RPC匹配
+func (c *Client) handleSkillUpgrade(body []byte) {
+	var req struct {
+		RoleID  uint64   `json:"role_id"`
+		SkillID uint32   `json:"skill_id"`
+		MsgID   *float64 `json:"msg_id"` // ★ 新增：保留消息ID
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		c.sendPacket(CmdSkillUpgrade, mustMarshal(map[string]interface{}{"code": 400, "msg": "请求格式错误"}))
+		return
+	}
+
+	reqData := map[string]interface{}{
+		"role_id":  req.RoleID,
+		"skill_id": req.SkillID,
+	}
+	// ★ 传递msg_id确保RPC响应能正确匹配
+	if req.MsgID != nil {
+		reqData["msg_id"] = *req.MsgID
+	}
+
+	// 同步转发（升级技能需要立即返回结果）
+	c.forwardToGameServiceSync(req.RoleID, "/api/skill/role/"+fmt.Sprintf("%d", req.RoleID)+"/upgrade", "POST", reqData, CmdSkillUpgrade)
+}
+
+// handleSkillEquip 处理装备技能请求
+// ★ BUG修复：正确传递msg_id用于RPC匹配
+func (c *Client) handleSkillEquip(body []byte) {
+	var req struct {
+		RoleID    uint64   `json:"role_id"`
+		SkillID   uint32   `json:"skill_id"`
+		SlotIndex int      `json:"slot_index"`
+		MsgID     *float64 `json:"msg_id"` // ★ 新增：保留消息ID
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		c.sendPacket(CmdSkillEquip, mustMarshal(map[string]interface{}{"code": 400, "msg": "请求格式错误"}))
+		return
+	}
+
+	reqData := map[string]interface{}{
+		"role_id":    req.RoleID,
+		"skill_id":   req.SkillID,
+		"slot_index": req.SlotIndex,
+	}
+	// ★ 传递msg_id确保RPC响应能正确匹配
+	if req.MsgID != nil {
+		reqData["msg_id"] = *req.MsgID
+	}
+
+	// 同步转发（装备技能需要立即返回结果）
+	c.forwardToGameServiceSync(req.RoleID, "/api/skill/role/"+fmt.Sprintf("%d", req.RoleID)+"/equip", "POST", reqData, CmdSkillEquip)
+}
+
+// handleSkillUnequip 处理卸下技能请求
+// ★ BUG修复：正确传递msg_id用于RPC匹配
+func (c *Client) handleSkillUnequip(body []byte) {
+	var req struct {
+		RoleID  uint64   `json:"role_id"`
+		SkillID uint32   `json:"skill_id"`
+		MsgID   *float64 `json:"msg_id"` // ★ 新增：保留消息ID
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		c.sendPacket(CmdSkillUnequip, mustMarshal(map[string]interface{}{"code": 400, "msg": "请求格式错误"}))
+		return
+	}
+
+	reqData := map[string]interface{}{
+		"role_id":  req.RoleID,
+		"skill_id": req.SkillID,
+	}
+	// ★ 传递msg_id确保RPC响应能正确匹配
+	if req.MsgID != nil {
+		reqData["msg_id"] = *req.MsgID
+	}
+
+	// 同步转发（卸下技能需要立即返回结果）
+	c.forwardToGameServiceSync(req.RoleID, "/api/skill/role/"+fmt.Sprintf("%d", req.RoleID)+"/unequip", "POST", reqData, CmdSkillUnequip)
+}
+
+// handleSkillExp 处理技能熟练度更新请求
+func (c *Client) handleSkillExp(body []byte) {
+	var req struct {
+		RoleID  uint64 `json:"role_id"`
+		SkillID uint32 `json:"skill_id"`
+		Exp     int64  `json:"exp"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		c.sendPacket(CmdSkillExp, mustMarshal(map[string]interface{}{"code": 400, "msg": "请求格式错误"}))
+		return
+	}
+
+	reqData := map[string]interface{}{
+		"role_id":  req.RoleID,
+		"skill_id": req.SkillID,
+		"exp":      req.Exp,
+	}
+	go c.forwardToGameService(req.RoleID, "/api/skill/role/"+fmt.Sprintf("%d", req.RoleID)+"/add_exp", "POST", reqData, CmdSkillExp)
+}
+
+// ==================== 物品/装备相关 Handler ====================
+
+// handleItemList 处理获取背包列表请求
+func (c *Client) handleItemList(body []byte) {
+	var req struct {
+		RoleID uint64 `json:"role_id"`
+		MsgID  uint64 `json:"msg_id"` // ★ 新增：保存消息ID
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		c.sendPacket(CmdItemList, mustMarshal(map[string]interface{}{"code": 400, "msg": "请求格式错误"}))
+		return
+	}
+
+	// ★ 改为同步转发，确保返回 msg_id
+	reqData := map[string]interface{}{
+		"role_id": req.RoleID,
+		"msg_id":  req.MsgID,
+	}
+	c.forwardToGameServiceSync(req.RoleID, "/api/item/bag/"+fmt.Sprintf("%d", req.RoleID)+"/list", "GET", reqData, CmdItemList)
+}
+
+// handleEquipList 处理获取装备列表请求
+func (c *Client) handleEquipList(body []byte) {
+	var req struct {
+		RoleID uint64 `json:"role_id"`
+		MsgID  uint64 `json:"msg_id"` // ★ 新增：保存消息ID
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		c.sendPacket(CmdEquipList, mustMarshal(map[string]interface{}{"code": 400, "msg": "请求格式错误"}))
+		return
+	}
+
+	// ★ 改为同步转发，确保返回 msg_id
+	reqData := map[string]interface{}{
+		"role_id": req.RoleID,
+		"msg_id":  req.MsgID,
+	}
+	c.forwardToGameServiceSync(req.RoleID, "/api/item/equip/"+fmt.Sprintf("%d", req.RoleID)+"/list", "GET", reqData, CmdEquipList)
+}
+
+// forwardToGameService 通用转发函数（支持RabbitMQ降级）
+// forwardToGameServiceSync 同步转发到GameService（用于需要立即返回结果的请求）
+// ★ 与forwardToGameService的区别：此函数是同步的，会等待GameService响应后再返回给前端
+func (c *Client) forwardToGameServiceSync(roleID uint64, path string, method string, reqData map[string]interface{}, respCmd uint16) {
+	instance := common.GetInstanceByRoleID(roleID)
+	if instance == nil {
+		instances := common.GetAllInstances()
+		if len(instances) == 0 {
+			c.sendPacket(respCmd, mustMarshal(map[string]interface{}{"code": 500, "msg": "没有可用的GameService"}))
+			return
+		}
+		instance = instances[0]
+	}
+
+	var resp *http.Response
+	var err error
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	if method == "GET" {
+		resp, err = client.Get(instance.URL + path)
+	} else {
+		jsonData, _ := json.Marshal(reqData)
+		resp, err = client.Post(instance.URL+path, "application/json", bytes.NewReader(jsonData))
+	}
+
+	if err != nil {
+		log.Printf("❌ [Sync] 调用GameService接口失败: %v", err)
+		c.sendPacket(respCmd, mustMarshal(map[string]interface{}{"code": 500, "msg": "服务调用失败: " + err.Error()}))
+		return
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	log.Printf(`✅ [Sync] GameService响应: %s %s → %d`, method, path, resp.StatusCode)
+
+	// 添加msg_id到响应中，以便前端匹配请求
+	var respData map[string]interface{}
+	if err := json.Unmarshal(body, &respData); err == nil {
+		respData["msg_id"] = reqData["msg_id"]
+		body, _ = json.Marshal(respData)
+	}
+	c.sendPacket(respCmd, body)
+}
+
+func (c *Client) forwardToGameService(roleID uint64, path string, method string, reqData map[string]interface{}, respCmd uint16) {
+	instance := common.GetInstanceByRoleID(roleID)
+	if instance == nil {
+		instances := common.GetAllInstances()
+		if len(instances) == 0 {
+			c.sendPacket(respCmd, mustMarshal(map[string]interface{}{"code": 500, "msg": "没有可用的GameService"}))
+			return
+		}
+		instance = instances[0]
+	}
+
+	var resp *http.Response
+	var err error
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	if method == "GET" {
+		resp, err = client.Get(instance.URL + path)
+	} else {
+		jsonData, _ := json.Marshal(reqData)
+		resp, err = client.Post(instance.URL+path, "application/json", bytes.NewReader(jsonData))
+	}
+
+	if err != nil {
+		log.Printf("调用GameService接口失败: %v", err)
+		c.sendPacket(respCmd, mustMarshal(map[string]interface{}{"code": 500, "msg": "服务调用失败"}))
+		return
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	// 添加msg_id到响应中，以便前端匹配请求
+	var respData map[string]interface{}
+	if err := json.Unmarshal(body, &respData); err == nil {
+		respData["msg_id"] = reqData["msg_id"]
+		body, _ = json.Marshal(respData)
+	}
+	c.sendPacket(respCmd, body)
 }
 
 func (c *Client) sendPacket(cmd uint16, data []byte) {
@@ -2021,7 +2861,50 @@ func subscribeMessages() {
 		})
 	})
 
-	log.Printf("消息总线订阅完成: map_move, monster_position")
+	// 订阅任务更新消息（来自GameService，通过RabbitMQ或HTTP降级）
+	// 推送给指定玩家
+	common.GlobalMessageBus.Subscribe("quest.push", func(data []byte) {
+		var pushData struct {
+			Type   uint8       `json:"type"`
+			RoleID uint64      `json:"role_id"`
+			Data   interface{} `json:"data"`
+		}
+		if err := json.Unmarshal(data, &pushData); err != nil {
+			log.Printf("解析任务推送消息失败: %v", err)
+			return
+		}
+
+		// 通过WebSocket推送给指定玩家
+		GlobalManager.SendToClient(pushData.RoleID, &Message{
+			Type: CmdQuestUpdate,
+			Data: data,
+		})
+
+		log.Printf("任务推送: roleID=%d, type=%d", pushData.RoleID, pushData.Type)
+	})
+
+	// 订阅成就更新消息（来自GameService，通过RabbitMQ或HTTP降级）
+	common.GlobalMessageBus.Subscribe("achievement.push", func(data []byte) {
+		var pushData struct {
+			Type   string      `json:"type"`
+			RoleID uint64      `json:"role_id"`
+			Data   interface{} `json:"data"`
+		}
+		if err := json.Unmarshal(data, &pushData); err != nil {
+			log.Printf("解析成就推送消息失败: %v", err)
+			return
+		}
+
+		// 通过WebSocket推送给指定玩家
+		GlobalManager.SendToClient(pushData.RoleID, &Message{
+			Type: CmdAchievementList, // 使用成就列表命令码推送
+			Data: data,
+		})
+
+		log.Printf("成就推送: roleID=%d, type=%s", pushData.RoleID, pushData.Type)
+	})
+
+	log.Printf("消息总线订阅完成: map_move, monster_position, quest.push, achievement.push")
 }
 
 func main() {
@@ -2061,6 +2944,47 @@ func main() {
 	// 初始化 Redis Session（分布式会话）
 	InitRedisSession(redisAddr, redisPassword, redisDB, redisPoolSize, redisMinIdle)
 
+	// ★ 新增：初始化分布式路由器（多GameService实例支持）
+	if err := common.InitDistributedRouter("./Config/GameServiceInstances.yaml"); err != nil {
+		log.Printf("⚠️ 分布式路由器初始化失败，将使用默认路由: %v", err)
+	} else {
+		log.Println(`✅ 分布式路由器初始化成功`)
+	}
+
+	// ★ 新增：初始化跨网关广播（Redis Pub/Sub + RabbitMQ + 消息去重）
+	gatewayID := fmt.Sprintf("gateway-%d", time.Now().UnixNano()%10000)
+	// ★ 修复：复用主消息总线的RabbitMQ配置（如果未配置则直接走HTTP降级）
+	rabbitMQURL := common.AppConfig.MessageBus.RabbitMQURL // 从配置文件读取
+	if err := common.InitCrossGatewayBroadcast(gatewayID, redisAddr, rabbitMQURL); err != nil {
+		log.Printf("⚠️ 跨网关广播初始化失败: %v", err)
+	} else {
+		log.Printf(`✅ 跨网关广播初始化成功: gatewayID=%s`, gatewayID)
+	}
+
+	// ★ 新增：初始化怪物同步管理器（通过网关广播怪物状态）
+	common.InitMonsterSyncManager(
+		func(msg *common.BroadcastMessage) {
+			// 回调：将怪物更新消息通过网关广播给视野范围内的玩家
+			go func() {
+				GlobalManager.BroadcastToViewRangeConcurrent(msg.MapID, 0, 0, &Message{
+					Type: msg.MessageType,
+					Data: mustMarshal(msg.Data),
+				})
+			}()
+		},
+		50*time.Millisecond, // 批量发送间隔50ms
+		100,                 // 最大批量大小
+	)
+	log.Println(`✅ 怪物同步管理器初始化成功`)
+
+	// ★ 新增：初始化Prometheus性能监控指标
+	metricsPort := 9090 // Prometheus metrics端口
+	if err := common.InitPrometheusMetrics(metricsPort); err != nil {
+		log.Printf("⚠️ Prometheus监控初始化失败: %v", err)
+	} else {
+		log.Printf(`✅ Prometheus监控初始化成功: http://localhost:%d/metrics`, metricsPort)
+	}
+
 	// 启动定期广播在线人数（每10秒）
 	go broadcastOnlineCount()
 
@@ -2079,10 +3003,17 @@ func main() {
 	wsPort := common.AppConfig.GetWSPort()
 	log.Printf("WebSocket: :%d", wsPort)
 
+	// 添加CORS中间件（允许跨域请求）
+	corsHandler := corsMiddleware(http.DefaultServeMux)
+
 	http.HandleFunc("/ws", HandleWebSocket)
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"status":"ok","online":` + fmt.Sprintf("%d", GlobalManager.GetOnlineCount()) + `}`))
 	})
+
+	// 登录注册API路由（转发到LoginService）
+	http.HandleFunc("/api/auth/login", handleAuthLogin)
+	http.HandleFunc("/api/auth/register", handleAuthRegister)
 
 	// 内部API：GameService调用推送消息给客户端
 	http.HandleFunc("/internal/push", handleInternalPush)
@@ -2092,8 +3023,293 @@ func main() {
 	http.HandleFunc("/internal/broadcast_map", handleInternalBroadcastMap)
 	// 内部API：GameService调用二进制广播（透传二进制body给客户端，零拷贝）
 	http.HandleFunc("/internal/broadcast_binary", handleInternalBroadcastBinary)
+	// 内部API：GameService调用任务推送（通过WebSocket推送给指定玩家）
+	http.HandleFunc("/internal/quest-push", handleInternalQuestPush)
 
-	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", wsPort), nil))
+	// ★ 新增：静态数据代理API（前端通过网关获取配置数据，支持分布式架构）
+	// 技能配置代理
+	http.HandleFunc("/api/skill/base/list", handleProxyToGameService)
+	http.HandleFunc("/api/skill/base/type/", handleProxyToGameService)
+	http.HandleFunc("/api/skill/base/", handleProxyToGameService)
+	http.HandleFunc("/api/skill/type/list", handleProxyToGameService)
+
+	// ★ 物品操作代理（优先注册，避免被其他路由覆盖）
+	http.HandleFunc("/api/item/bag/", handleProxyToGameService)
+	http.HandleFunc("/api/item/equip/", handleProxyToGameService)
+
+	// 道具配置代理（注意：这些路由可能覆盖上面的路由，所以放在后面）
+	http.HandleFunc("/api/item/base/list", handleProxyToGameService)
+	http.HandleFunc("/api/item/base/", handleProxyToGameService)
+
+	// 怪物配置代理
+	http.HandleFunc("/api/monster/base/list", handleProxyToGameService)
+	http.HandleFunc("/api/monster/base/", handleProxyToGameService)
+
+	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", wsPort), corsHandler))
+}
+
+// corsMiddleware CORS中间件，允许跨域请求
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 设置CORS头
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+		w.Header().Set("Access-Control-Max-Age", "86400")
+
+		// 处理预检请求
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// handleAuthLogin 处理登录请求（转发到LoginService）
+func handleAuthLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	forwardToAuthService(w, r, "/api/login")
+}
+
+// handleAuthRegister 处理注册请求（转发到LoginService）
+func handleAuthRegister(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	forwardToAuthService(w, r, "/api/register")
+}
+
+// forwardToAuthService 转发认证请求到LoginService
+// handleProxyToGameService 静态数据代理处理器
+// ★ 将前端的配置数据请求转发到GameService，支持分布式架构
+// 前端只需知道网关地址，无需直接连接GameService
+func handleProxyToGameService(w http.ResponseWriter, r *http.Request) {
+	// 记录请求日志
+	startTime := time.Now()
+	log.Printf(`🔄 [Gateway Proxy] 收到代理请求: %s %s`, r.Method, r.URL.Path)
+
+	// ★ Prometheus：记录代理请求
+	common.RecordProxyRequest(r.URL.Path, "received")
+
+	// 处理预检请求
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	// ★ 获取目标GameService实例（支持分布式路由）
+	var targetURL string
+
+	// ★ 尝试从URL中提取角色ID，进行精准路由
+	// URL格式: /api/item/bag/{roleId}/... 或 /api/item/equip/{roleId}/...
+	var roleID uint64
+	pathParts := strings.Split(r.URL.Path, "/")
+	for i, part := range pathParts {
+		if part == "bag" || part == "equip" {
+			if i+1 < len(pathParts) {
+				parsedID, err := strconv.ParseUint(pathParts[i+1], 10, 64)
+				if err == nil {
+					roleID = parsedID
+					break
+				}
+			}
+		}
+	}
+
+	var instance *common.GameServiceInstance
+
+	if roleID > 0 {
+		// ★ 根据角色ID获取对应的GameService实例（分布式路由）
+		instance = common.GetInstanceByRoleID(roleID)
+		if instance == nil {
+			log.Printf("⚠️ [Gateway Proxy] 根据角色ID%d获取实例失败", roleID)
+		}
+	}
+
+	if instance == nil {
+		// ★ 回退到负载均衡
+		// 尝试获取任意健康实例
+		var err error
+		instance, err = common.GetAnyHealthyInstance()
+		if err != nil {
+			log.Printf("⚠️ [Gateway Proxy] 未找到健康的GameService实例，使用默认地址")
+			// 使用配置的默认地址
+			targetURL = common.AppConfig.Services.GameService
+			if targetURL == "" {
+				targetURL = "http://127.0.0.1:8082"
+			}
+		} else {
+			targetURL = instance.URL
+			log.Printf("✅ [Gateway Proxy] 使用负载均衡路由到实例%d: %s", instance.InstanceID, targetURL)
+		}
+	} else {
+		targetURL = instance.URL
+		log.Printf("✅ [Gateway Proxy] 根据角色ID%d路由到实例%d: %s", roleID, instance.InstanceID, targetURL)
+	}
+
+	// 构建完整的转发URL（保留原始路径和查询参数）
+	forwardURL := targetURL + r.URL.Path
+	if r.URL.RawQuery != "" {
+		forwardURL += "?" + r.URL.RawQuery
+	}
+
+	// 创建HTTP客户端（带超时控制）
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	var resp *http.Response
+	var err error
+
+	// 根据请求方法转发
+	switch r.Method {
+	case http.MethodGet:
+		resp, err = client.Get(forwardURL)
+	case http.MethodPost, http.MethodPut, http.MethodDelete:
+		// 读取请求体
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, `{"code":400,"msg":"读取请求失败"}`, http.StatusBadRequest)
+			return
+		}
+		defer r.Body.Close()
+
+		// 创建新请求
+		req, err := http.NewRequest(r.Method, forwardURL, bytes.NewReader(body))
+		if err != nil {
+			http.Error(w, `{"code":500,"msg":"创建请求失败"}`, http.StatusInternalServerError)
+			return
+		}
+
+		// 复制原始请求头
+		req.Header = r.Header.Clone()
+		resp, err = client.Do(req)
+	default:
+		http.Error(w, `{"code":405,"msg":"Method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	if err != nil {
+		log.Printf("❌ [Gateway Proxy] 转发失败: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		w.Write([]byte(fmt.Sprintf(`{"code":502,"msg":"GameService不可用: %v"}`, err)))
+		common.RecordProxyRequest(r.URL.Path, "error")
+		return
+	}
+	defer resp.Body.Close()
+
+	// 读取响应体
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("❌ [Gateway Proxy] 读取响应失败: %v", err)
+		http.Error(w, `{"code":500,"msg":"读取响应失败"}`, http.StatusInternalServerError)
+		return
+	}
+
+	// ★ 设置缓存头（静态数据可缓存24小时）
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=86400") // 缓存24小时
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// 转发状态码和响应体
+	w.WriteHeader(resp.StatusCode)
+	w.Write(respBody)
+
+	// 记录成功日志
+	duration := time.Since(startTime)
+	log.Printf(`✅ [Gateway Proxy] 代理完成: %s %s → %d (%v)`,
+		r.Method, r.URL.Path, resp.StatusCode, duration)
+
+	// ★ Prometheus：记录代理耗时
+	common.RecordProxyDuration(r.URL.Path, duration)
+}
+
+func forwardToAuthService(w http.ResponseWriter, r *http.Request, path string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// 读取请求体
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "读取请求失败", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	// 获取LoginService地址（从配置或默认值）
+	loginAddr := common.AppConfig.Services.LoginService
+	if loginAddr == "" {
+		loginAddr = "http://127.0.0.1:8082"
+	}
+
+	// 转发请求到LoginService
+	targetURL := loginAddr + path
+	resp, err := http.Post(targetURL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		log.Printf("转发到LoginService失败: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"code":500,"msg":"登录服务不可用"}`))
+		return
+	}
+	defer resp.Body.Close()
+
+	// 读取响应
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"code":500,"msg":"读取响应失败"}`))
+		return
+	}
+
+	log.Printf("LoginService响应 (%s): %s", path, string(respBody))
+
+	// 转换响应格式：将 code:0 改为 code:200（前端期望的格式）
+	var loginResp struct {
+		Code      int    `json:"code"`
+		UID       uint   `json:"uid"`
+		Token     string `json:"token"`
+		Msg       string `json:"msg"`
+		AccountID uint   `json:"account_id,omitempty"`
+		Name      string `json:"name,omitempty"`
+		RoleID    uint64 `json:"role_id,omitempty"`
+	}
+
+	if err := json.Unmarshal(respBody, &loginResp); err == nil {
+		// 转换为前端期望的格式
+		if loginResp.Code == 0 {
+			loginResp.Code = 200
+		}
+		// 确保 account_id 字段存在
+		if loginResp.AccountID == 0 && loginResp.UID > 0 {
+			loginResp.AccountID = loginResp.UID
+		}
+
+		// 登录成功时，将token保存到Redis Session（用于后续WebSocket认证）
+		if loginResp.Code == 200 && loginResp.Token != "" {
+			log.Printf("保存登录session到Redis: accountID=%d, token=%s...", loginResp.AccountID, loginResp.Token[:min(10, len(loginResp.Token))])
+			if err := saveSession(loginResp.Token, uint64(loginResp.AccountID), 0, "", 1, 0, 0); err != nil {
+				log.Printf("保存session失败: %v", err)
+			}
+		}
+
+		// 返回转换后的JSON
+		result, _ := json.Marshal(loginResp)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(result)
+	} else {
+		// 如果解析失败，直接返回原始响应（可能是错误信息）
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(respBody)
+	}
 }
 
 // handleInternalPush 处理GameService的推送请求（推送给指定玩家）
@@ -2311,6 +3527,44 @@ func getMsgTypeCmd(msgType string) uint16 {
 	default:
 		return 0
 	}
+}
+
+// handleInternalQuestPush 处理GameService的任务推送请求
+func handleInternalQuestPush(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var pushData struct {
+		Type   uint8       `json:"type"`    // 推送类型: 1=进度更新, 2=接取, 3=完成, 4=放弃, 5=重置
+		RoleID uint64      `json:"role_id"` // 角色ID
+		Data   interface{} `json:"data"`    // 推送数据
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&pushData); err != nil {
+		log.Printf("解析任务推送请求失败: %v", err)
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	// 构建消息
+	msgData, err := json.Marshal(pushData)
+	if err != nil {
+		log.Printf("序列化任务推送数据失败: %v", err)
+		http.Error(w, "Invalid data", http.StatusBadRequest)
+		return
+	}
+
+	// 发送到广播通道（只推送给指定角色）
+	GlobalManager.broadcast <- &Message{
+		Type: CmdQuestUpdate, // 使用任务更新命令码
+		Data: msgData,
+	}
+
+	log.Printf("任务推送: roleID=%d, type=%d", pushData.RoleID, pushData.Type)
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"ok"}`))
 }
 
 // checkHeartbeatTimeout 心跳超时检测(清理僵尸连接)

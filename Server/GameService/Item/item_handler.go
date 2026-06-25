@@ -36,6 +36,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 		// 物品操作
 		itemGroup.POST("/bag/add", h.AddItem)                 // 添加物品
 		itemGroup.POST("/bag/:roleId/move", h.MoveItem)       // 移动物品
+		itemGroup.POST("/bag/:roleId/merge", h.MergeItem)     // 堆叠/合并物品
 		itemGroup.POST("/bag/:roleId/split", h.SplitItem)     // 拆分物品
 		itemGroup.POST("/bag/:roleId/use", h.UseItem)         // 使用物品
 		itemGroup.POST("/bag/:roleId/discard", h.DiscardItem) // 丢弃物品
@@ -197,6 +198,32 @@ func (h *Handler) MoveItem(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "移动成功"})
+}
+
+// MergeItem 合并/堆叠物品
+func (h *Handler) MergeItem(c *gin.Context) {
+	roleIdStr := c.Param("roleId")
+	roleId, err := strconv.ParseUint(roleIdStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "无效的角色ID"})
+		return
+	}
+
+	var req struct {
+		SourceItemId uint64 `json:"source_item_id" binding:"required"`
+		TargetItemId uint64 `json:"target_item_id" binding:"required"`
+		Count        uint32 `json:"count" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "请求参数错误"})
+		return
+	}
+
+	if err := h.service.MergeItem(roleId, req.SourceItemId, req.TargetItemId, req.Count); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "合并成功"})
 }
 
 // SplitItem 拆分物品

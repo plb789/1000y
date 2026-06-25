@@ -1,10 +1,12 @@
 package skill
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	common "game-server/Common"
+	attribute "game-server/GameService/Attribute"
 	"math"
 )
 
@@ -366,6 +368,31 @@ func (s *Service) CalculateSkillBonus(roleID uint64) (map[string]int, error) {
 	}
 
 	return bonus, nil
+}
+
+// ★ 实现 attribute.SkillBonusProvider 接口（打破循环依赖）
+// CalculateSkillBonusWithCtx 带上下文的技能加成计算（供CalcEngine调用）
+func (s *Service) CalculateSkillBonusWithCtx(ctx context.Context, roleID uint64) (*attribute.SkillBonus, error) {
+	bonusMap, err := s.CalculateSkillBonus(roleID)
+	if err != nil {
+		return &attribute.SkillBonus{}, err
+	}
+
+	return &attribute.SkillBonus{
+		Hp:      bonusMap["hp"],
+		Mp:      bonusMap["mp"],
+		Attack:  bonusMap["attack"],
+		Defense: bonusMap["defense"],
+		Speed:   bonusMap["speed"],
+		Hit:     bonusMap["hit"],
+		Dodge:   bonusMap["dodge"],
+		Crit:    bonusMap["crit"],
+	}, nil
+}
+
+// GetEquippedSkillsWithCtx 带上下文的获取已装备武学（供CalcEngine调用）
+func (s *Service) GetEquippedSkillsWithCtx(ctx context.Context, roleID uint64) ([]map[string]interface{}, error) {
+	return s.GetEquippedSkills(roleID)
 }
 
 // ForgetSkill 遗忘武学（需谨慎使用）

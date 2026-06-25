@@ -58,6 +58,7 @@ class Game {
     this.pendingAttackTargetId = null;   // 待攻击目标ID
     this._pendingStartPos = null;        // 追击起始位置（用于卡死检测）
     this._lastPendingMoveTime = 0;       // 上次追击移动时间戳（节流）
+    this._lastPendingAttackTime = 0;     // 上次追击攻击时间戳（冷却）
 
     // 选中目标相关状态（点击选中后持续显示目标信息面板）
     this.selectedTargetId = null;        // 选中目标ID
@@ -143,6 +144,11 @@ class Game {
       }
     }
 
+    // 初始化熟练度管理器
+    if (window.ProficiencyManager) {
+      this.proficiencyManager = new window.ProficiencyManager(this);
+    }
+
     // 初始化音效系统
     if (window.SoundManager) {
       this.soundManager = window.SoundManager;
@@ -151,6 +157,17 @@ class Game {
     // 初始化战斗系统
     if (window.BattleSystem) {
       this.battleSystem = new window.BattleSystem(this);
+      
+      // 注入特效管理器引用
+      if (this.effectManager) {
+        this.battleSystem.effectManager = this.effectManager;
+      }
+      if (this.particleSystem) {
+        this.battleSystem.particleSystem = this.particleSystem;
+      }
+      if (this.proficiencyManager) {
+        this.battleSystem.proficiencyManager = this.proficiencyManager;
+      }
       
       // 设置点击怪物回调（自动攻击）
       this.battleSystem.onMonsterClick = (monster) => {
@@ -189,6 +206,11 @@ class Game {
     // 初始化任务系统
     if (window.QuestSystem) {
       this.questSystem = new window.QuestSystem(this);
+    }
+
+    // 初始化社交系统
+    if (window.SocialSystem) {
+      this.socialSystem = new window.SocialSystem(this);
     }
     
     // 特效设置
@@ -451,6 +473,21 @@ class Game {
     // 绑定画布鼠标事件：悬停显示目标详情，点击选中目标或移动
     this.bindCanvasTargetEvents();
 
+    // ★ 设置 MapEngine 的移动前检查回调
+    // 如果点击了怪物，则不执行移动（只选中）
+    this.mapEngine.onBeforeMouseMove = (tileX, tileY) => {
+      const hit = this.getTargetAt(tileX, tileY);
+      console.log(`[onBeforeMouseMove] 检查点击位置 (${tileX}, ${tileY}), hit:`, hit);
+      if (hit && hit.kind === 'monster') {
+        // 点击了怪物，不执行移动
+        // 选中逻辑会在 click 事件处理器中执行
+        console.log(`[onBeforeMouseMove] 点击了怪物 ${hit.target.name}，阻止移动`);
+        return false;
+      }
+      console.log(`[onBeforeMouseMove] 点击空白处，允许移动`);
+      return true; // 点击空白处，允许移动
+    };
+
     // 设置渲染完成后回调，用于更新其他玩家位置并绘制
     // 注意：updateOtherPlayers需要在renderPlayers之前调用，确保位置已更新
     this.mapEngine.afterRender = (deltaTime) => {
@@ -587,99 +624,49 @@ class Game {
     this.mapEngine.onPlayerMove = (x, y) => {
       // 未进入游戏前不处理移动（防止登录页面发送无效请求）
       if (this.state !== 'playing') return;
-      
+
+      // 位置没变化，跳过
       if (this.player.x === x && this.player.y === y) {
-        this.isMovementBlocked = false; // 位置没变，解除阻挡
+        this.isMovementBlocked = false;
         return;
       }
-      
+
       const now = Date.now();
-      
-      // 节流：每150ms最多发送一次验证请求
-      if (now - this.lastMoveTime < 150 || this.moveValidationPending) {
-        return; // 等待上一次验证完成
+
+      // 节流：每150ms最多发送一次移动请求
+      if (now - this.lastMoveTime < 150) {
+        return;
       }
-      
-      // 标记为待验证状态（不预更新位置！）
       this.lastMoveTime = now;
-      this.moveValidationPending = true;
-      
+
       const targetX = Math.floor(x);
       const targetY = Math.floor(y);
-      
-      console.log(`🚶 发送移动验证: (${this.player.x},${this.player.y}) → (${targetX},${targetY})`);
-      
-      const requestBody = {
-        role_id: this.player.id,
-        map_id: this.currentMap?.id || 1,
-        x: targetX,
-        y: targetY
-      };
-      
-      // 先验证，通过后才移动（避免回滚卡顿）
-      fetch('http://localhost:8082/api/map/move', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody)
-      })
-      .then(async (response) => {
-        this.moveValidationPending = false;
-        
-        let result;
-        try {
-          result = await response.json();
-        } catch (e) {
-          result = { success: true };
-        }
-        
-        if (!response.ok || (result && !result.success && result.code !== 200)) {
-          // ❌ 被阻挡：保持原地不动，显示提示
-          console.warn(`🛡️ 移动被阻挡: ${result?.msg}`);
-          
-          this.isMovementBlocked = true;
-          
-          // 显示阻挡提示（在目标位置显示）
-          this.showFloatingText('⛔ 前方有障碍', x, y, '#FF6600');
-          
-          // 停止移动（防止继续尝试）
-          if (this.mapEngine && this.mapEngine.stopMoving) {
-            this.mapEngine.stopMoving();
-          }
-          return;
-        }
-        
-        // ✅ 验证通过：更新位置
+
+      // ★ 分布式架构改造：只通过WebSocket发送CMD_MOVE给网关
+      // 网关统一负责：
+      //   1. 路由到对应的GameService实例进行碰撞检测
+      //   2. 验证通过后广播给同地图其他玩家
+      //   3. 返回结果通知客户端（成功/被阻挡）
+      if (window.GameWS && window.GameWS.send) {
+        window.GameWS.send(Protocol.CMD_MOVE, {
+          role_id: this.player.id,
+          map_id: this.currentMap?.id || 1,
+          x: targetX,
+          y: targetY
+        });
+
+        // ★ 乐观更新：立即更新本地位置（减少感知延迟）
+        // 网关会返回验证结果，如果被阻挡再回滚
         this.isMovementBlocked = false;
         this.player.x = x;
         this.player.y = y;
-        
-        // 同步位置到网关服务（更新视野范围计算用的位置）
-        if (window.GameWS && window.GameWS.send) {
-          window.GameWS.send(Protocol.CMD_MOVE, {
-            x: targetX,
-            y: targetY
-          });
-        }
-        
-        console.log(`✅ 移动成功: (${targetX},${targetY})`);
-      })
-      .catch(error => {
-        this.moveValidationPending = false;
-        console.error('❌ 验证请求失败:', error.message);
-        // 网络错误时允许本地移动（离线容错）
-        this.player.x = x;
-        this.player.y = y;
-        
-        // 同步位置到网关服务
-        if (window.GameWS && window.GameWS.send) {
-          window.GameWS.send(Protocol.CMD_MOVE, {
-            x: targetX,
-            y: targetY
-          });
-        }
-      });
-      
-      // 更新小地图
+
+        console.log(`✅ [onPlayerMove] 已发送WebSocket CMD_MOVE: (${targetX},${targetY}), roleID=${this.player.id}`);
+      } else {
+        console.warn(`⚠️ [onPlayerMove] WebSocket未就绪`);
+      }
+
+      // 更新小地图（节流200ms）
       if (!this.minimapUpdateTimer) {
         this.minimapUpdateTimer = setTimeout(() => {
           this.renderMiniMap();
@@ -687,6 +674,7 @@ class Game {
         }, 200);
       }
     };
+
     // FPS 更新回调
     this.mapEngine.onFpsUpdate = (fps) => {
       const fpsElement = document.getElementById('fpsValue');
@@ -1088,15 +1076,11 @@ class Game {
       }
     }
     
-    // 加载背包数据（开发环境使用测试数据）
+    // 加载背包数据（★ 统一使用真实数据源）
     if (this.inventory) {
-      if ((typeof process !== 'undefined' && process.env && process.env.NODE_ENV === 'development') || window.DEBUG_MODE) {
-        // 开发环境：加载测试数据
-        this.inventory.loadTestData();
-      } else {
-        // 生产环境：从服务器加载真实数据
-        this.loadInventoryData();
-      }
+      // 始终尝试从服务端加载真实数据
+      // 内部会自动处理：服务端失败 -> 本地初始化 -> 调试模式新手礼包
+      this.loadInventoryData();
     }
     
     this.addChatMessage('系统', '欢迎来到千年江湖！', 'system');
@@ -1117,19 +1101,17 @@ class Game {
   
   /**
    * 从服务器加载背包数据
+   * 统一入口：内部会自动处理服务端失败降级逻辑
    */
   async loadInventoryData() {
     if (!this.inventory) return;
-    
+
     try {
       await this.inventory.loadFromServer();
-      console.log('背包数据加载完成');
+      console.log('[Game] 背包数据加载完成');
     } catch (error) {
-      console.error('加载背包数据失败:', error);
-      // 如果服务器加载失败，使用测试数据作为降级方案
-      if (window.DEBUG_MODE) {
-        this.inventory.loadTestData();
-      }
+      console.error('[Game] 加载背包数据失败:', error);
+      // loadFromServer 内部已处理降级逻辑，此处仅记录日志
     }
   }
   
@@ -1668,7 +1650,20 @@ class Game {
       case Protocol.CMD_MOVE:
         this.handleMoveMessage(data);
         break;
-        
+
+      case Protocol.CMD_MOVE_BLOCKED:
+        this.handleMoveBlocked(data);
+        break;
+
+      case Protocol.CMD_SYNC_POSITION:
+        // 服务端位置同步确认（2017）
+        // 网关验证通过后返回的最终位置确认
+        if (data && data.x !== undefined && data.y !== undefined) {
+          console.log(`📍 [Game] 位置同步确认: (${data.x},${data.y})`);
+          // 可以在这里更新玩家位置（如果需要服务端权威位置）
+        }
+        break;
+
       case Protocol.CMD_DAMAGE:
         this.handleDamage(data);
         break;
@@ -1719,6 +1714,45 @@ class Game {
 
       case Protocol.CMD_ROLE_ATTRIB:
         this.handleRoleAttrib(data);
+        break;
+
+      // ========== 技能相关协议 (4001-4020) ==========
+      case Protocol.CMD_SKILL_LEARN:
+        // 学习技能结果
+        if (this.skillPanel) {
+          this.skillPanel._onLearnResponse(data);
+        }
+        break;
+
+      case Protocol.CMD_SKILL_UPGRADE:
+        // 升级技能结果
+        console.log('[Game] 技能升级结果:', data);
+        break;
+
+      case Protocol.CMD_SKILL_LIST:
+        // 技能列表响应（已学/已装备）
+        // ★ BUG修复：不再在此处调用setSkills，避免覆盖SkillBar.loadFromServer的正确数据
+        // SkillBar.loadFromServer()已通过Promise.request直接处理数据并调用setSkills
+        if (this.skillBar && data.code === 200) {
+          if (data.data && Array.isArray(data.data)) {
+            console.log('[Game] 技能列表响应收到:', data.data.length, '个技能（由SkillBar.loadFromServer处理）');
+            // 不再调用setSkills，避免数据被错误覆盖
+          }
+        }
+        break;
+
+      case Protocol.CMD_SKILL_EQUIP:
+        // 装备技能结果
+        if (this.skillPanel) {
+          this.skillPanel._onEquipResponse(data);
+        }
+        break;
+
+      case Protocol.CMD_SKILL_UNEQUIP:
+        // 卸下技能结果
+        if (this.skillPanel) {
+          this.skillPanel._onUnequipResponse(data);
+        }
         break;
 
       case Protocol.CMD_QUEST_LIST:
@@ -1809,7 +1843,40 @@ class Game {
 
     this.updatePlayerUI();
   }
-  
+
+  /**
+   * 处理移动被阻挡消息（网关验证失败时发送）
+   */
+  handleMoveBlocked(data) {
+    console.warn(`🛡️ [handleMoveBlocked] 移动被阻挡:`, data);
+
+    // 显示阻挡提示
+    const reason = data.msg || '前方有障碍';
+    const blockX = data.block_x || this.player.x;
+    const blockY = data.block_y || this.player.y;
+
+    // 回滚到有效位置
+    if (data.x !== undefined && data.y !== undefined) {
+      this.player.x = data.x;
+      this.player.y = data.y;
+      console.log(`🔙 [handleMoveBlocked] 回滚位置到 (${data.x}, ${data.y})`);
+    }
+
+    // 显示浮动文字提示
+    this.showFloatingText(`⛔ ${reason}`, blockX, blockY, '#FF6600');
+
+    // 停止移动
+    if (this.mapEngine && this.mapEngine.stopMoving) {
+      this.mapEngine.stopMoving();
+    }
+
+    // 标记为被阻挡状态
+    this.isMovementBlocked = true;
+
+    // 同步回滚后的位置到地图引擎
+    this.syncPlayerPosition();
+  }
+
   handleMoveMessage(data) {
     if (data.role_id == this.player.id) {
       // 自己的移动 - 服务器广播回来的当前位置
@@ -1861,6 +1928,8 @@ class Game {
     // 优先处理攻击失败消息（服务端pushToClient("attack_failed")）
     // 此类消息带error_code字段，无伤害数据
     if (data.error_code !== undefined && data.error_code > 0) {
+      console.log(`❌ [handleDamage] 收到攻击失败: error_code=${data.error_code}, msg=${data.error_msg}`);
+      
       const attackerId = data.attacker_id;
       const isSelf = (attackerId === this.player.id);
       if (isSelf) {
@@ -1869,6 +1938,7 @@ class Game {
         this.showFloatingText(data.error_msg || '攻击失败', this.player.x, this.player.y, color);
         // 距离过远(error_code=1)时，自动追击目标：移动到怪物附近后再次攻击
         if (data.error_code === 1 && data.target_id) {
+          console.log(`⚠️ [handleDamage] 距离过远，设置追击目标: ${data.target_id}`);
           this.pendingAttackTargetId = data.target_id;
           const target = this.battleSystem?.monsters?.get(data.target_id);
           if (target) {
@@ -2531,6 +2601,8 @@ class Game {
     const expGain = data.exp_gain || 0;
     const goldGain = data.gold_gain || 0;
     const drops = data.drops || [];
+    // ★ 服务端返回的完整掉落物品信息（包含icon、品质、属性等）
+    const dropItems = data.drop_items || [];
 
     // 标记怪物为死亡状态并移除
     const monster = this.battleSystem.monsters.get(monsterId);
@@ -2543,9 +2615,22 @@ class Game {
         this.battleSystem.showExpGain(expGain, monster.x, monster.y);
       }
 
-      // 显示掉落物品
-      if (drops.length > 0 && killerId === this.player.id) {
-        this.battleSystem.showDrops(drops, monster.x, monster.y);
+      // 显示掉落物品（优先使用完整的dropItems信息）
+      if (killerId === this.player.id) {
+        if (dropItems.length > 0) {
+          // 使用服务端返回的完整物品信息（包含名称、图标、品质等）
+          this.battleSystem.showDrops(dropItems, monster.x, monster.y);
+
+          // ★ 自动将掉落物品添加到本地背包UI
+          dropItems.forEach(dropInfo => {
+            if (dropInfo.slot >= 0) { // 只处理成功拾取的物品
+              this.addToLocalInventory(dropInfo);
+            }
+          });
+        } else if (drops.length > 0) {
+          // 降级：使用纯ID数组
+          this.battleSystem.showDrops(drops, monster.x, monster.y);
+        }
       }
 
       // 通知任务系统击杀怪物（用于击杀类任务进度）
@@ -2571,6 +2656,60 @@ class Game {
         this.updatePlayerUI();
       }
     }
+  }
+
+  /**
+   * 将掉落物品添加到本地背包UI（乐观更新，与服务端保持最终一致性）
+   */
+  addToLocalInventory(dropInfo) {
+    if (!this.inventory) return;
+
+    // 构建标准化的物品对象
+    const itemData = {
+      id: dropInfo.item_id,
+      name: dropInfo.item_name,
+      icon: dropInfo.icon,
+      quality: dropInfo.quality || 1,
+      type: dropInfo.type,
+      type_name: dropInfo.type_name,
+      description: dropInfo.description,
+      count: dropInfo.count || 1,
+      slot: dropInfo.slot
+    };
+
+    // 装备类物品标记
+    if (dropInfo.can_equip) {
+      itemData.can_equip = true;
+      itemData.equip_pos = this.getEquipPosName(dropInfo.equip_type);
+      itemData.attrs = dropInfo.attrs;
+    }
+
+    // 消耗品类物品标记
+    if (dropInfo.can_use) {
+      itemData.can_use = true;
+      itemData.hp_restore = dropInfo.hp_restore;
+      itemData.mp_restore = dropInfo.mp_restore;
+    }
+
+    // 添加到背包
+    this.inventory.addItem(itemData);
+
+    console.log(`🎁 [本地] 物品已添加到背包: ${itemData.name} x${itemData.count}`);
+  }
+
+  /**
+   * 获取装备位置中文名称
+   */
+  getEquipPosName(equipType) {
+    const posNames = {
+      1: 'weapon',
+      2: 'helmet',
+      3: 'armor',
+      4: 'necklace',
+      5: 'ring',
+      6: 'boots'
+    };
+    return posNames[equipType] || 'weapon';
   }
   
   /**
@@ -2809,7 +2948,7 @@ class Game {
       }
     });
 
-    // 点击：选中目标或移动
+    // 点击：选中目标或攻击
     canvas.addEventListener('click', (e) => {
       if (this.state !== 'playing') return;
       const tile = this.eventToTile(e);
@@ -2817,24 +2956,32 @@ class Game {
 
       const hit = this.getTargetAt(tile.x, tile.y);
       if (hit) {
-        // 选中目标并持续显示
-        this.selectedTargetId = hit.id;
-        this.selectedTarget = hit.target;
-        this.selectedTargetKind = hit.kind;
-        // 同步设置到 battleSystem（用于技能释放）
-        if (this.battleSystem) {
-          this.battleSystem.selectedTarget = hit.id;
-        }
-        this.showTargetInfo(hit.target, hit.kind, true);
-        // 怪物：发起攻击；玩家：仅选中（PVP需手动攻击）
+        // ★ 新逻辑：点击已选中的怪物才攻击，点击未选中的怪物只选中
         if (hit.kind === 'monster') {
-          this.attackTarget(hit.id);
+          if (this.selectedTargetId === hit.id) {
+            // 点击已选中的怪物 → 攻击并开始追击
+            console.log(`⚔️ 攻击怪物: ${hit.target.name}`);
+            this.startAutoAttack(hit.id);
+          } else {
+            // 点击未选中的怪物 → 仅选中
+            console.log(`👆 选中怪物: ${hit.target.name}`);
+            this.selectedTargetId = hit.id;
+            this.selectedTarget = hit.target;
+            this.selectedTargetKind = hit.kind;
+            if (this.battleSystem) {
+              this.battleSystem.selectedTarget = hit.id;
+            }
+            this.showTargetInfo(hit.target, hit.kind, true);
+          }
+        } else {
+          // 玩家目标：仅选中
+          this.selectedTargetId = hit.id;
+          this.selectedTarget = hit.target;
+          this.selectedTargetKind = hit.kind;
+          this.showTargetInfo(hit.target, hit.kind, true);
         }
-      } else {
-        // 点击空白：清除选中并隐藏详情
-        this.clearSelectedTarget();
-        this.hideTargetInfo();
       }
+      // ★ 移动逻辑由 MapEngine 的 mousedown 事件处理器处理
     });
 
     // 鼠标离开画布：隐藏悬停详情（选中状态保留）
@@ -2862,9 +3009,9 @@ class Game {
    * @returns {object|null} { id, target, kind } 或 null
    */
   getTargetAt(tileX, tileY) {
-    // 优先检查怪物
+    // 检查怪物（使用精确的 tolerance，确保只有鼠标悬停在怪物所在格子时才触发）
     if (this.battleSystem) {
-      const monster = this.battleSystem.getMonsterAt(tileX, tileY);
+      const monster = this.battleSystem.getMonsterAt(tileX, tileY, 0.5);
       if (monster && monster.status !== 4) {
         return { id: monster.id, target: monster, kind: 'monster' };
       }
@@ -2951,47 +3098,24 @@ class Game {
     const panel = document.getElementById('targetInfoPanel');
     if (panel) panel.style.display = 'none';
   }
-
-  handleCanvasClick(e) {
-    if (this.state !== 'playing') return;
-    
-    const rect = this.ui.canvas.getBoundingClientRect();
-    const clickX = e.clientX - rect.left;
-    const clickY = e.clientY - rect.top;
-    
-    // 计算点击的地图坐标（考虑摄像机偏移）
-    const tileSize = this.mapEngine?.tileSize || 48;
-    const tileX = Math.floor((clickX + this.mapEngine.camera.offsetX) / tileSize);
-    const tileY = Math.floor((clickY + this.mapEngine.camera.offsetY) / tileSize);
-    
-    // 优先检查是否点击到怪物
-    if (this.battleSystem) {
-      const clickedMonster = this.battleSystem.handleClick(tileX, tileY);
-      if (clickedMonster) {
-        console.log(`点击怪物: ${clickedMonster.name}`);
-        // 显示目标信息面板
-        this.showTargetInfo(clickedMonster, 'monster');
-        // 直接发起攻击请求，由服务端校验距离
-        // 服务端返回"距离过远"时，handleDamage会自动触发追击移动
-        this.attackTarget(clickedMonster.id);
-        return; // 点击了怪物，不进行移动
-      }
-      
-      // 检查是否点击了掉落物品
-      if (this.battleSystem.droppedItems && this.battleSystem.droppedItems.length > 0) {
-        const nearbyItem = this.battleSystem.checkPickupRange(this.player.x, this.player.y);
-        if (nearbyItem || this.isNearDroppedItem(tileX, tileY)) {
-          const itemToPickup = nearbyItem || this.getDroppedItemAt(tileX, tileY);
-          if (itemToPickup) {
-            this.pickupDroppedItem(itemToPickup);
-            return; // 拾取了物品，不进行移动
-          }
-        }
-      }
+  
+  /**
+   * 开始自动攻击目标（包含追击逻辑）
+   */
+  startAutoAttack(targetId) {
+    const target = this.battleSystem?.monsters?.get(targetId);
+    if (!target) {
+      console.warn('目标不存在');
+      return;
     }
     
-    // 简单移动到点击位置
-    this.tryMove(tileX, tileY);
+    console.log(`🎯 开始自动攻击: ${target.name}`);
+    
+    // 设置待攻击目标（触发自动追击）
+    this.pendingAttackTargetId = targetId;
+    
+    // 立即发起第一次攻击
+    this.attackTarget(targetId);
   }
 
   tryMove(newX, newY) {
@@ -3021,21 +3145,17 @@ class Game {
       }
     }
     
-    // 发送移动请求
-    window.GameWS.send(Protocol.CMD_MOVE, {
-      x: newX,
-      y: newY
-    });
-    
-    // 立即更新位置
-    this.player.x = newX;
-    this.player.y = newY;
+    // ★ 关键修复：不再在这里发送CMD_MOVE和更新player.x/y
+    // 原因：这里会抢先更新player.x/y，导致onPlayerMove回调检测到"位置没变化"而跳过发送
+    // 正确流程：只设置MapEngine的目标点，由渲染循环中的onPlayerMove统一负责发送
 
-    // 同步位置到地图引擎（摄像机跟随）
-    this.syncPlayerPosition();
+    // 只通知MapEngine开始寻路移动（不立即更新逻辑坐标）
+    if (this.mapEngine && this.mapEngine.moveTo) {
+      this.mapEngine.moveTo(newX, newY);
+    }
 
-    // 重绘（不带deltaTime，手动触发一次渲染）
-    this.mapEngine.render(16.67); // 假设16.67ms帧时间
+    // 重绘触发一次渲染
+    this.mapEngine.render(16.67);
     this.renderMiniMap();
     // 注：追击目标的自动攻击由游戏循环中的 updatePendingAttack 统一处理
   }
@@ -3335,23 +3455,35 @@ class Game {
   /**
    * 自动追击待攻击目标（游戏循环调用）
    * 每次移动有冷却，避免请求过快；检测卡死自动放弃
+   * ★ 新增：攻击后保持追击状态，实现持续自动攻击
    */
   updatePendingAttack() {
-    if (!this.pendingAttackTargetId) return;
+    if (!this.pendingAttackTargetId) return; // ★ 调试：显示是否触发
+    
+    console.log(`🎯 [updatePendingAttack] 检测到待攻击目标: ${this.pendingAttackTargetId}`);
+    
     if (!this.battleSystem || !this.battleSystem.monsters) return;
 
     const target = this.battleSystem.monsters.get(this.pendingAttackTargetId);
     // 目标消失或死亡，清除追击状态
     if (!target || target.status === 4) {
+      console.log(`🎯 目标${target?.name || this.pendingAttackTargetId}已死亡或消失，停止追击`);
       this.pendingAttackTargetId = null;
       return;
     }
 
     // 距离足够，发起攻击
     if (this.isInAttackRange(target)) {
-      const targetId = this.pendingAttackTargetId;
-      this.pendingAttackTargetId = null;
-      this.attackTarget(targetId);
+      // ★ 修改：不再清除 pendingAttackTargetId，保持追击状态
+      // 这样攻击后会继续检测，实现持续自动攻击
+      const now = Date.now();
+      const cooldown = this.battleSystem?.attackCooldown || 1500;
+      
+      // 检查攻击冷却
+      if (!this._lastPendingAttackTime || now - this._lastPendingAttackTime >= cooldown) {
+        this._lastPendingAttackTime = now;
+        this.attackTarget(this.pendingAttackTargetId);
+      }
       return;
     }
 
@@ -3712,6 +3844,11 @@ class Game {
           this.effectManager.update(deltaTime);
         }
         
+        // 更新粒子系统
+        if (this.effectSettings.enableParticles && this.particleSystem) {
+          this.particleSystem.update(deltaTime);
+        }
+        
         // 更新怪物平滑移动系统
         if (this.battleSystem) {
           this.battleSystem.update(deltaTime);
@@ -3817,6 +3954,11 @@ class Game {
     // 渲染特效系统
     if (this.effectSettings.enableParticles && this.effectManager) {
       this.effectManager.render(ctx);
+    }
+    
+    // 渲染粒子系统
+    if (this.effectSettings.enableParticles && this.particleSystem) {
+      this.particleSystem.render(ctx);
     }
     
     // 获取当前玩家位置和视野范围（用于视野裁剪）
@@ -4059,20 +4201,22 @@ const Protocol = window.Protocol = {
   
   // 游戏相关 2001-2030
   CMD_MOVE: 2001,
-  CMD_ATTACK: 2002,
-  CMD_USE_SKILL: 2003,
-  CMD_CHAT: 2004,
-  CMD_PICKUP: 2005,
-  CMD_USE_ITEM: 2006,
-  CMD_EQUIP: 2007,
-  CMD_TRADE: 2008,
-  CMD_DAMAGE: 2009,
-  CMD_DEATH: 2010,
-  CMD_RESPAWN: 2011,
-  CMD_LEVEL_UP: 2012,
-  CMD_BUFF: 2013,
-  CMD_DEBUFF: 2014,
-  CMD_SET_PK_MODE: 2015, // 切换PK模式
+  CMD_MOVE_BLOCKED: 2002,        // 移动被阻挡（新增）
+  CMD_ATTACK: 2003,              // 攻击（原2002，后移）
+  CMD_USE_SKILL: 2004,           // 使用技能（原2003，后移）
+  CMD_CHAT: 2005,                // 聊天（原2004，后移）
+  CMD_PICKUP: 2006,              // 拾取（原2005，后移）
+  CMD_USE_ITEM: 2007,            // 使用物品（原2006，后移）
+  CMD_EQUIP: 2008,               // 装备（原2007，后移）
+  CMD_TRADE: 2009,               // 交易（原2008，后移）
+  CMD_DAMAGE: 2010,              // 伤害（原2009，后移）
+  CMD_DEATH: 2011,               // 死亡（原2010，后移）
+  CMD_RESPAWN: 2012,             // 复活（原2011，后移）
+  CMD_LEVEL_UP: 2013,            // 升级（原2012，后移）
+  CMD_BUFF: 2014,                // 增益（原2013，后移）
+  CMD_DEBUFF: 2015,              // 减益（原2014，后移）
+  CMD_SET_PK_MODE: 2016,         // 切换PK模式（原2015，后移）
+  CMD_SYNC_POSITION: 2017,       // 服务端位置同步确认（新增）
   
   // 地图相关 3001-3050
   CMD_ENTER_MAP: 3001,
@@ -4091,6 +4235,10 @@ const Protocol = window.Protocol = {
   // 武学相关 4001-4020
   CMD_SKILL_LEARN: 4001,
   CMD_SKILL_UPGRADE: 4002,
+  CMD_SKILL_LIST: 4003,              // 技能列表请求
+  CMD_SKILL_EQUIP: 4004,             // 装备技能
+  CMD_SKILL_UNEQUIP: 4005,           // 卸下技能
+  CMD_SKILL_USE: 4006,               // 使用技能（释放）
   
   // 角色相关 5001-5020
   CMD_ROLE_INFO: 5001,
@@ -4106,7 +4254,14 @@ const Protocol = window.Protocol = {
   CMD_QUEST_COMPLETE: 6003,   // 完成任务
   CMD_QUEST_ABANDON: 6004,    // 放弃任务
   CMD_QUEST_PROGRESS: 6005,   // 任务进度更新
-  CMD_QUEST_REWARD: 6006      // 领取奖励
+  CMD_QUEST_REWARD: 6006,     // 领取奖励
+
+  // 物品/背包相关 7001-7020
+  CMD_ITEM_LIST: 7001,        // 背包物品列表请求
+  CMD_EQUIP_LIST: 7002,       // 装备列表请求
+  CMD_ITEM_ADD: 7003,         // 添加物品通知（服务端推送）
+  CMD_ITEM_REMOVE: 7004,      // 移除物品通知（服务端推送）
+  CMD_ITEM_UPDATE: 7005,      // 物品数量更新通知
 };
 
 // 游戏单例

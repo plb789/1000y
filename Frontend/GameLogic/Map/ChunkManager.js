@@ -558,11 +558,16 @@ class ChunkManager {
    * 用于在加载地图前决定是否启用分块模式
    *
    * @param {number} mapId - 地图ID
-   * @param {string} [apiBase] - 服务端API基础路径
+   * @param {string} [apiBase] - 服务端API基础路径（默认通过Gateway转发）
    * @returns {Promise<object|null>} 区块信息
    */
-  static async queryChunkInfo(mapId, apiBase = '/api/map') {
+  static async queryChunkInfo(mapId, apiBase = null) {
     try {
+      // ★ 自动检测API基础路径（优先使用配置，否则回退到GameService直连）
+      if (!apiBase) {
+        // 尝试从全局配置获取GameService地址
+        apiBase = window.GameConfig?.apiBaseUrl || 'http://localhost:8082/api/map';
+      }
       const resp = await fetch(`${apiBase}/${mapId}/chunk_info`);
       if (!resp.ok) return null;
       const json = await resp.json();

@@ -1,15 +1,20 @@
 package skill
 
 import (
+	"log"
 	"net/http"
 	"strconv"
+
+	attribute "game-server/GameService/Attribute"
+	cache "game-server/GameService/Cache"
 
 	"github.com/gin-gonic/gin"
 )
 
 // Handler HTTP请求处理
 type Handler struct {
-	service *Service
+	service     *Service
+	playerCache *cache.PlayerCache // ★ 新增：玩家状态缓存引用
 }
 
 // NewHandler 创建Handler实例
@@ -17,6 +22,12 @@ func NewHandler() *Handler {
 	return &Handler{
 		service: NewService(),
 	}
+}
+
+// SetPlayerCache 注入PlayerCache（在main.go中初始化后调用）
+// ★ 使用依赖注入模式，避免循环依赖
+func (h *Handler) SetPlayerCache(pc *cache.PlayerCache) {
+	h.playerCache = pc
 }
 
 // RegisterRoutes 注册路由
@@ -309,6 +320,7 @@ type EquipSkillRequest struct {
 }
 
 // EquipSkill 装备武学
+// ★ 完整流程：DB操作 → 缓存失效 → 重新计算属性 → 返回完整数据
 func (h *Handler) EquipSkill(c *gin.Context) {
 	roleIdStr := c.Param("roleId")
 	roleId, err := strconv.ParseUint(roleIdStr, 10, 64)
@@ -323,15 +335,81 @@ func (h *Handler) EquipSkill(c *gin.Context) {
 		return
 	}
 
+	// 1. 执行装备操作（写DB）
 	if err := h.service.EquipSkill(roleId, req.SkillID); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "装备成功"})
+	// 2. ★ 使旧缓存失效（强制下次重新计算）
+	if h.playerCache != nil {
+		if invalidateErr := h.playerCache.Invalidate(c.Request.Context(), roleId); invalidateErr != nil {
+			log.Printf("⚠️ 使缓存失败失败: %v", invalidateErr)
+			// 失败不阻塞主流程
+		}
+	}
+
+	// 3. ★ 重新计算并获取最新完整属性（含装备+技能+BUFF加成）
+	var finalAttrs *attribute.Attribute
+	var bonusDetail *attribute.AttributeBonus
+
+	if h.playerCache != nil {
+		playerState, calcErr := h.playerCache.GetOrLoad(c.Request.Context(), roleId)
+		if calcErr != nil {
+			log.Printf("⚠️ 获取最新属性失败: %v", calcErr)
+			// 降级：仅返回技能加成（不包含完整的最终属性）
+			bonus, _ := h.service.CalculateSkillBonus(roleId)
+			c.JSON(http.StatusOK, gin.H{
+				"code": 200,
+				"msg":  "装备成功",
+				"data": gin.H{
+					"skill_id":     req.SkillID,
+					"bonus":        bonus,
+					"final_attrs":  nil,
+					"bonus_detail": nil,
+				},
+			})
+			return
+		}
+		finalAttrs = playerState.FinalAttributes
+		bonusDetail = playerState.BonusDetail
+	} else {
+		// 未配置缓存时，使用旧的简单逻辑
+		bonus, _ := h.service.CalculateSkillBonus(roleId)
+		c.JSON(http.StatusOK, gin.H{
+			"code": 200,
+			"msg":  "装备成功",
+			"data": gin.H{
+				"skill_id": req.SkillID,
+				"bonus":    bonus,
+			},
+		})
+		return
+	}
+
+	// 4. ★ 返回完整的最新属性（供前端立即更新所有UI面板）
+	c.JSON(http.StatusOK, gin.H{
+		"code": 200,
+		"msg":  "装备成功",
+		"data": gin.H{
+			"skill_id":     req.SkillID,
+			"final_attrs":  finalAttrs,  // ★ 最终属性（HP/MP/攻击等）
+			"bonus_detail": bonusDetail, // ★ 加成明细（[武+5][装+15]等）
+			"equipped_skills": func() []map[string]interface{} {
+				if finalAttrs != nil && h.playerCache != nil {
+					state, _ := h.playerCache.GetOrLoad(c.Request.Context(), roleId)
+					if state != nil {
+						return state.EquippedSkills
+					}
+				}
+				return nil
+			}(),
+		},
+	})
 }
 
 // UnequipSkill 卸下武学
+// ★ 完整流程：DB操作 → 缓存失效 → 重新计算属性 → 返回完整数据
 func (h *Handler) UnequipSkill(c *gin.Context) {
 	roleIdStr := c.Param("roleId")
 	roleId, err := strconv.ParseUint(roleIdStr, 10, 64)
@@ -346,12 +424,75 @@ func (h *Handler) UnequipSkill(c *gin.Context) {
 		return
 	}
 
+	// 1. 执行卸载操作（写DB）
 	if err := h.service.UnequipSkill(roleId, req.SkillID); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "卸下成功"})
+	// 2. ★ 使旧缓存失效（强制下次重新计算）
+	if h.playerCache != nil {
+		if invalidateErr := h.playerCache.Invalidate(c.Request.Context(), roleId); invalidateErr != nil {
+			log.Printf("⚠️ 使缓存失败失败: %v", invalidateErr)
+			// 失败不阻塞主流程
+		}
+	}
+
+	// 3. ★ 重新计算并获取最新完整属性
+	var finalAttrs *attribute.Attribute
+	var bonusDetail *attribute.AttributeBonus
+
+	if h.playerCache != nil {
+		playerState, calcErr := h.playerCache.GetOrLoad(c.Request.Context(), roleId)
+		if calcErr != nil {
+			log.Printf("⚠️ 获取最新属性失败: %v", calcErr)
+			bonus, _ := h.service.CalculateSkillBonus(roleId)
+			c.JSON(http.StatusOK, gin.H{
+				"code": 200,
+				"msg":  "卸下成功",
+				"data": gin.H{
+					"skill_id":     req.SkillID,
+					"bonus":        bonus,
+					"final_attrs":  nil,
+					"bonus_detail": nil,
+				},
+			})
+			return
+		}
+		finalAttrs = playerState.FinalAttributes
+		bonusDetail = playerState.BonusDetail
+	} else {
+		bonus, _ := h.service.CalculateSkillBonus(roleId)
+		c.JSON(http.StatusOK, gin.H{
+			"code": 200,
+			"msg":  "卸下成功",
+			"data": gin.H{
+				"skill_id": req.SkillID,
+				"bonus":    bonus,
+			},
+		})
+		return
+	}
+
+	// 4. ★ 返回完整的最新属性（供前端立即更新所有UI面板）
+	c.JSON(http.StatusOK, gin.H{
+		"code": 200,
+		"msg":  "卸下成功",
+		"data": gin.H{
+			"skill_id":     req.SkillID,
+			"final_attrs":  finalAttrs,
+			"bonus_detail": bonusDetail,
+			"equipped_skills": func() []map[string]interface{} {
+				if finalAttrs != nil && h.playerCache != nil {
+					state, _ := h.playerCache.GetOrLoad(c.Request.Context(), roleId)
+					if state != nil {
+						return state.EquippedSkills
+					}
+				}
+				return nil
+			}(),
+		},
+	})
 }
 
 // ForgetSkill 遗忘武学

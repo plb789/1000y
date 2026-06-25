@@ -1,0 +1,48 @@
+# 多GameService实例配置
+# 用于分布式架构，支持水平扩展
+
+instances:
+  # GameService实例1（处理地图1-10）
+  - id: 1
+    name: "game-service-primary"
+    url: "http://localhost:8082"
+    handled_maps: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    max_connections: 1000        # 最大连接数
+    health_check_interval: 30    # 健康检查间隔(秒)
+    weight: 100                 # 权重(负载均衡用)
+    
+  # GameService实例2（处理地图11-20）
+  - id: 2
+    name: "game-service-secondary"
+    url: "http://localhost:8083"
+    handled_maps: [11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+    max_connections: 1000
+    health_check_interval: 30
+    weight: 100
+
+# 路由策略配置
+routing:
+  strategy: "map_id"            # 路由策略: map_id(按地图ID), round_robin(轮询), random(随机), hash(哈希)
+  fallback_enabled: true        # 是否启用降级（当目标实例不可用时路由到其他实例）
+  cache_ttl: 60                 # 路由缓存TTL(秒)
+
+# 负载均衡配置
+load_balancer:
+  algorithm: "weighted_round_robin"  # 算法: round_robin, weighted_rr, least_connections, random
+  health_threshold: 0.8              # 健康阈值(0-1)
+  
+# 服务发现配置
+discovery:
+  type: "static"               # 发现类型: static(静态配置), registry(注册中心), consul, etcd
+  registry_url: "http://localhost:8081"
+  refresh_interval: 10          # 刷新间隔(秒)
+  
+# 故障转移配置
+failover:
+  enabled: true                # 启用故障转移
+  max_retries: 3               # 最大重试次数
+  retry_delay_ms: 100          # 重试延迟(毫秒)
+  circuit_breaker:
+    enabled: true              # 启用熔断器
+    threshold: 5               # 熔断阈值(连续失败次数)
+    timeout_seconds: 30        # 熔断超时(秒)

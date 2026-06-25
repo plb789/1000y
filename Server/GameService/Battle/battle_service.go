@@ -1171,20 +1171,111 @@ func (s *Service) PlayerAttackMonster(roleID uint64, monsterInstanceID uint64, s
 				result.NewLevel = newLevel
 			}
 
-			// 将掉落物品添加到玩家背包
+			// 将掉落物品添加到玩家背包（★ 优化：先本地验证，减少DB压力）
 			if len(drops) > 0 {
 				itemSvc := item.NewService()
+
+				// ★ 先检查背包容量（避免逐个添加后发现背包满）
+				bagItems, bagErr := itemSvc.GetBagItems(roleID)
+				currentBagCount := 0
+				if bagErr == nil && bagItems != nil {
+					currentBagCount = len(bagItems)
+				}
+
 				for _, itemID := range drops {
-					slot, err := itemSvc.AddItem(roleID, itemID, 1, 0) // 0=不绑定
-					if err != nil {
-						log.Printf("添加掉落物品[%d]到背包失败: %v", itemID, err)
-					} else {
-						log.Printf("🎁 玩家 %d 获得掉落物品[%d], 放入格子 %d", roleID, itemID, slot)
-						result.DropItems = append(result.DropItems, map[string]interface{}{
-							"item_id": itemID,
-							"slot":    slot,
-						})
+					// ★ 先从本地配置验证物品是否存在（避免无效DB查询）
+					itemConfig := common.GetItemConfig(itemID)
+					if itemConfig == nil {
+						log.Printf("⚠️ 掉落物品[%d]不存在于items.json配置中，跳过", itemID)
+						continue // 跳过无效物品，不调用DB
 					}
+
+					// ★ 背包容量检查
+					if currentBagCount >= item.BagMaxSlots {
+						log.Printf("⚠️ 玩家 %d 背包已满(%d/%d)，掉落物品[%d-%s]丢失",
+							roleID, currentBagCount, item.BagMaxSlots, itemID, itemConfig.Name)
+						result.DropItems = append(result.DropItems, map[string]interface{}{
+							"item_id":   itemID,
+							"slot":      -1, // -1表示背包满未添加
+							"item_name": itemConfig.Name,
+							"quality":   itemConfig.Quality,
+							"icon":      itemConfig.Icon,
+							"type":      itemConfig.Type,
+							"type_name": getTypeName(itemConfig.Type),
+							"reason":    "bag_full",
+						})
+						continue
+					}
+
+					slot, addErr := itemSvc.AddItem(roleID, itemID, 1, 0) // 0=不绑定
+					if addErr != nil {
+						log.Printf("添加掉落物品[%d-%s]到背包失败: %v", itemID, itemConfig.Name, addErr)
+						result.DropItems = append(result.DropItems, map[string]interface{}{
+							"item_id":   itemID,
+							"slot":      -2, // -2表示添加失败
+							"item_name": itemConfig.Name,
+							"reason":    "add_failed",
+						})
+					} else {
+						currentBagCount++ // ★ 成功添加后递增计数
+						log.Printf("🎁 玩家 %d 获得掉落物品[%d-%s], 放入格子 %d (背包%d/%d)",
+							roleID, itemID, itemConfig.Name, slot, currentBagCount, item.BagMaxSlots)
+
+						// ★ 构建完整的物品信息供前端显示（包含icon、品质、属性等）
+						dropInfo := map[string]interface{}{
+							"item_id":     itemID,
+							"slot":        slot,
+							"item_name":   itemConfig.Name,
+							"quality":     itemConfig.Quality,
+							"icon":        itemConfig.Icon,
+							"type":        itemConfig.Type,
+							"type_name":   getTypeName(itemConfig.Type),
+							"description": itemConfig.Description,
+							"count":       1,
+						}
+
+						// ★ 装备类物品附加属性信息
+						if itemConfig.Type == 2 { // 装备类型
+							dropInfo["can_equip"] = true
+							dropInfo["equip_type"] = itemConfig.EquipType
+							dropInfo["attrs"] = map[string]int{
+								"attack":  itemConfig.AttackBonus,
+								"defense": itemConfig.DefenseBonus,
+								"speed":   itemConfig.SpeedBonus,
+								"hp":      itemConfig.HpBonus,
+								"mp":      itemConfig.MpBonus,
+							}
+							// 过滤掉0值属性
+							cleanAttrs := make(map[string]int)
+							for k, v := range dropInfo["attrs"].(map[string]int) {
+								if v != 0 {
+									cleanAttrs[k] = v
+								}
+							}
+							dropInfo["attrs"] = cleanAttrs
+						}
+
+						// ★ 消耗品类物品标记可使用
+						if itemConfig.Type == 1 { // 消耗品类型
+							dropInfo["can_use"] = true
+							dropInfo["hp_restore"] = itemConfig.HpRestore
+							dropInfo["mp_restore"] = itemConfig.MpRestore
+						}
+
+						result.DropItems = append(result.DropItems, dropInfo)
+					}
+				}
+
+				// ★ 统计掉落结果
+				successCount := 0
+				for _, di := range result.DropItems {
+					if slot, ok := di["slot"].(int); ok && slot >= 0 {
+						successCount++
+					}
+				}
+				if len(drops) > 0 {
+					log.Printf("📦 掉落汇总: 总计%d个物品, 成功拾取%d个, 背包容量%d/%d",
+						len(drops), successCount, currentBagCount, item.BagMaxSlots)
 				}
 			}
 		}
@@ -1691,4 +1782,19 @@ func (s *Service) PlayerAttackPlayer(attackerID, targetID uint64, skillID uint32
 	}
 
 	return result
+}
+
+// getTypeName 根据物品类型ID返回中文名称
+func getTypeName(itemType uint8) string {
+	typeNames := map[uint8]string{
+		1: "消耗品",
+		2: "装备",
+		3: "材料",
+		4: "任务物品",
+		5: "其他",
+	}
+	if name, ok := typeNames[itemType]; ok {
+		return name
+	}
+	return "未知"
 }

@@ -175,10 +175,18 @@ func (s *Service) MonsterDie(instanceID uint64) (exp int, gold int, drops []uint
 
 	// 计算掉落
 	if config.DropGroupID != nil {
+		log.Printf("🎲 怪物[%d-%s]开始计算掉落, drop_group_id=%d", monster.BaseID, config.Name, *config.DropGroupID)
 		drops, err = s.RollDrops(*config.DropGroupID)
 		if err != nil {
+			log.Printf("❌ 掉落计算错误: %v", err)
 			drops = nil
+		} else if len(drops) > 0 {
+			log.Printf("✅ 掉落成功: %v (共%d个物品)", drops, len(drops))
+		} else {
+			log.Printf("⚠️ 本次无掉落 (随机未命中)")
 		}
+	} else {
+		log.Printf("⚠️ 怪物[%d-%s]无掉落组配置 (drop_group_id=nil)", monster.BaseID, config.Name)
 	}
 
 	// 设置复活时间
@@ -191,15 +199,19 @@ func (s *Service) MonsterDie(instanceID uint64) (exp int, gold int, drops []uint
 }
 
 // RollDrops 掉落roll
-func (s *Service) RollDrops(monsterID uint32) ([]uint32, error) {
-	dropsConfig := common.GetDropsByMonsterID(monsterID)
+func (s *Service) RollDrops(dropGroupID uint32) ([]uint32, error) {
+	dropsConfig := common.GetDropsByMonsterID(dropGroupID)
+	log.Printf("🔍 查询掉落配置: drop_group_id=%d, 找到%d条掉落规则", dropGroupID, len(dropsConfig))
+
 	if len(dropsConfig) == 0 {
 		return nil, nil
 	}
 
 	var result []uint32
 	for _, drop := range dropsConfig {
-		if rand.Float64()*10000 < float64(drop.DropRate) {
+		roll := rand.Float64() * 10000
+		log.Printf("  🎲 物品[%d] 概率检查: roll=%.2f / %d (需要<%d)", drop.ItemID, roll, drop.DropRate, drop.DropRate)
+		if roll < float64(drop.DropRate) {
 			// 掉落
 			count := drop.DropMin
 			if drop.DropMax > drop.DropMin {
@@ -208,6 +220,9 @@ func (s *Service) RollDrops(monsterID uint32) ([]uint32, error) {
 			for i := uint32(0); i < count; i++ {
 				result = append(result, drop.ItemID)
 			}
+			log.Printf("  ✅ 掉落物品: item_id=%d x%d", drop.ItemID, count)
+		} else {
+			log.Printf("  ❌ 未掉落: item_id=%d (概率不足)", drop.ItemID)
 		}
 	}
 

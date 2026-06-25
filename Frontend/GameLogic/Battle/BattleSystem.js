@@ -6,6 +6,11 @@ class BattleSystem {
   constructor(game) {
     this.game = game;
     
+    // 特效管理器引用（由Game.js注入）
+    this.effectManager = null;
+    this.particleSystem = null;
+    this.proficiencyManager = null; // 熟练度管理器
+    
     // 怪物实例列表
     this.monsters = new Map(); // key=instanceID, value=MonsterData
     
@@ -14,6 +19,11 @@ class BattleSystem {
     
     // 掉落物品列表
     this.droppedItems = []; // {x, y, itemID, itemName, quantity, expireTime}
+
+    // ★ 图标图片缓存（用于Canvas渲染掉落物）
+    this.iconImageCache = new Map();       // key: iconPath, value: HTMLImageElement | Symbol('FAILED')
+    this.iconLoadAttempts = new Map();      // key: iconPath, value: number (重试次数)
+    this.MAX_ICON_RETRY = 2;               // 最大重试次数（超过后永久标记为失败）
     
     // 攻击冷却（毫秒）
     this.attackCooldown = 1500;
@@ -24,6 +34,7 @@ class BattleSystem {
     
     // 事件回调
     this.onMonsterClick = null; // 点击怪物回调
+    this.onMonsterDoubleClick = null; // 双击怪物回调（攻击）
     
     // ===== 平滑移动系统 =====
     this.smoothMoveEnabled = true; // 是否启用平滑移动
@@ -539,18 +550,14 @@ class BattleSystem {
     const monster = this.getMonsterAt(clickX, clickY);
     
     if (monster && monster.status !== 4) {
-      // 选中目标
-      this.selectedTarget = monster.id;
-      
-      // 触发回调
-      if (this.onMonsterClick) {
-        this.onMonsterClick(monster);
+      // 检查是否点击了已选中的目标
+      if (this.selectedTarget === monster.id) {
+        // 点击已选中的怪物 → 攻击
+        return { monster, action: 'attack' };
+      } else {
+        // 点击未选中的怪物 → 仅选中
+        return { monster, action: 'select' };
       }
-      
-      return monster;
-    } else {
-      // 取消选中
-      this.selectedTarget = null;
     }
     
     return null;
@@ -592,10 +599,11 @@ class BattleSystem {
 
     console.log(`⚔️ 发起攻击 -> 怪物 ${target.name} (${targetId})`);
 
-    // 通过WebSocket发送攻击请求（cmd=2002 CMD_ATTACK）
+    // 通过WebSocket发送攻击请求（cmd=2003 CMD_ATTACK）
+    // ★ BUG修复：原代码错误使用2002，已改为Protocol.CMD_ATTACK(2003)
     // 服务端Gateway转发到GameService，处理结果通过/internal/push异步推送回来
     if (window.GameWS && window.GameWS.isConnected) {
-      window.GameWS.send(2002, {
+      window.GameWS.send(window.Protocol.CMD_ATTACK, {
         target_id: targetId,
         target_type: 2,    // 2=怪物
         skill_id: 0,       // 0=普通攻击
@@ -778,11 +786,28 @@ class BattleSystem {
         // 仅击杀者显示掉落信息（广播消息中其他玩家也会收到，但只有击杀者应看到）
         const isKiller = data.attacker_id === this.game.player.id;
         if (isKiller) {
+          // 显示经验获取
           if (data.exp_gain) {
             this.showExpGain(data.exp_gain, monster.x, monster.y);
           }
-          if (data.drops && data.drops.length > 0) {
-            this.showDrops(data.drops, monster.x, monster.y);
+
+          // ★ 显示掉落物品（优先使用完整的 drop_items 信息）
+          const dropItems = data.drop_items || [];
+          const drops = data.drops || [];
+
+          if (dropItems.length > 0) {
+            // 使用服务端返回的完整物品信息（包含名称、图标、品质等）
+            this.showDrops(dropItems, monster.x, monster.y);
+
+            // ★ 自动将掉落物品添加到本地背包UI
+            dropItems.forEach(dropInfo => {
+              if (dropInfo.slot >= 0) { // 只处理成功拾取的物品
+                this.addToLocalInventory(dropInfo);
+              }
+            });
+          } else if (drops.length > 0) {
+            // 降级：使用纯ID数组
+            this.showDrops(drops, monster.x, monster.y);
           }
         }
       }
@@ -817,6 +842,9 @@ class BattleSystem {
     // 连击数追踪（玩家攻击时）
     if (data.attacker_id === this.game.player.id && !isMiss && damage > 0) {
       this.updateComboTracker();
+      
+      // 增加技能熟练度
+      this.addSkillProficiency(data);
     }
 
     // 技能攻击：显示技能名飘字 + 触发技能释放特效（后摇）
@@ -946,6 +974,28 @@ class BattleSystem {
       intensity: intensity,
       isCrit: isCrit
     });
+    
+    // 获取怪物位置并触发粒子特效
+    const monster = this.monsters.get(monsterId);
+    if (monster) {
+      const tileSize = this.game.mapEngine?.tileSize || 48;
+      const worldX = monster.x * tileSize + tileSize / 2;
+      const worldY = monster.y * tileSize + tileSize / 2;
+      
+      // 根据攻击类型触发不同的粒子特效
+      if (this.game.effectSettings?.enableParticles && this.particleSystem) {
+        let effectName = 'hit_normal';
+        if (isCrit) {
+          effectName = 'hit_critical';
+        } else if (isBlocked) {
+          effectName = 'block';
+        } else {
+          effectName = 'hit_normal';
+        }
+        
+        this.particleSystem.triggerEffect(effectName, worldX, worldY);
+      }
+    }
   }
 
   /**
@@ -957,6 +1007,11 @@ class BattleSystem {
       duration: duration,
       startTime: Date.now()
     };
+    
+    // 暴击时触发屏幕闪烁
+    if (intensity >= 5 && this.effectManager) {
+      this.effectManager.flashScreen('#FFD700'); // 金色闪烁
+    }
   }
 
   /**
@@ -1115,6 +1170,23 @@ class BattleSystem {
       duration: 1500,
       originalAlpha: 1.0
     });
+    
+    // 触发死亡粒子特效
+    const monster = this.monsters.get(monsterId);
+    if (monster) {
+      const tileSize = this.game.mapEngine?.tileSize || 48;
+      const worldX = monster.x * tileSize + tileSize / 2;
+      const worldY = monster.y * tileSize + tileSize / 2;
+      
+      if (this.game.effectSettings?.enableParticles && this.particleSystem) {
+        this.particleSystem.triggerEffect('death', worldX, worldY);
+      }
+      
+      // 触发屏幕震动（BOSS死亡）
+      if (monster.type === 2) { // BOSS
+        this.triggerScreenShake(5, 400);
+      }
+    }
   }
 
   // ========== 施法前摇动画 ==========
@@ -1218,6 +1290,39 @@ class BattleSystem {
       color,
       isCrit
     });
+    
+    // 触发技能粒子特效
+    if (this.game.effectSettings?.enableParticles && this.particleSystem) {
+      const tileSize = this.game.mapEngine?.tileSize || 48;
+      const worldX = toX * tileSize + tileSize / 2;
+      const worldY = toY * tileSize + tileSize / 2;
+      
+      // 根据技能类型选择不同的特效
+      const skillEffectMap = {
+        1: 'heal',        // 内功 - 治愈特效
+        2: 'heavy_hit',   // 外功 - 重击特效
+        3: 'dodge',       // 身法 - 闪避特效
+        4: 'shield',      // 护体 - 护盾特效
+        5: 'heavy_hit',   // 拳法 - 重击特效
+        6: 'sword_slash', // 剑法 - 剑气特效
+        7: 'sword_slash', // 刀法 - 刀光特效
+        8: 'thunder_impact', // 枪法 - 雷击特效
+        9: 'heavy_hit'    // 斧法 - 重击特效
+      };
+      
+      const effectName = skillEffectMap[skillType] || 'hit_normal';
+      this.particleSystem.triggerEffect(effectName, worldX, worldY);
+      
+      // 暴击时额外触发强烈特效
+      if (isCrit) {
+        this.particleSystem.triggerEffect('hit_critical', worldX, worldY);
+      }
+    }
+    
+    // 触发屏幕震动（强力技能）
+    if (skillType >= 4 && this.game.effectSettings?.enableScreenShake) {
+      this.triggerScreenShake(isCrit ? 8 : 4, 300);
+    }
   }
 
   // ========== 闪避/格挡特效增强 ==========
@@ -1232,6 +1337,14 @@ class BattleSystem {
       duration: 600,
       x, y
     });
+    
+    // 触发闪避粒子特效
+    if (this.game.effectSettings?.enableParticles && this.particleSystem) {
+      const tileSize = this.game.mapEngine?.tileSize || 48;
+      const worldX = x * tileSize + tileSize / 2;
+      const worldY = y * tileSize + tileSize / 2;
+      this.particleSystem.triggerEffect('dodge', worldX, worldY);
+    }
   }
 
   /**
@@ -1244,6 +1357,14 @@ class BattleSystem {
       duration: 400,
       x, y
     });
+    
+    // 触发格挡粒子特效
+    if (this.game.effectSettings?.enableParticles && this.particleSystem) {
+      const tileSize = this.game.mapEngine?.tileSize || 48;
+      const worldX = x * tileSize + tileSize / 2;
+      const worldY = y * tileSize + tileSize / 2;
+      this.particleSystem.triggerEffect('block', worldX, worldY);
+    }
   }
 
   /**
@@ -1264,6 +1385,23 @@ class BattleSystem {
       const color = this.comboTracker.count >= 10 ? '#FF1493' : '#FFD700';
       this.addDamageNumber(player.x, player.y - 1.5, `${this.comboTracker.count} 连击!`, color, true);
     }
+  }
+
+  /**
+   * 增加技能熟练度
+   */
+  addSkillProficiency(data) {
+    if (!this.proficiencyManager) return;
+    
+    const skillId = data.skill_id || 0;
+    if (skillId === 0) return; // 普通攻击不增加熟练度
+    
+    this.proficiencyManager.addExp(skillId, {
+      isHit: !data.is_miss && data.damage > 0,
+      isCrit: data.is_crit || false,
+      isKill: data.is_dead || false,
+      combo: this.comboTracker.count
+    });
   }
 
   /**
@@ -1409,49 +1547,118 @@ class BattleSystem {
    * 显示物品掉落
    */
   showDrops(drops, x, y) {
-    // 显示掉落飘字提示
-    drops.forEach((itemId, index) => {
+    // 显示掉落飘字提示（使用真实物品名称和图标）
+    drops.forEach((dropInfo, index) => {
+      // 支持两种格式：纯ID数组 或 完整物品信息对象
+      const itemId = dropInfo.item_id || dropInfo.id || dropInfo;
+      const itemName = dropInfo.item_name || this.getItemNameById(itemId) || `物品#${itemId}`;
+      const itemIcon = dropInfo.icon || this.getItemIconById(itemId) || '🎁';
+      const quality = dropInfo.quality || this.getItemQualityById(itemId) || 1;
+
+      // 品质颜色
+      const qualityColor = this.getQualityColor(quality);
+
       setTimeout(() => {
-        this.addDamageNumber(x, y - 1 - index * 0.5, `+物品#${itemId}`, '#FFD700', false);
+        // 显示飘字：图标+名称
+        this.addDamageNumber(x, y - 1 - index * 0.5, `${itemIcon} ${itemName}`, qualityColor, false);
       }, index * 200);
     });
 
     // 添加掉落物到地面（可拾取）
     this.addDroppedItems(x, y, drops);
   }
+
+  /**
+   * 根据物品ID获取名称（从ItemDataManager）
+   */
+  getItemNameById(itemId) {
+    if (window.itemDataManager) {
+      const item = window.itemDataManager.getItem(itemId);
+      return item ? item.name : null;
+    }
+    return null;
+  }
+
+  /**
+   * 根据物品ID获取图标
+   */
+  getItemIconById(itemId) {
+    if (window.itemDataManager) {
+      const item = window.itemDataManager.getItem(itemId);
+      return item ? item.icon : null;
+    }
+    return null;
+  }
+
+  /**
+   * 根据物品ID获取品质
+   */
+  getItemQualityById(itemId) {
+    if (window.itemDataManager) {
+      const item = window.itemDataManager.getItem(itemId);
+      return item ? item.quality : null;
+    }
+    return null;
+  }
+
+  /**
+   * 获取品质颜色
+   */
+  getQualityColor(quality) {
+    const colors = {
+      1: '#9ca3af',  // 普通 - 灰色
+      2: '#22c55e',  // 优秀 - 绿色
+      3: '#3b82f6',  // 精良 - 蓝色
+      4: '#a855f7',  // 史诗 - 紫色
+      5: '#f59e0b'   // 传说 - 橙色
+    };
+    return colors[quality] || '#FFD700';
+  }
   
   /**
    * 添加掉落物品到地面
    */
-  addDroppedItems(x, y, itemIDs) {
-    // 简单的物品名称映射（实际应该从配置文件读取）
-    const itemNames = {
-      1001: '铁剑',
-      1002: '皮甲',
-      1003: '生命药水',
-      1004: '魔法药水',
-      2001: '狼牙',
-      2002: '兔肉',
-      2003: '鸡毛'
-    };
-    
-    itemIDs.forEach((itemID, index) => {
+  addDroppedItems(x, y, dropList) {
+    // 使用ItemDataManager获取真实物品信息（替代硬编码）
+    dropList.forEach((dropInfo, index) => {
+      // 支持两种格式：纯ID 或 完整物品信息对象
+      const itemId = dropInfo.item_id || dropInfo.id || dropInfo;
+      const itemData = this.getItemDataById(itemId);
+
+      const itemName = dropInfo.item_name || (itemData ? itemData.name : `物品#${itemId}`);
+      const itemIcon = dropInfo.icon || (itemData ? itemData.icon : '🎁');
+      const quality = dropInfo.quality || (itemData ? itemData.quality : 1);
+      const type = dropInfo.type || (itemData ? itemData.type : 0);
+
       // 在怪物周围随机散落（稍微偏移位置）
       const offsetX = (Math.random() - 0.5) * 2;
       const offsetY = (Math.random() - 0.5) * 2;
-      
+
       this.droppedItems.push({
         x: x + offsetX,
         y: y + offsetY,
-        itemID: itemID,
-        itemName: itemNames[itemID] || `物品#${itemID}`,
-        quantity: 1,
+        itemID: itemId,
+        itemName: itemName,
+        itemIcon: itemIcon,
+        quality: quality,
+        type: type,
+        quantity: dropInfo.count || 1,
         expireTime: Date.now() + 60000, // 60秒后消失
         spawnTime: Date.now()
       });
     });
-    
-    console.log(`💎 地面新增 ${itemIDs.length} 个掉落物品`);
+
+    console.log(`💎 地面新增 ${dropList.length} 个掉落物品`);
+  }
+
+  /**
+   * 根据物品ID获取完整数据
+   */
+  getItemDataById(itemId) {
+    if (window.itemDataManager) {
+      return window.itemDataManager.getItem(itemId);
+    }
+    return null;
   }
   
   /**
@@ -1460,7 +1667,7 @@ class BattleSystem {
   renderDroppedItems(ctx, tileSize) {
     const camera = this.game.mapEngine?.camera;
     const now = Date.now();
-    
+
     // 过滤过期物品并更新动画
     this.droppedItems = this.droppedItems.filter(item => {
       if (now > item.expireTime) {
@@ -1468,58 +1675,80 @@ class BattleSystem {
       }
       return true;
     });
-    
+
     // 绘制每个掉落物品（使用世界坐标，与玩家/怪物对齐）
     this.droppedItems.forEach(item => {
       const worldX = item.x * tileSize + tileSize/2;
       const worldY = item.y * tileSize + tileSize/2;
-      
+
       // 视野裁剪：转换为屏幕坐标进行判断
       const screenX = worldX - (camera?.offsetX || 0);
       const screenY = worldY - (camera?.offsetY || 0);
-      
+
       if (screenX < -20 || screenX > ctx.canvas.width + 20 ||
           screenY < -20 || screenY > ctx.canvas.height + 20) {
         return;
       }
-      
+
       ctx.save();
-      
+
       // 物品发光效果（呼吸动画）
       const age = now - item.spawnTime;
       const glow = Math.sin(age / 300) * 0.3 + 0.7; // 呼吸效果
-      
-      // 绘制光晕（使用世界坐标）
+
+      // ★ 根据品质获取颜色（替代固定的金色）
+      const qualityColor = this.getQualityColor(item.quality || 1);
+      const rgbaColor = this.hexToRgba(qualityColor, 0.4 * glow);
+
+      // 绘制光晕（使用品质颜色）
       ctx.beginPath();
-      ctx.arc(worldX, worldY, 12, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(255, 215, 0, ${0.3 * glow})`;
+      ctx.arc(worldX, worldY, 14, 0, Math.PI * 2);
+      ctx.fillStyle = rgbaColor;
       ctx.fill();
-      
-      // 绘制物品图标（简单的宝箱形状）
-      ctx.fillStyle = '#FFD700'; // 金色
-      ctx.strokeStyle = '#B8860B';
-      ctx.lineWidth = 2;
-      
-      // 宝箱主体
-      ctx.fillRect(worldX - 8, worldY - 6, 16, 12);
-      ctx.strokeRect(worldX - 8, worldY - 6, 16, 12);
-      
-      // 宝箱装饰线
+
+      // ★ 绘制物品背景圆（带品质边框）
       ctx.beginPath();
-      ctx.moveTo(worldX - 8, worldY);
-      ctx.lineTo(worldX + 8, worldY);
+      ctx.arc(worldX, worldY, 11, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(20, 20, 30, 0.85)';
+      ctx.fill();
+      ctx.strokeStyle = qualityColor;
+      ctx.lineWidth = 2;
       ctx.stroke();
-      
-      // 锁扣
-      ctx.fillStyle = '#B8860B';
-      ctx.fillRect(worldX - 3, worldY - 3, 6, 6);
-      
-      // 显示物品名称（鼠标悬停时显示，这里简化为始终显示）
-      if (glow > 0.9) { // 闪烁时显示名称
-        ctx.font = '10px Arial';
+
+      // ★ 绘制物品图标（使用drawItemIcon支持真实icon或emoji）
+      this.drawItemIcon(ctx, item.itemIcon || '🎁', worldX, worldY, 16);
+
+      // ★ 显示数量（如果大于1）
+      if (item.quantity > 1) {
+        ctx.font = 'bold 9px Arial';
         ctx.fillStyle = '#FFFFFF';
-        ctx.textAlign = 'center';
-        ctx.fillText(item.itemName, worldX, worldY - 15);
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.lineWidth = 3;
+        ctx.strokeText(`${item.quantity}`, worldX + 8, worldY + 8);
+        ctx.fillText(`${item.quantity}`, worldX + 8, worldY + 8);
+      }
+
+      // 显示物品名称（闪烁时显示）
+      if (glow > 0.85) { // 闪烁时显示名称
+        ctx.font = 'bold 10px Microsoft YaHei, Arial';
+        // 文字阴影
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+        ctx.lineWidth = 3;
+        ctx.strokeText(item.itemName, worldX, worldY - 18);
+        // 品质颜色文字
+        ctx.fillStyle = qualityColor;
+        ctx.fillText(item.itemName, worldX, worldY - 18);
+      }
+
+      // 快过期警告（剩余10秒时显示红色闪烁）
+      const remainingSec = (item.expireTime - now) / 1000;
+      if (remainingSec < 10 && remainingSec > 0) {
+        const warningAlpha = Math.sin(age / 150) * 0.3 + 0.5;
+        ctx.beginPath();
+        ctx.arc(worldX, worldY, 14, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(239, 68, 68, ${warningAlpha})`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
       }
 
       ctx.restore();
@@ -2046,6 +2275,246 @@ class BattleSystem {
     this.monsters.clear();
     this.damageNumbers = [];
     this.selectedTarget = null;
+  }
+
+  /**
+   * 将掉落物品添加到本地背包UI（乐观更新，与服务端保持最终一致性）
+   * @param {object} dropInfo - 服务端返回的掉落物品信息
+   */
+  addToLocalInventory(dropInfo) {
+    if (!this.game || !this.game.inventory) {
+      console.warn('[BattleSystem] 无法添加到背包: game 或 inventory 不存在');
+      return;
+    }
+
+    // 构建标准化的物品对象（与服务端返回格式一致）
+    const itemData = {
+      id: dropInfo.item_id,
+      name: dropInfo.item_name,
+      icon: dropInfo.icon,
+      quality: dropInfo.quality || 1,
+      type: dropInfo.type,
+      type_name: dropInfo.type_name,
+      description: dropInfo.description,
+      count: dropInfo.count || 1,
+      slot: dropInfo.slot
+    };
+
+    // 装备类物品标记
+    if (dropInfo.can_equip) {
+      itemData.can_equip = true;
+      itemData.equip_pos = this.getEquipPosName(dropInfo.equip_type);
+      itemData.attrs = dropInfo.attrs;
+    }
+
+    // 消耗品类物品标记
+    if (dropInfo.can_use) {
+      itemData.can_use = true;
+      itemData.hp_restore = dropInfo.hp_restore;
+      itemData.mp_restore = dropInfo.mp_restore;
+    }
+
+    // 添加到背包
+    this.game.inventory.addItem(itemData);
+
+    console.log(`🎁 [BattleSystem] 物品已添加到背包: ${itemData.name} x${itemData.count}`);
+  }
+
+  /**
+   * 获取装备位置名称
+   */
+  getEquipPosName(equipType) {
+    const posNames = {
+      1: 'weapon',
+      2: 'helmet',
+      3: 'armor',
+      4: 'necklace',
+      5: 'ring',
+      6: 'boots'
+    };
+    return posNames[equipType] || 'weapon';
+  }
+
+  /**
+   * 判断图标是否为图片路径
+   */
+  isIconImagePath(icon) {
+    if (!icon || typeof icon !== 'string') return false;
+    return /\.(png|jpg|jpeg|gif|svg|webp)$/i.test(icon);
+  }
+
+  /**
+   * 获取或加载图标图片（带缓存 + 失败缓存 + 重试限制）
+   *
+   * 优化策略：
+   * 1. 成功：缓存 HTMLImageElement，后续直接使用
+   * 2. 加载中：返回 null，等待 onload 回调
+   * 3. 失败：缓存 FAILED 标记，避免重复404请求
+   * 4. 重试：最多 MAX_ICON_RETRY 次，超过后永久降级为emoji
+   *
+   * @param {string} iconPath - 图片路径
+   * @returns {HTMLImageElement|null|Symbol} 图片对象、null(加载中)、FAILED(永久失败)
+   */
+  getOrLoadIconImage(iconPath) {
+    if (!iconPath) return null;
+
+    // ★ 检查缓存（包括失败缓存）
+    const cached = this.iconImageCache.get(iconPath);
+    if (cached !== undefined) {
+      // 如果是失败标记，直接返回（不再重复请求）
+      if (cached === this.FAILED_SYMBOL) {
+        return this.FAILED_SYMBOL;
+      }
+      return cached; // 返回已缓存的图片或null(正在加载)
+    }
+
+    // 检查重试次数
+    const attempts = this.iconLoadAttempts.get(iconPath) || 0;
+    if (attempts >= this.MAX_ICON_RETRY) {
+      // 超过最大重试次数，标记为永久失败
+      console.log(`[BattleSystem] 图标放弃加载(${attempts}次): ${iconPath}`);
+      this.iconImageCache.set(iconPath, this.FAILED_SYMBOL);
+      return this.FAILED_SYMBOL;
+    }
+
+    // 创建新图片并开始加载
+    const img = new Image();
+    // 构建完整URL
+    let src = iconPath;
+    if (!iconPath.startsWith('http://') && !iconPath.startsWith('https://') && !iconPath.startsWith('/')) {
+      src = `assets/icons/${iconPath}`;
+    }
+    img.src = src;
+
+    // 增加重试计数
+    this.iconLoadAttempts.set(iconPath, attempts + 1);
+
+    // 缓存中先存null，表示正在加载
+    this.iconImageCache.set(iconPath, null);
+
+    // 加载完成后更新缓存
+    img.onload = () => {
+      this.iconImageCache.set(iconPath, img);
+      // 成功后清除重试计数（可选）
+      // this.iconLoadAttempts.delete(iconPath);
+    };
+
+    // ★ 加载失败时：缓存失败标记，不再删除（关键优化！）
+    img.onerror = () => {
+      // 标记为失败（不是删除！）
+      this.iconImageCache.set(iconPath, this.FAILED_SYMBOL);
+      // 仅在控制台输出一次警告（不刷屏）
+      if (attempts === 0) {
+        console.warn(`[BattleSystem] 图标不存在: ${src} (将使用emoji替代)`);
+      }
+    };
+
+    return null; // 首次调用返回null（图片还在加载）
+  }
+
+  /**
+   * 失败标记符号（用于区分"正在加载"和"加载失败"）
+   */
+  get FAILED_SYMBOL() {
+    if (!this._failedSymbol) {
+      this._failedSymbol = Symbol('ICON_LOAD_FAILED');
+    }
+    return this._failedSymbol;
+  }
+
+  /**
+   * 绘制掉落物图标（支持emoji和图片两种格式）
+   */
+  drawItemIcon(ctx, icon, x, y, size) {
+    if (this.isIconImagePath(icon)) {
+      // 图片路径：尝试从缓存获取并绘制
+      const result = this.getOrLoadIconImage(icon);
+
+      if (result === this.FAILED_SYMBOL) {
+        // ★ 永久失败：使用智能匹配的emoji降级（不再重复请求404）
+        const fallbackEmoji = this.getFallbackEmojiByFileName(icon);
+        ctx.font = `${size}px serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(fallbackEmoji, x, y);
+        return;
+      }
+
+      if (result && result.complete) {
+        // 图片加载成功：绘制图片
+        const scale = Math.min(size / result.width, size / result.height);
+        const w = result.width * scale;
+        const h = result.height * scale;
+        ctx.drawImage(result, x - w/2, y - h/2, w, h);
+      } else {
+        // 图片正在加载中：显示加载中图标
+        ctx.font = `${size}px serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('⏳', x, y);
+      }
+    } else {
+      // Emoji：直接绘制文本
+      ctx.font = `${size}px serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(icon || '🎁', x, y);
+    }
+  }
+
+  /**
+   * 根据文件名智能匹配降级emoji（图片加载失败时使用）
+   */
+  getFallbackEmojiByFileName(fileName) {
+    if (!fileName) return '📦';
+    const name = fileName.toLowerCase();
+
+    // 消耗品类
+    if (name.includes('hp_potion') || name.includes('hp_elixir')) return '🧪';
+    if (name.includes('mp_potion') || name.includes('mp_elixir')) return '💧';
+
+    // 武器类
+    if (name.includes('sword') || name.includes('blade')) return '⚔️';
+    if (name.includes('axe')) return '🪓';
+    if (name.includes('bow')) return '🏹';
+    if (name.includes('staff')) return '🪄';
+    if (name.includes('weapon_wood')) return '🪵';
+    if (name.includes('weapon_iron') || name.includes('weapon_steel')) return '⚔️';
+    if (name.includes('weapon_yt')) return '✨';
+
+    // 防具类
+    if (name.includes('armor') || name.includes('cloth')) return '👕';
+    if (name.includes('helmet') || name.includes('hat')) return '🧢';
+    if (name.includes('boots')) return '👢';
+
+    // 饰品类
+    if (name.includes('necklace')) return '📿';
+    if (name.includes('ring')) return '💍';
+
+    // 材料类
+    if (name.includes('iron')) return '�ite';
+    if (name.includes('steel')) return '🔩';
+    if (name.includes('stone') || name.includes('ore')) return '🪨';
+    if (name.includes('herb') || name.includes('grass')) return '🌿';
+    if (name.includes('cloth') || name.includes('thread')) return '🧵';
+    if (name.includes('crystal') || name.includes('gem')) return '💎';
+    if (name.includes('ice') || name.includes('snow')) return '❄️';
+    if (name.includes('material_')) return '📦';
+
+    return '📦'; // 默认
+  }
+
+  /**
+   * 将十六进制颜色转换为RGBA格式
+   */
+  hexToRgba(hex, alpha) {
+    // 移除#号
+    hex = hex.replace('#', '');
+    // 解析RGB值
+    const r = parseInt(hex.substring(0, 2), 16);
+    const g = parseInt(hex.substring(2, 4), 16);
+    const b = parseInt(hex.substring(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
 }
 

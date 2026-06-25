@@ -17,6 +17,7 @@ type ConfigLoader struct {
 	DropGroups    []DropGroupConfig    // 掉落组配置
 	Buffs         []BuffBaseConfig     // BUFF配置
 	Quests        []QuestBaseConfig    // 任务配置
+	Achievements  []AchievementConfig  // 成就配置（新增）
 	Shops         []ShopConfig         // 商店配置
 	ShopGoods     []ShopGoodsConfig    // 商品配置
 	Announcements []AnnouncementConfig // 公告配置
@@ -176,23 +177,60 @@ type BuffBaseConfig struct {
 	LifestealPct       int `json:"lifesteal_pct"`        // 吸血百分比(0-100), 攻击时回血
 }
 
+// QuestObjectiveConfig 任务目标配置（支持多目标）
+type QuestObjectiveConfig struct {
+	ID          uint32 `json:"id"`           // 目标ID
+	TargetType  uint8  `json:"target_type"`  // 目标类型: 1=击杀, 2=采集, 3=对话, 4=探索
+	TargetID    uint32 `json:"target_id"`    // 目标ID（怪物ID/物品ID/NPC ID等）
+	TargetName  string `json:"target_name"`  // 目标名称（用于前端显示）
+	TargetCount int    `json:"target_count"` // 目标数量
+}
+
 // QuestBaseConfig 任务配置
 type QuestBaseConfig struct {
-	ID              uint32  `json:"id"`
-	Name            string  `json:"name"`
-	Type            uint8   `json:"type"`
-	LevelReq        uint32  `json:"level_req"`
-	Repeatable      uint8   `json:"repeatable"`
-	TargetType      uint8   `json:"target_type"`
-	TargetID        uint32  `json:"target_id"`
-	TargetCount     int     `json:"target_count"`
-	RewardExp       uint64  `json:"reward_exp"`
-	RewardGold      uint64  `json:"reward_gold"`
-	RewardItemID    *uint32 `json:"reward_item_id"`
-	RewardItemCount *int    `json:"reward_item_count"`
-	Description     string  `json:"description"`
-	NPCAcceptID     *uint32 `json:"npc_accept_id"`
-	NPCCompleteID   *uint32 `json:"npc_complete_id"`
+	ID              uint32                 `json:"id"`
+	Name            string                 `json:"name"`
+	Type            uint8                  `json:"type"` // 任务类型: 1=主线, 2=支线, 3=日常, 4=周常, 5=活动
+	LevelReq        uint32                 `json:"level_req"`
+	Repeatable      uint8                  `json:"repeatable"`
+	TargetType      uint8                  `json:"target_type"`  // 主目标类型（兼容单目标任务）
+	TargetID        uint32                 `json:"target_id"`    // 主目标ID（兼容单目标任务）
+	TargetName      string                 `json:"target_name"`  // 主目标名称（用于前端显示）
+	TargetCount     int                    `json:"target_count"` // 主目标数量
+	Objectives      []QuestObjectiveConfig `json:"objectives"`   // 多目标列表（支持复杂任务）
+	RewardExp       uint64                 `json:"reward_exp"`
+	RewardGold      uint64                 `json:"reward_gold"`
+	RewardHonor     uint64                 `json:"reward_honor"` // 声望奖励（新增）
+	RewardItemID    *uint32                `json:"reward_item_id"`
+	RewardItemCount *int                   `json:"reward_item_count"`
+	Description     string                 `json:"description"`
+	NPCAcceptID     *uint32                `json:"npc_accept_id"`
+	NPCCompleteID   *uint32                `json:"npc_complete_id"`
+	PrevQuestID     *uint32                `json:"prev_quest_id"`     // 前置任务ID（新增）
+	TimeLimit       *int                   `json:"time_limit"`        // 时间限制（秒，新增）
+	AutoAccept      uint8                  `json:"auto_accept"`       // 是否自动接取（新增）
+	AutoComplete    uint8                  `json:"auto_complete"`     // 是否自动完成（新增）
+	QuestChainID    *uint32                `json:"quest_chain_id"`    // 任务链ID（同一链的任务共享）
+	ChainRewardExp  uint64                 `json:"chain_reward_exp"`  // 任务链额外经验奖励
+	ChainRewardGold uint64                 `json:"chain_reward_gold"` // 任务链额外金币奖励
+}
+
+// AchievementConfig 成就配置
+type AchievementConfig struct {
+	ID              uint32  `json:"id"`                // 成就ID
+	Name            string  `json:"name"`              // 成就名称
+	Description     string  `json:"description"`       // 成就描述
+	Type            uint8   `json:"type"`              // 成就类型: 1=任务, 2=战斗, 3=收集, 4=探索, 5=社交
+	Condition       string  `json:"condition"`         // 条件类型: quest_complete, monster_kill, item_collect, etc.
+	TargetID        uint32  `json:"target_id"`         // 目标ID (如任务ID、怪物ID等)
+	TargetCount     int     `json:"target_count"`      // 目标数量
+	RewardExp       uint64  `json:"reward_exp"`        // 奖励经验
+	RewardGold      uint64  `json:"reward_gold"`       // 奖励金币
+	RewardHonor     uint64  `json:"reward_honor"`      // 奖励声望
+	RewardItemID    *uint32 `json:"reward_item_id"`    // 奖励物品ID
+	RewardItemCount *int    `json:"reward_item_count"` // 奖励物品数量
+	Icon            string  `json:"icon"`              // 图标
+	Point           uint32  `json:"point"`             // 成就点数
 }
 
 // ShopConfig 商店配置
@@ -322,6 +360,14 @@ func LoadGameConfig(configPath string) error {
 		return err
 	}
 
+	// 加载成就配置
+	if err := loadJSONFile(configPath+"/achievements.json", &GameConfig.Achievements); err != nil {
+		log.Printf("⚠️ 成就配置加载失败: %v (可选)", err)
+		GameConfig.Achievements = []AchievementConfig{} // 允许为空
+	} else {
+		log.Printf("✅ 成就配置加载成功: %d个成就", len(GameConfig.Achievements))
+	}
+
 	// 加载商店配置(包含商店和商品)
 	var shopsData struct {
 		Shops     []ShopConfig      `json:"shops"`
@@ -431,6 +477,18 @@ func GetItemConfig(itemID uint32) *ItemBaseConfig {
 	return nil
 }
 
+// GetItemConfigByEquipType 根据装备类型获取道具配置（用于装备槽位显示）
+func GetItemConfigByEquipType(equipType uint8) *ItemBaseConfig {
+	// 返回该类型的第一个物品配置（简化处理）
+	// 实际应用中应该通过 bag_item_id 查询具体物品
+	for i := range GameConfig.Items {
+		if GameConfig.Items[i].Type == 2 && GameConfig.Items[i].EquipType == equipType { // Type=2 表示装备
+			return &GameConfig.Items[i]
+		}
+	}
+	return nil
+}
+
 // GetAllItemConfig 获取所有道具配置
 func GetAllItemConfig() []ItemBaseConfig {
 	return GameConfig.Items
@@ -476,6 +534,34 @@ func GetQuestsByType(questType uint8) []QuestBaseConfig {
 		}
 	}
 	return quests
+}
+
+// GetAllQuestConfigs 获取所有任务配置
+func GetAllQuestConfigs() []*QuestBaseConfig {
+	configs := make([]*QuestBaseConfig, 0, len(GameConfig.Quests))
+	for i := range GameConfig.Quests {
+		configs = append(configs, &GameConfig.Quests[i])
+	}
+	return configs
+}
+
+// GetAchievementConfig 获取成就配置
+func GetAchievementConfig(achievementID uint32) *AchievementConfig {
+	for i := range GameConfig.Achievements {
+		if GameConfig.Achievements[i].ID == achievementID {
+			return &GameConfig.Achievements[i]
+		}
+	}
+	return nil
+}
+
+// GetAllAchievementConfigs 获取所有成就配置
+func GetAllAchievementConfigs() []*AchievementConfig {
+	configs := make([]*AchievementConfig, 0, len(GameConfig.Achievements))
+	for i := range GameConfig.Achievements {
+		configs = append(configs, &GameConfig.Achievements[i])
+	}
+	return configs
 }
 
 // GetShopConfig 获取商店配置

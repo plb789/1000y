@@ -9,10 +9,17 @@ class SkillBar {
     this.skillSlots = [];
     this.maxSlots = 8;
     this.shortcutKeys = ['1', '2', '3', '4', '5', '6', '7', '8']; // 快捷键映射（8个槽位）
-    
+
     // 技能配置缓存（从服务端加载的技能基础数据）
     this.skillConfigCache = new Map(); // skillId -> skillConfig
-    
+
+    // ★ 新增：角色技能数据缓存（供SkillPanel复用，避免重复请求）
+    this.learnedSkills = [];  // 已学技能列表
+    this.equippedSkills = []; // 已装备技能列表
+
+    // ★ 新增：加载状态标志（供SkillPanel等待）
+    this.isLoading = false;   // 是否正在从服务端加载数据
+
     // 初始化
     this.init();
   }
@@ -91,9 +98,9 @@ class SkillBar {
         transition:all 0.2s; margin-left:4px;`;
       skillBtn.onmouseover = () => { skillBtn.style.background = '#e94560'; skillBtn.style.color = '#fff'; };
       skillBtn.onmouseout = () => { skillBtn.style.background = 'linear-gradient(135deg,#1a1a2e,#16213e)'; skillBtn.style.color = '#e94560'; };
-      skillBtn.onclick = () => {
+      skillBtn.onclick = (event) => {
         if (this.game && this.game.skillPanel) {
-          this.game.skillPanel.toggle();
+          this.game.skillPanel.toggle(event); // ★ 传递event用于阻止冒泡
         }
       };
       this.container.appendChild(skillBtn);
@@ -199,6 +206,44 @@ class SkillBar {
       white-space: nowrap;
     `;
     
+    // 技能等级标签
+    const level = document.createElement('div');
+    level.className = 'skill-level';
+    level.style.cssText = `
+      position: absolute;
+      top: 2px;
+      left: 3px;
+      font-size: 9px;
+      color: #fbbf24;
+      font-weight: bold;
+      font-family: 'Microsoft YaHei', sans-serif;
+      background: rgba(0, 0, 0, 0.7);
+      padding: 1px 4px;
+      border-radius: 4px;
+    `;
+    
+    // 熟练度进度条
+    const expBar = document.createElement('div');
+    expBar.className = 'skill-exp-bar';
+    expBar.style.cssText = `
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      height: 2px;
+      background: rgba(0, 0, 0, 0.5);
+    `;
+    
+    const expFill = document.createElement('div');
+    expFill.className = 'skill-exp-fill';
+    expFill.style.cssText = `
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, #4ade80, #22c55e);
+      transition: width 0.3s ease;
+    `;
+    expBar.appendChild(expFill);
+    
     // 快捷键提示
     const shortcut = document.createElement('div');
     shortcut.className = 'skill-shortcut';
@@ -217,19 +262,67 @@ class SkillBar {
     mpCost.className = 'skill-mp-cost';
     mpCost.style.cssText = `
       position: absolute;
-      bottom: 2px;
+      bottom: 4px;
       right: 3px;
       font-size: 9px;
       color: #60a5fa;
       font-family: 'Microsoft YaHei', sans-serif;
     `;
     
+    // 悬浮提示框
+    const tooltip = document.createElement('div');
+    tooltip.className = 'skill-tooltip';
+    tooltip.style.cssText = `
+      position: absolute;
+      bottom: calc(100% + 8px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(20, 20, 30, 0.98);
+      border: 1px solid #4a5568;
+      border-radius: 8px;
+      padding: 10px 14px;
+      min-width: 180px;
+      max-width: 250px;
+      display: none;
+      z-index: 100;
+      pointer-events: none;
+      font-family: 'Microsoft YaHei', sans-serif;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    `;
+    tooltip.innerHTML = `
+      <div style="font-weight:bold; color:#fff; font-size:13px; margin-bottom:6px;"></div>
+      <div style="font-size:11px; color:#888; margin-bottom:6px;"></div>
+      <div style="display:flex; gap:12px; font-size:11px;">
+        <span style="color:#ef4444;">伤害:</span>
+        <span style="color:#fff;">--</span>
+      </div>
+      <div style="display:flex; gap:12px; font-size:11px;">
+        <span style="color:#60a5fa;">MP:</span>
+        <span style="color:#fff;">--</span>
+      </div>
+      <div style="display:flex; gap:12px; font-size:11px;">
+        <span style="color:#fbbf24;">冷却:</span>
+        <span style="color:#fff;">--</span>
+      </div>
+      <div style="display:flex; gap:12px; font-size:11px;">
+        <span style="color:#888;">等级:</span>
+        <span style="color:#fbbf24;">--</span>
+      </div>
+      <div style="display:flex; gap:12px; font-size:11px;">
+        <span style="color:#4ade80;">熟练度:</span>
+        <span style="color:#fff;">--</span>
+      </div>
+    `;
+    
     // 组装
     slot.appendChild(icon);
     slot.appendChild(name);
+    slot.appendChild(level);
+    slot.appendChild(expBar);
     slot.appendChild(shortcut);
     slot.appendChild(mpCost);
     slot.appendChild(cooldownOverlay);
+    slot.appendChild(tooltip);
     
     // 鼠标事件
     slot.addEventListener('click', () => this.onSlotClick(index));
@@ -238,16 +331,28 @@ class SkillBar {
       this.onSlotRightClick(index);
     });
     
+    // 悬浮显示详情
+    slot.addEventListener('mouseenter', () => this.showTooltip(index));
+    slot.addEventListener('mouseleave', () => this.hideTooltip(index));
+    
     return {
       element: slot,
       icon,
       name,
+      level,
+      expBar,
+      expFill,
       shortcut,
       mpCost,
       cooldownOverlay,
       cooldownText,
+      tooltip,
       skillId: null,
-      cooldownEnd: 0
+      cooldownEnd: 0,
+      skillConfig: null,
+      skillLevel: 1,
+      skillExp: 0,
+      skillMaxExp: 100
     };
   }
   
@@ -349,15 +454,91 @@ class SkillBar {
     slot.icon.textContent = this.getSkillIcon(skillData.type);
     slot.name.textContent = skillData.name || '';
     
-    // 暂时隐藏MP消耗显示
-    slot.mpCost.textContent = '';
-    slot.mpCost.style.display = 'none';
+    // 设置技能等级
+    const level = skillData.level || skillData.skill_level || 1;
+    slot.skillLevel = level;
+    slot.level.textContent = `Lv.${level}`;
+    slot.level.style.display = level > 0 ? 'block' : 'none';
+    
+    // 设置熟练度
+    const exp = skillData.exp || skillData.experience || 0;
+    const maxExp = skillData.max_exp || this.getMaxExp(level);
+    slot.skillExp = exp;
+    slot.skillMaxExp = maxExp;
+    const expPercent = Math.min(100, (exp / maxExp) * 100);
+    slot.expFill.style.width = `${expPercent}%`;
+    slot.expBar.style.display = skillId > 0 ? 'block' : 'none';
+    
+    // MP消耗显示
+    const mpCost = skillData.mp_cost || 0;
+    slot.mpCost.textContent = mpCost > 0 ? `-${mpCost}` : '';
+    slot.mpCost.style.display = mpCost > 0 ? 'block' : 'none';
     
     // 缓存技能配置数据到slot（供后续冷却计算使用）
     slot.skillConfig = { ...skillData };
     
     // 清除冷却状态
     this.clearSlotCooldown(index);
+  }
+  
+  /**
+   * 获取技能最大熟练度（根据等级）
+   */
+  getMaxExp(level) {
+    return level * 100; // 每级需要100熟练度
+  }
+  
+  /**
+   * 显示悬浮提示
+   */
+  showTooltip(index) {
+    const slot = this.skillSlots[index];
+    if (!slot || !slot.skillId) return;
+    
+    const config = slot.skillConfig;
+    if (!config) return;
+    
+    const tooltip = slot.tooltip;
+    const parts = tooltip.querySelectorAll('div');
+    
+    // 技能名称
+    parts[0].textContent = config.name || '未知技能';
+    
+    // 技能描述
+    parts[1].textContent = config.description || '';
+    
+    // 伤害
+    parts[2].querySelectorAll('span')[1].textContent = config.damage || '--';
+    
+    // MP消耗
+    parts[3].querySelectorAll('span')[1].textContent = config.mp_cost || '0';
+    
+    // 冷却
+    const cooldown = config.cooldown || 0;
+    if (cooldown > 0) {
+      parts[4].querySelectorAll('span')[1].textContent = `${cooldown}s`;
+    } else if (config.attack_speed) {
+      parts[4].querySelectorAll('span')[1].textContent = `攻速驱动(${config.attack_speed})`;
+    } else {
+      parts[4].querySelectorAll('span')[1].textContent = '--';
+    }
+    
+    // 等级
+    parts[5].querySelectorAll('span')[1].textContent = `Lv.${slot.skillLevel}`;
+    
+    // 熟练度
+    parts[6].querySelectorAll('span')[1].textContent = `${slot.skillExp}/${slot.skillMaxExp}`;
+    
+    tooltip.style.display = 'block';
+  }
+  
+  /**
+   * 隐藏悬浮提示
+   */
+  hideTooltip(index) {
+    const slot = this.skillSlots[index];
+    if (!slot) return;
+    slot.tooltip.style.display = 'none';
   }
   
   /**
@@ -561,26 +742,76 @@ class SkillBar {
 
   /**
    * 从服务端加载技能配置（skills.json基础数据）
+   * ★ 优化：通过网关代理获取（支持分布式架构）
    */
   async loadSkillConfigs() {
     try {
-      const res = await fetch('http://localhost:8082/api/skill/base/list');
-      const data = await res.json();
-      if (data.code === 200 && data.data) {
-        data.data.forEach(skill => {
+      // ★ 动态获取网关地址（从WebSocket连接URL转换）
+      const gatewayBaseURL = this._getGatewayBaseURL();
+
+      // 使用AbortController实现5秒超时
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+      const response = await fetch(`${gatewayBaseURL}/api/skill/base/list`, {
+        method: 'GET',
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      if (result.code === 200 && Array.isArray(result.data)) {
+        result.data.forEach(skill => {
           this.skillConfigCache.set(skill.id, skill);
         });
         console.log(`[SkillBar] 加载 ${this.skillConfigCache.size} 个技能配置`);
+      } else {
+        console.warn('[SkillBar] 技能配置返回格式异常:', result);
       }
     } catch (error) {
-      console.warn('[SkillBar] 加载技能配置失败:', error);
+      if (error.name === 'AbortError') {
+        console.warn('[SkillBar] 加载技能配置失败: 请求超时 (5s)');
+      } else {
+        console.warn('[SkillBar] 加载技能配置失败:', error.message);
+      }
     }
+  }
+
+  /**
+   * 获取网关基础URL（HTTP格式）
+   * ★ 从WebSocket连接URL自动提取，支持分布式架构
+   */
+  _getGatewayBaseURL() {
+    try {
+      // 方案1：从GameWS连接URL提取（推荐）
+      if (window.GameWS && window.GameWS.url) {
+        const wsURL = window.GameWS.url;
+        // ws://127.0.0.1:8080/ws → http://127.0.0.1:8080
+        return wsURL.replace(/^ws(s?):\/\//, 'http$1://').replace(/\/ws$/, '');
+      }
+    } catch (e) {
+      console.warn('[SkillBar] 无法从GameWS获取URL:', e.message);
+    }
+
+    // 方案2：降级为默认网关地址
+    return 'http://127.0.0.1:8080';
   }
 
   /**
    * 从服务端加载角色已学武学
    */
   async loadFromServer(retryCount = 3) {
+    // ★ 防止重复加载
+    if (this.isLoading) {
+      console.log('[SkillBar] 正在加载中，跳过重复请求');
+      return;
+    }
+
+    this.isLoading = true; // ★ 设置加载状态
     try {
       const roleId = this.game?.player?.id;
       console.log('[SkillBar] loadFromServer - retryCount:', retryCount, 'roleId:', roleId, 'player:', this.game?.player);
@@ -600,21 +831,19 @@ class SkillBar {
         console.log('[SkillBar] 技能配置加载完成，数量:', this.skillConfigCache.size);
       }
 
-      // 并行请求：已装备武学 + 所有已学武学
+      // 通过WebSocket并行请求：已装备武学 + 所有已学武学
       console.log('[SkillBar] 请求技能列表, roleId:', roleId);
-      const [equippedRes, allRes] = await Promise.all([
-        fetch(`http://localhost:8082/api/skill/role/${roleId}/equipped`),
-        fetch(`http://localhost:8082/api/skill/role/${roleId}/list`)
+      const [equippedData, allData] = await Promise.all([
+        window.GameWS.request(window.Protocol.CMD_SKILL_LIST, { role_id: roleId, type: 'equipped' }, 5000).catch(() => ({ code: 0, data: [] })),
+        window.GameWS.request(window.Protocol.CMD_SKILL_LIST, { role_id: roleId, type: 'learned' }, 5000).catch(() => ({ code: 0, data: [] }))
       ]);
-
-      const equippedData = await equippedRes.json();
-      const allData = await allRes.json();
       console.log('[SkillBar] 已装备:', equippedData, '全部:', allData);
 
       // 用配置补全所有已学武学的详细信息（用于技能面板展示）
-      let learnedSkills = [];
+      // ★ 改为实例属性（供SkillPanel复用）
+      this.learnedSkills = [];
       if (allData.code === 200 && Array.isArray(allData.data)) {
-        learnedSkills = allData.data.map(s => {
+        this.learnedSkills = allData.data.map(s => {
           const skillId = s.skill_id || s.id;
           const config = this.skillConfigCache.get(skillId) || {};
           return {
@@ -634,18 +863,27 @@ class SkillBar {
           };
         });
         // 存储到player对象供技能面板使用
-        this.game.player.skills = learnedSkills;
-        console.log('[SkillBar] 已加载', learnedSkills.length, '个已学技能');
+        this.game.player.skills = this.learnedSkills;
+        console.log('[SkillBar] 已加载', this.learnedSkills.length, '个已学技能');
+      }
+
+      // ★ 存储已装备技能数据（供SkillPanel复用）
+      this.equippedSkills = [];
+      if (equippedData.code === 200 && equippedData.data) {
+        this.equippedSkills = equippedData.data;
       }
 
       // 合并数据：优先显示已装备的技能到快捷栏
       let skillsToShow = [];
 
       if (equippedData.code === 200 && equippedData.data) {
-        // 已装备的技能 - 补全信息
+        // 已装备的技能 - 补全信息（包含熟练度）
         skillsToShow = equippedData.data.map(s => {
           const skillId = s.skill_id || s.id;
           const config = this.skillConfigCache.get(skillId) || {};
+          const level = s.level || s.skill_level || 1;
+          const exp = s.exp || s.experience || 0;
+          const maxExp = s.max_exp || level * 100;
           return {
             ...s,
             id: skillId,
@@ -653,20 +891,26 @@ class SkillBar {
             name: config.name || '未知',
             type: config.type || 0,
             mp_cost: config.mp_cost || 0,
+            cooldown: config.cooldown || 0,
+            damage: config.damage || 0,
+            attack_speed: config.attack_speed || 0,
+            level: level,
+            exp: exp,
+            max_exp: maxExp,
             is_equipped: true
           };
         });
-      } else if (learnedSkills.length > 0) {
-        // 无已装备时，取前8个可主动释放的技能
-        skillsToShow = learnedSkills
-          .filter(s => (s.damage > 0 || s.type >= 5)) // 有伤害或武器类技能
-          .slice(0, this.maxSlots);
+      } else {
+        // ★ 无已装备技能时：显示空槽位（由setSkills默认添加普通攻击）
+        skillsToShow = [];
       }
 
       // 更新技能栏（无论是否有技能都需要更新）
       this.setSkills(skillsToShow);
     } catch (error) {
       console.warn('[SkillBar] 从服务端加载技能失败:', error);
+    } finally {
+      this.isLoading = false; // ★ 重置加载状态
     }
   }
   

@@ -472,13 +472,13 @@ class HUDSystem {
     // 技能按钮（显示"我的技能"- 已学/已装备）
     const skillBtn = document.getElementById('hudSkillBtn');
     if (skillBtn) {
-      skillBtn.addEventListener('click', () => {
+      skillBtn.addEventListener('click', (event) => {
         // 优先使用SkillBar的简单技能列表（显示已学/已装备）
         if (this.game.skillBar && typeof this.game.skillBar.toggleSkillPanel === 'function') {
           this.game.skillBar.toggleSkillPanel();
         } else if (this.game.skillPanel) {
           // 回退到完整武学图谱
-          this.game.skillPanel.toggle();
+          this.game.skillPanel.toggle(event); // ★ 传递event用于阻止冒泡
         }
       });
     }

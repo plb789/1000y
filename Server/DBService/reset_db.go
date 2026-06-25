@@ -197,29 +197,38 @@ func main() {
 	}
 
 	type TaskBase struct {
-		ID          uint64 `gorm:"primaryKey;comment:任务ID"`
-		Name        string `gorm:"size:32;comment:任务名称"`
-		Type        uint8  `gorm:"default:1;comment:任务类型"`
-		Desc        string `gorm:"size:256;comment:任务描述"`
-		TargetType  uint8  `gorm:"comment:目标类型"`
-		TargetID    uint32 `gorm:"comment:目标ID"`
-		TargetCount uint32 `gorm:"default:1;comment:目标数量"`
-		ExpReward   int64  `gorm:"default:0;comment:经验奖励"`
-		GoldReward  int64  `gorm:"default:0;comment:金币奖励"`
-		ItemReward  uint32 `gorm:"default:0;comment:物品奖励ID"`
-		ItemCount   uint32 `gorm:"default:0;comment:物品奖励数量"`
-		LevelReq    uint32 `gorm:"default:1;comment:等级要求"`
-		PreTaskID   uint32 `gorm:"default:0;comment:前置任务ID"`
+		ID           uint64 `gorm:"primaryKey;comment:任务ID"`
+		Name         string `gorm:"size:32;comment:任务名称"`
+		Type         uint8  `gorm:"default:1;comment:任务类型(1主线 2支线 3日常 4周常 5活动)"`
+		Desc         string `gorm:"size:256;comment:任务描述"`
+		TargetType   uint8  `gorm:"comment:目标类型"`
+		TargetID     uint32 `gorm:"comment:目标ID"`
+		TargetCount  uint32 `gorm:"default:1;comment:目标数量"`
+		ExpReward    int64  `gorm:"default:0;comment:经验奖励"`
+		GoldReward   int64  `gorm:"default:0;comment:金币奖励"`
+		HonorReward  int64  `gorm:"default:0;comment:声望奖励"`
+		ItemReward   uint32 `gorm:"default:0;comment:物品奖励ID"`
+		ItemCount    uint32 `gorm:"default:0;comment:物品奖励数量"`
+		LevelReq     uint32 `gorm:"default:1;comment:等级要求"`
+		PreTaskID    uint32 `gorm:"default:0;comment:前置任务ID"`
+		Repeatable   uint8  `gorm:"default:0;comment:是否可重复"`
+		TimeLimit    int    `gorm:"default:0;comment:时间限制(秒)"`
+		AutoAccept   uint8  `gorm:"default:0;comment:是否自动接取"`
+		AutoComplete uint8  `gorm:"default:0;comment:是否自动完成"`
 	}
 
 	type RoleTask struct {
 		ID           uint64     `gorm:"primaryKey;comment:记录ID"`
 		RoleID       uint64     `gorm:"index;comment:角色ID"`
 		TaskID       uint32     `gorm:"index;comment:任务ID"`
-		Status       uint8      `gorm:"default:0;comment:状态"`
+		Status       uint8      `gorm:"default:0;comment:状态(0未接 1进行中 2已完成 3已领奖)"`
 		Progress     uint32     `gorm:"default:0;comment:当前进度"`
+		Objectives   string     `gorm:"type:text;comment:多目标进度JSON"`
 		AcceptTime   time.Time  `gorm:"comment:接取时间"`
 		CompleteTime *time.Time `gorm:"comment:完成时间"`
+		FinishTime   *time.Time `gorm:"comment:领奖时间"`
+		DailyCount   int        `gorm:"default:0;comment:今日完成次数"`
+		TotalCount   int        `gorm:"default:0;comment:总完成次数"`
 	}
 
 	type Guild struct {

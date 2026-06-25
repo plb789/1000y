@@ -137,6 +137,23 @@ func GetInstanceByMapID(mapID uint32) *GameServiceInstance {
 	return reg.instances[instanceID]
 }
 
+// GetInstanceByRoleID 根据角色ID获取实例（通过轮询或随机选择可用实例）
+func GetInstanceByRoleID(roleID uint64) *GameServiceInstance {
+	if reg == nil {
+		return nil
+	}
+
+	// 优先尝试从所有实例中找一个可用的
+	instances := GetAllInstances()
+	if len(instances) == 0 {
+		return nil
+	}
+
+	// 简单策略：根据roleID哈希到固定实例（保证同一角色的请求路由到同一实例）
+	index := roleID % uint64(len(instances))
+	return instances[index]
+}
+
 // GetInstanceByID 根据实例ID获取实例
 func GetInstanceByID(instanceID uint32) *GameServiceInstance {
 	if reg == nil {

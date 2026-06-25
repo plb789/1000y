@@ -2,6 +2,7 @@ package item
 
 import (
 	"errors"
+	"fmt"
 	common "game-server/Common"
 	"time"
 )
@@ -129,8 +130,174 @@ func (s *Service) AddItem(roleID uint64, itemID uint32, count uint32, isBind uin
 }
 
 // GetBagItems 获取角色背包所有物品
+// 返回格式：合并数据库数据 + Items.json 配置（icon、name、quality等）
 func (s *Service) GetBagItems(roleID uint64) ([]map[string]interface{}, error) {
-	return common.DBItemGetBag(roleID)
+	// 从DBService获取原始背包数据
+	rawItems, err := common.DBItemGetBag(roleID)
+	if err != nil {
+		return nil, err
+	}
+
+	// ★ 合并 Items.json 配置信息（确保前端能正确显示）
+	var result []map[string]interface{}
+	for _, item := range rawItems {
+		enhancedItem := s.enhanceBagItem(item)
+		result = append(result, enhancedItem)
+	}
+
+	return result, nil
+}
+
+// enhanceBagItem 增强背包物品数据（合并配置信息）
+func (s *Service) enhanceBagItem(rawItem map[string]interface{}) map[string]interface{} {
+	itemID := uint32(0)
+	if id, ok := rawItem["item_id"].(float64); ok {
+		itemID = uint32(id)
+	}
+
+	// 从 Items.json 获取物品配置
+	config := common.GetItemConfig(itemID)
+
+	// 构建增强后的物品对象
+	result := map[string]interface{}{
+		// 数据库字段
+		"id":         rawItem["id"],
+		"role_id":    rawItem["role_id"],
+		"grid_index": rawItem["grid_index"],
+		"item_id":    itemID,
+		"count":      rawItem["count"],
+		"is_bind":    rawItem["is_bind"],
+	}
+
+	// 合并配置信息（如果存在）
+	if config != nil {
+		result["name"] = config.Name
+		result["icon"] = config.Icon
+		result["quality"] = config.Quality
+		result["type"] = config.Type
+		result["type_name"] = s.getTypeName(config.Type)
+		result["description"] = config.Description
+		result["level_req"] = config.LevelReq
+		result["stack_max"] = config.StackMax
+		result["price"] = config.Price
+
+		// 装备属性
+		if config.EquipType > 0 {
+			result["can_equip"] = true
+			result["equip_type"] = config.EquipType
+			result["equip_pos"] = s.getEquipPosName(config.EquipType)
+			result["attrs"] = map[string]interface{}{
+				"hp_bonus":      config.HpBonus,
+				"mp_bonus":      config.MpBonus,
+				"attack_bonus":  config.AttackBonus,
+				"defense_bonus": config.DefenseBonus,
+				"speed_bonus":   config.SpeedBonus,
+			}
+		}
+
+		// 消耗品属性
+		if config.HpRestore > 0 || config.MpRestore > 0 {
+			result["can_use"] = true
+			result["hp_restore"] = config.HpRestore
+			result["mp_restore"] = config.MpRestore
+		}
+	} else {
+		// 配置不存在时的降级处理
+		result["name"] = fmt.Sprintf("未知物品#%d", itemID)
+		result["icon"] = "📦"
+		result["quality"] = 1
+		result["type"] = 0
+		result["type_name"] = "未知"
+	}
+
+	return result
+}
+
+// GetEquippedItems 获取已穿戴装备
+// 返回格式：合并数据库数据 + Items.json 配置
+func (s *Service) GetEquippedItems(roleID uint64) ([]map[string]interface{}, error) {
+	// 从DBService获取原始装备数据
+	rawEquips, err := common.DBItemGetEquipped(roleID)
+	if err != nil {
+		return nil, err
+	}
+
+	// ★ 合并 Items.json 配置信息
+	var result []map[string]interface{}
+	for _, equip := range rawEquips {
+		enhancedEquip := s.enhanceEquipItem(equip)
+		result = append(result, enhancedEquip)
+	}
+
+	return result, nil
+}
+
+// enhanceEquipItem 增强装备数据（合并配置信息）
+func (s *Service) enhanceEquipItem(rawEquip map[string]interface{}) map[string]interface{} {
+	equipType := uint8(0)
+	if et, ok := rawEquip["equip_type"].(float64); ok {
+		equipType = uint8(et)
+	}
+
+	config := common.GetItemConfigByEquipType(equipType)
+
+	result := map[string]interface{}{
+		"id":          rawEquip["id"],
+		"role_id":     rawEquip["role_id"],
+		"equip_type":  equipType,
+		"equip_pos":   s.getEquipPosName(equipType),
+		"bag_item_id": rawEquip["bag_item_id"],
+	}
+
+	if config != nil {
+		result["name"] = config.Name
+		result["icon"] = config.Icon
+		result["quality"] = config.Quality
+		result["item_id"] = config.ID
+		result["attrs"] = map[string]interface{}{
+			"hp_bonus":      config.HpBonus,
+			"mp_bonus":      config.MpBonus,
+			"attack_bonus":  config.AttackBonus,
+			"defense_bonus": config.DefenseBonus,
+			"speed_bonus":   config.SpeedBonus,
+		}
+	} else {
+		result["name"] = fmt.Sprintf("空装备槽#%d", equipType)
+		result["icon"] = "⬜"
+		result["quality"] = 1
+	}
+
+	return result
+}
+
+// getTypeName 获取类型名称
+func (s *Service) getTypeName(itemType uint8) string {
+	names := map[uint8]string{
+		1: "消耗品",
+		2: "装备",
+		3: "材料",
+		4: "任务物品",
+	}
+	if name, ok := names[itemType]; ok {
+		return name
+	}
+	return "其他"
+}
+
+// getEquipPosName 获取装备位置名称
+func (s *Service) getEquipPosName(equipType uint8) string {
+	names := map[uint8]string{
+		1: "weapon",
+		2: "armor",
+		3: "helmet",
+		4: "boots",
+		5: "ring",
+		6: "necklace",
+	}
+	if name, ok := names[equipType]; ok {
+		return name
+	}
+	return "unknown"
 }
 
 // GetBagItemByGrid 获取指定格子的物品
@@ -151,6 +318,11 @@ func (s *Service) GetBagItemByGrid(roleID uint64, gridIndex int) (*map[string]in
 // MoveItem 移动物品(整理背包)
 func (s *Service) MoveItem(roleID uint64, fromGrid, toGrid int) error {
 	return common.DBItemMove(roleID, fromGrid, toGrid)
+}
+
+// MergeItem 合并/堆叠物品
+func (s *Service) MergeItem(roleID uint64, sourceItemId, targetItemId uint64, count uint32) error {
+	return common.DBItemMerge(roleID, sourceItemId, targetItemId, count)
 }
 
 // SplitItem 拆分物品
@@ -186,11 +358,6 @@ func (s *Service) EquipItem(roleID uint64, bagItemID uint64) error {
 // UnequipItem 卸下装备
 func (s *Service) UnequipItem(roleID uint64, equipType uint8) error {
 	return common.DBItemUnequip(roleID, equipType)
-}
-
-// GetEquippedItems 获取已穿戴装备
-func (s *Service) GetEquippedItems(roleID uint64) ([]map[string]interface{}, error) {
-	return common.DBItemGetEquipped(roleID)
 }
 
 // GetEquipmentByType 获取指定位置的装备

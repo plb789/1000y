@@ -244,22 +244,35 @@ func (h *Handler) EnterMap(c *gin.Context) {
 	})
 }
 
-// LeaveMap 离开地图
+// LeaveMap 离开地图（保存下线位置）
 func (h *Handler) LeaveMap(c *gin.Context) {
 	var req struct {
 		RoleID uint64 `json:"role_id" binding:"required"`
 		MapID  uint32 `json:"map_id" binding:"required"`
+		X      int    `json:"x"` // 可选：客户端提供的坐标
+		Y      int    `json:"y"` // 可选：客户端提供的坐标
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "请求参数错误"})
 		return
 	}
 
-	if err := h.service.LeaveMap(req.RoleID, req.MapID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": err.Error()})
-		return
+	// 如果客户端提供了坐标，优先使用客户端坐标
+	if req.X != 0 || req.Y != 0 {
+		if err := h.service.LeaveMapWithPosition(req.RoleID, req.MapID, req.X, req.Y); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": err.Error()})
+			return
+		}
+	} else {
+		// 否则使用服务端保存的坐标
+		if err := h.service.LeaveMap(req.RoleID, req.MapID); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": err.Error()})
+			return
+		}
 	}
-	c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "离开成功"})
+
+	log.Printf("💾 玩家 %d 离开地图 %d，位置 (%d, %d)", req.RoleID, req.MapID, req.X, req.Y)
+	c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "离开成功，位置已保存"})
 }
 
 // Move 处理玩家移动

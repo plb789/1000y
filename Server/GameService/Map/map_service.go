@@ -418,6 +418,34 @@ func (s *Service) LeaveMap(roleID uint64, mapID uint32) error {
 	return nil
 }
 
+// LeaveMapWithPosition 角色离开地图（使用客户端提供的坐标）
+func (s *Service) LeaveMapWithPosition(roleID uint64, mapID uint32, x, y int) error {
+	lm, ok := s.GetLoadedMap(mapID)
+	if !ok {
+		// 即使地图未加载，也要尝试保存位置到数据库
+		common.DBRoleChangePosition(roleID, mapID, x, y)
+		log.Printf("LeaveMapWithPosition: 地图 %d 未加载，但已保存玩家 %d 位置 (%d, %d)", mapID, roleID, x, y)
+		return nil
+	}
+
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+
+	// 使用客户端提供的坐标（更准确）
+	common.DBRoleChangePosition(roleID, mapID, x, y)
+	log.Printf("LeaveMapWithPosition: 玩家 %d 离开地图 %d，保存位置 (%d, %d)", roleID, mapID, x, y)
+	
+	// 从空间网格索引移除
+	if player, exists := lm.Players[roleID]; exists {
+		if lm.playerGrid != nil {
+			lm.playerGrid.Remove(roleID, player.X, player.Y)
+		}
+	}
+
+	delete(lm.Players, roleID)
+	return nil
+}
+
 // UpdatePlayerPosition 更新玩家位置
 func (s *Service) UpdatePlayerPosition(roleID uint64, mapID uint32, x, y int) error {
 	lm, ok := s.GetLoadedMap(mapID)

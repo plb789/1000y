@@ -9,6 +9,13 @@ instance_id: 1                    # 实例ID，每个实例必须唯一
 handled_maps: [1, 2, 3]           # 该实例处理的地图ID列表
 register_to_registry: true        # 是否注册到服务发现中心
 
+redis:
+  addr: "localhost:6379"      # Redis地址
+  password: ""                # 密码（空则无密码）
+  db: 1                       # 使用DB 1（避免与DBService冲突）
+  pool_size: 100              # 连接池大小
+  min_idle_conns: 10          # 最小空闲连接
+
 # 服务地址配置
 services:
   db_service: "http://localhost:8083"   # 数据库服务地址

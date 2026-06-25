@@ -38,10 +38,11 @@ class MapEngine {
       isDrag: false
     };
 
-    // 玩家数据（初始位置为 0,0，真实位置由 Game.syncPlayerPosition 从服务端坐标同步覆盖）
+    // 玩家数据（初始位置为 null，等待从服务端获取真实坐标后再初始化）
+    // 彻底移除 (0,0) 默认值，避免发送无效坐标
     this.player = {
-      x: 0,
-      y: 0,
+      x: null,  // 未初始化标记
+      y: null,  // 未初始化标记
       pixelX: 0,
       pixelY: 0,
       speed: 6, // 提高移动速度，使移动更流畅
@@ -50,6 +51,9 @@ class MapEngine {
       moveTargetY: null,  // 当前移动目标Y
       waitingServerConfirm: false // 等待服务器确认标志
     };
+    
+    // ★ 新增：其他在线玩家数据（用于实时显示其他玩家的位置）
+    this.otherPlayers = new Map();  // key: role_id, value: {x, y, name, color}
 
     // 鼠标跟随移动状态
     this.mouseFollow = {
@@ -435,6 +439,16 @@ class MapEngine {
       this.mouseFollow.targetX = targetTile.x;
       this.mouseFollow.targetY = targetTile.y;
 
+      // ★ 新增：检查是否点击了怪物，如果是则不执行移动
+      // 通过回调函数让 Game.js 决定是否执行移动
+      if (this.onBeforeMouseMove) {
+        const shouldMove = this.onBeforeMouseMove(targetTile.x, targetTile.y);
+        if (!shouldMove) {
+          console.log(`[MapEngine] 点击了怪物，不执行移动`);
+          return; // 不执行移动
+        }
+      }
+
       // 立即执行第一次移动（点击移动一格）
       this.performMouseMove(e.shiftKey);
     });
@@ -524,14 +538,15 @@ class MapEngine {
         }
       }
       
-      // 移动到新格子时发送消息到服务器
-      if (window.GameWS && window.GameWS.send) {
-        window.GameWS.send(2001, { // CMD_MOVE
-          role_id: this.player.id,
-          x: this.player.x,
-          y: this.player.y
-        });
-      }
+      // 移动到新格子时的处理
+      // 注意：移动消息统一由 Game.js 的 onPlayerMove 回调发送，这里不再重复发送
+      // if (window.GameWS && window.GameWS.send) {
+      //   window.GameWS.send(2001, { // CMD_MOVE
+      //     role_id: this.player.id,
+      //     x: this.player.x,
+      //     y: this.player.y
+      //   });
+      // }
       
       // 检测传送/事件区域
       this.checkEventArea();
@@ -618,6 +633,11 @@ class MapEngine {
 
     // 绘制路径
     this.mapRenderer.drawPath(this.player.movePath);
+
+    // ★ 关键修复：绘制其他在线玩家（实时同步）
+    if (this.otherPlayers && this.otherPlayers.size > 0) {
+      this.drawOtherPlayers();
+    }
 
     // 绘制玩家（Z排序已经处理了遮挡关系，这里只需要绘制玩家）
     this.mapRenderer.drawPlayerByPixel(this.player.pixelX, this.player.pixelY);
@@ -742,16 +762,16 @@ class MapEngine {
       this.player.movePath = this.onBeforeMove(this.player.movePath) || this.player.movePath;
     }
 
-    // 发送移动消息到服务器
-    if (this.player.movePath.length > 0) {
-      const target = this.player.movePath[this.player.movePath.length - 1];
-      if (window.GameWS && window.GameWS.send) {
-        window.GameWS.send(2001, {
-          x: target.x,
-          y: target.y
-        });
-      }
-    }
+    // 注意：移动消息统一由 Game.js 的 onPlayerMove 回调发送，这里不再重复发送
+    // if (this.player.movePath.length > 0) {
+    //   const target = this.player.movePath[this.player.movePath.length - 1];
+    //   if (window.GameWS && window.GameWS.send) {
+    //     window.GameWS.send(2001, {
+    //       x: target.x,
+    //       y: target.y
+    //     });
+    //   }
+    // }
   }
 
   // 处理持续跟随移动
@@ -833,14 +853,14 @@ class MapEngine {
     // 设置为跑步速度
     this.player.speed = 8;
 
-    // 发送移动消息到服务器
-    if (this.player.movePath.length > 0 && window.GameWS && window.GameWS.send) {
-      const target = this.player.movePath[this.player.movePath.length - 1];
-      window.GameWS.send(2001, {
-        x: target.x,
-        y: target.y
-      });
-    }
+    // 注意：移动消息统一由 Game.js 的 onPlayerMove 回调发送，这里不再重复发送
+    // if (this.player.movePath.length > 0 && window.GameWS && window.GameWS.send) {
+    //   const target = this.player.movePath[this.player.movePath.length - 1];
+    //   window.GameWS.send(2001, {
+    //     x: target.x,
+    //     y: target.y
+    //   });
+    // }
 
     return true;
   }
@@ -944,12 +964,106 @@ class MapEngine {
     }
     
     // 玩家位置更新后调用回调（用于更新小地图）
-    if (this.onPlayerMove) {
+    // ★ 只有当玩家位置已初始化（非null）时才触发回调，彻底避免发送无效坐标
+    if (this.onPlayerMove && this.player.x !== null && this.player.y !== null) {
       this.onPlayerMove(this.player.x, this.player.y);
     }
     
     requestAnimationFrame(() => this.loop());
   }
+  
+  /**
+   * ★ 新增：绘制其他在线玩家（实时位置同步）
+   * 在主渲染循环中被调用
+   */
+  drawOtherPlayers() {
+    if (!this.ctx || !this.mapRenderer || !this.otherPlayers) return;
+    
+    const selfX = this.player.x !== null ? this.player.x : 0;
+    const selfY = this.player.y !== null ? this.player.y : 0;
+    const viewRadius = 15; // 可见范围（格子数）
+    
+    this.otherPlayers.forEach((otherPlayer, roleID) => {
+      // 检查玩家是否在可见范围内
+      const dx = otherPlayer.x - selfX;
+      const dy = otherPlayer.y - selfY;
+      
+      if (Math.abs(dx) <= viewRadius && Math.abs(dy) <= viewRadius) {
+        // 计算像素坐标
+        const pixelX = otherPlayer.x * this.tileSize;
+        const pixelY = otherPlayer.y * this.tileSize;
+        
+        // 绘制其他玩家（使用不同颜色区分）
+        this.ctx.save();
+        
+        // 绘制玩家身体（圆形）
+        this.ctx.fillStyle = otherPlayer.color || '#3498db';  // 默认蓝色
+        this.ctx.beginPath();
+        this.ctx.arc(
+          pixelX + this.tileSize / 2,
+          pixelY + this.tileSize / 2,
+          this.tileSize / 3,
+          0,
+          Math.PI * 2
+        );
+        this.ctx.fill();
+        
+        // 绘制边框
+        this.ctx.strokeStyle = '#2980b9';
+        this.ctx.lineWidth = 2;
+        this.ctx.stroke();
+        
+        // 绘制玩家名称
+        if (otherPlayer.name) {
+          this.ctx.fillStyle = '#ffffff';
+          this.ctx.font = '12px Arial';
+          this.ctx.textAlign = 'center';
+          this.ctx.fillText(
+            otherPlayer.name,
+            pixelX + this.tileSize / 2,
+            pixelY - 5
+          );
+        }
+        
+        this.ctx.restore();
+      }
+    });
+  }
+  
+  /**
+   * 更新其他玩家的位置（由 Game.js 调用）
+   */
+  updateOtherPlayer(roleID, x, y, name) {
+    if (!this.otherPlayers) return;
+    
+    let player = this.otherPlayers.get(roleID);
+    if (!player) {
+      // 新玩家：随机分配颜色
+      const colors = ['#e74c3c', '#9b59b6', '#1abc9c', '#f39c12', '#27ae60'];
+      const color = colors[roleID % colors.length];
+      
+      player = { x: x, y: y, name: name || '', color: color };
+      this.otherPlayers.set(roleID, player);
+      console.log(`👥 新玩家上线: ${name} (${x}, ${y})`);
+    } else {
+      // 更新现有玩家位置
+      player.x = x;
+      player.y = y;
+      if (name) player.name = name;
+    }
+  }
+  
+  /**
+   * 移除下线的玩家
+   */
+  removeOtherPlayer(roleID) {
+    if (this.otherPlayers && this.otherPlayers.has(roleID)) {
+      const player = this.otherPlayers.get(roleID);
+      console.log(`👋 玩家下线: ${player.name}`);
+      this.otherPlayers.delete(roleID);
+    }
+  }
+
 }
 
 window.MapEngine = MapEngine;

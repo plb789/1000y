@@ -124,6 +124,20 @@ func (h *Handler) HandleAttack(c *gin.Context) {
 			"drops":      result.Drops,
 		}
 		h.broadcastToMap(getPlayerMapID(req.AttackerID), "monster_death", deathNotice)
+
+		// 发布怪物击杀事件到消息总线，触发任务系统自动更新
+		// Quest Service 会订阅此事件并更新杀怪类任务的进度
+		questEvent := map[string]interface{}{
+			"role_id":    req.AttackerID,
+			"monster_id": req.TargetID,
+			"map_id":     getPlayerMapID(req.AttackerID),
+		}
+		err := common.GlobalMessageBus.Publish("event.monster_killed", questEvent)
+		if err != nil {
+			log.Printf("[QUEST] 发布怪物击杀事件失败: %v", err)
+		} else {
+			log.Printf("[QUEST] 发布怪物击杀事件: roleID=%d, monsterID=%d", req.AttackerID, req.TargetID)
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{

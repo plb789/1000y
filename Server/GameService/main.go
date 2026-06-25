@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math"
@@ -11,8 +13,11 @@ import (
 	"time"
 
 	common "game-server/Common"
+	achievement "game-server/GameService/Achievement"
+	attribute "game-server/GameService/Attribute"
 	battle "game-server/GameService/Battle"
 	buff "game-server/GameService/Buff"
+	cache "game-server/GameService/Cache"
 	item "game-server/GameService/Item"
 	gamemap "game-server/GameService/Map"
 	monster "game-server/GameService/Monster"
@@ -20,12 +25,29 @@ import (
 	skill "game-server/GameService/Skill"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 )
 
 var (
-	instanceID  uint32
-	handledMaps []uint32
+	instanceID   uint32
+	handledMaps  []uint32
+	questHandler *quest.Handler // 任务系统Handler（全局供事件订阅使用）
 )
+
+// ★ 技能加成适配器（实现attribute.SkillBonusProvider接口，打破循环依赖）
+type skillBonusAdapter struct {
+	service *skill.Service
+}
+
+// CalculateSkillBonus 实现接口方法
+func (a *skillBonusAdapter) CalculateSkillBonus(ctx context.Context, roleID uint64) (*attribute.SkillBonus, error) {
+	return a.service.CalculateSkillBonusWithCtx(ctx, roleID)
+}
+
+// GetEquippedSkills 实现接口方法
+func (a *skillBonusAdapter) GetEquippedSkills(ctx context.Context, roleID uint64) ([]map[string]interface{}, error) {
+	return a.service.GetEquippedSkillsWithCtx(ctx, roleID)
+}
 
 func main() {
 	// 加载全局配置
@@ -60,6 +82,30 @@ func main() {
 
 	// 初始化服务客户端(连接DBService)
 	common.InitServiceClients()
+
+	// ★ 初始化Redis客户端（用于GameService本地缓存）
+	var rdb *redis.Client
+	if common.AppConfig.Redis.Addr != "" {
+		rdb = redis.NewClient(&redis.Options{
+			Addr:         common.AppConfig.Redis.Addr,
+			Password:     common.AppConfig.Redis.Password,
+			DB:           common.AppConfig.Redis.DB,
+			PoolSize:     common.AppConfig.Redis.PoolSize,
+			MinIdleConns: common.AppConfig.Redis.MinIdleConns,
+		})
+
+		// 测试Redis连接
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := rdb.Ping(ctx).Result(); err != nil {
+			log.Printf("⚠️ Redis连接失败: %v (将使用无缓存模式)", err)
+			rdb = nil
+		} else {
+			log.Println("✅ Redis连接成功 (GameService属性缓存已启用)")
+		}
+	} else {
+		log.Println("⚠️ 未配置Redis地址，将使用无缓存模式")
+	}
 
 	// 初始化消息总线
 	initMessageBus()
@@ -144,8 +190,35 @@ func main() {
 		monster.InitMapMonsters(mapID)
 	}
 
-	// 启动HTTP服务
-	go startHTTPServer()
+	// ★ 提前创建skillHandler（供属性缓存系统注入使用）
+	skillHandler := skill.NewHandler()
+
+	// ★ 初始化属性计算引擎和玩家缓存系统（如果Redis可用）
+	if rdb != nil {
+		// ★ 创建技能加成适配器（实现attribute.SkillBonusProvider接口）
+		skillSvc := skill.NewService()
+		skillAdapter := &skillBonusAdapter{service: skillSvc}
+
+		// ★ 创建属性计算引擎（通过接口注入依赖，打破循环依赖）
+		calcEngine := attribute.NewCalcEngine(
+			rdb,
+			item.NewService(), // item.Service已自动满足ItemBonusProvider接口
+			skillAdapter,      // 通过适配器传入
+		)
+
+		// 创建玩家状态缓存管理器
+		playerCache := cache.NewPlayerCache(rdb, calcEngine)
+
+		// 注入到Skill Handler中（用于装备/卸载时返回完整属性）
+		skillHandler.SetPlayerCache(playerCache)
+
+		log.Println("✅ 属性缓存系统已启用 (装备/卸载操作将返回完整的final_attrs)")
+	} else {
+		log.Println("⚠️ 属性缓存系统未启用 (将使用降级模式，仅返回bonus)")
+	}
+
+	// 启动HTTP服务（传入skillHandler用于注册路由）
+	go startHTTPServer(skillHandler)
 
 	// 等待退出信号
 	waitForExit()
@@ -204,6 +277,90 @@ func initMessageBus() {
 	}
 
 	common.InitMessageBus(config)
+}
+
+// subscribeQuestEvents 订阅任务相关事件（怪物击杀、物品采集、NPC对话等）
+func subscribeQuestEvents() {
+	if common.GlobalMessageBus == nil || !common.GlobalMessageBus.IsAvailable() {
+		log.Println("消息总线不可用，跳过任务事件订阅")
+		return
+	}
+
+	// 订阅怪物击杀事件
+	common.GlobalMessageBus.Subscribe("event.monster_killed", func(data []byte) {
+		var event struct {
+			RoleID    uint64 `json:"role_id"`
+			MonsterID uint32 `json:"monster_id"`
+			MapID     uint32 `json:"map_id"`
+		}
+		if err := json.Unmarshal(data, &event); err != nil {
+			log.Printf("[QUEST] 解析怪物击杀事件失败: %v", err)
+			return
+		}
+
+		// 调用任务系统更新杀怪任务进度
+		if questHandler != nil {
+			updates := questHandler.Service.OnMonsterKilled(event.RoleID, event.MonsterID)
+			// 通过 WebSocket 推送进度更新给客户端
+			for _, update := range updates {
+				questHandler.BroadcastQuestProgress(event.RoleID, update)
+			}
+			if len(updates) > 0 {
+				log.Printf("[QUEST] 怪物击杀事件触发任务更新: roleID=%d, monsterID=%d, 更新了%d个任务",
+					event.RoleID, event.MonsterID, len(updates))
+			}
+		}
+	})
+
+	// 订阅物品采集事件
+	common.GlobalMessageBus.Subscribe("event.item_gathered", func(data []byte) {
+		var event struct {
+			RoleID uint64 `json:"role_id"`
+			ItemID uint32 `json:"item_id"`
+		}
+		if err := json.Unmarshal(data, &event); err != nil {
+			log.Printf("[QUEST] 解析物品采集事件失败: %v", err)
+			return
+		}
+
+		// 调用任务系统更新采集任务进度
+		if questHandler != nil {
+			updates := questHandler.Service.OnItemGathered(event.RoleID, event.ItemID)
+			for _, update := range updates {
+				questHandler.BroadcastQuestProgress(event.RoleID, update)
+			}
+			if len(updates) > 0 {
+				log.Printf("[QUEST] 物品采集事件触发任务更新: roleID=%d, itemID=%d, 更新了%d个任务",
+					event.RoleID, event.ItemID, len(updates))
+			}
+		}
+	})
+
+	// 订阅NPC对话事件
+	common.GlobalMessageBus.Subscribe("event.npc_dialog", func(data []byte) {
+		var event struct {
+			RoleID uint64 `json:"role_id"`
+			NpcID  uint32 `json:"npc_id"`
+		}
+		if err := json.Unmarshal(data, &event); err != nil {
+			log.Printf("[QUEST] 解析NPC对话事件失败: %v", err)
+			return
+		}
+
+		// 调用任务系统更新对话任务进度
+		if questHandler != nil {
+			updates := questHandler.Service.OnNPCDialog(event.RoleID, event.NpcID)
+			for _, update := range updates {
+				questHandler.BroadcastQuestProgress(event.RoleID, update)
+			}
+			if len(updates) > 0 {
+				log.Printf("[QUEST] NPC对话事件触发任务更新: roleID=%d, npcID=%d, 更新了%d个任务",
+					event.RoleID, event.NpcID, len(updates))
+			}
+		}
+	})
+
+	log.Println("任务事件订阅完成: event.monster_killed, event.item_gathered, event.npc_dialog")
 }
 
 func startHeartbeat() {
@@ -367,7 +524,7 @@ func (e *EntityCollisionCheckerImpl) GetEntityPosition(entityID uint64) (int, in
 	return 0, 0, false
 }
 
-func startHTTPServer() {
+func startHTTPServer(skillHandler *skill.Handler) {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
 
@@ -429,13 +586,22 @@ func startHTTPServer() {
 	itemHandler := item.NewHandler()
 	itemHandler.RegisterRoutes(r)
 
-	// 注册武学技能路由
-	skillHandler := skill.NewHandler()
+	// 注册武学技能路由（使用传入的skillHandler）
 	skillHandler.RegisterRoutes(r)
 
-	// 注册任务系统路由
-	questHandler := quest.NewHandler()
+	// 注册任务系统路由（支持WebSocket推送）
+	questHandler = quest.NewHandler(gatewayURL)
 	questHandler.RegisterRoutes(r)
+
+	// 初始化成就服务
+	achievement.InitAchievementService()
+
+	// 注册成就系统路由
+	achievementHandler := achievement.NewHandler()
+	achievementHandler.RegisterRoutes(r)
+
+	// 订阅任务事件（怪物击杀、物品采集、NPC对话等）
+	subscribeQuestEvents()
 
 	// 健康检查
 	r.GET("/health", func(c *gin.Context) {

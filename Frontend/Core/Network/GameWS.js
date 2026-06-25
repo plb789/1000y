@@ -19,6 +19,8 @@ class GameWS {
     this.reconnectMax = 10;
     this.reconnectCount = 0;
     this.router = new Map(); // 协议路由表
+    this.pendingRequests = new Map(); // 待响应的请求 (cmd -> {resolve, reject, timer})
+    this._msgId = 0; // 消息ID生成器
     
     // 事件回调
     this.callbacks = {
@@ -138,6 +140,40 @@ class GameWS {
   }
 
   /**
+   * 发送请求并等待响应（RPC模式）
+   * @param {number} cmd - 协议号
+   * @param {object} data - 请求数据
+   * @param {number} timeout - 超时时间(ms)，默认5000
+   * @returns {Promise} 响应数据
+   */
+  request(cmd, data, timeout = 5000) {
+    return new Promise((resolve, reject) => {
+      if (!this.isConnected) {
+        reject(new Error('WebSocket未连接'));
+        return;
+      }
+
+      // 生成唯一消息ID
+      const msgId = ++this._msgId;
+      const requestData = { ...data, msg_id: msgId };
+
+      // 设置超时
+      const timer = setTimeout(() => {
+        if (this.pendingRequests.has(msgId)) {
+          this.pendingRequests.delete(msgId);
+          reject(new Error('请求超时'));
+        }
+      }, timeout);
+
+      // 存储待响应的请求
+      this.pendingRequests.set(msgId, { resolve, reject, timer });
+
+      // 发送请求
+      this.send(cmd, requestData);
+    });
+  }
+
+  /**
    * 发送二进制消息
    * @param {number} cmd - 协议号
    * @param {Uint8Array} bodyBuf - 二进制数据
@@ -206,6 +242,19 @@ class GameWS {
             body = { raw: jsonStr };
           }
         }
+      }
+
+      // 检查是否有待响应的请求（RPC模式）
+      if (body.msg_id && this.pendingRequests.has(body.msg_id)) {
+        const pending = this.pendingRequests.get(body.msg_id);
+        clearTimeout(pending.timer);
+        this.pendingRequests.delete(body.msg_id);
+        if (body.code === 200 || body.code === 0) {
+          pending.resolve(body);
+        } else {
+          pending.reject(new Error(body.msg || '请求失败'));
+        }
+        return; // 不再触发普通路由回调
       }
 
       // 触发路由回调
